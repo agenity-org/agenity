@@ -15,7 +15,10 @@ import (
 	stylepkg "github.com/chepherd/chepherd/internal/style"
 )
 
-var liveStateDir string
+var (
+	liveStateDir       string
+	livePollingOnly    bool
+)
 
 var liveCmd = &cobra.Command{
 	Use:   "live",
@@ -39,6 +42,9 @@ func init() {
 	rootCmd.AddCommand(liveCmd)
 	liveCmd.Flags().StringVar(&liveStateDir, "state-dir",
 		daemon.DefaultStateDir(), "where to write live_signals JSON")
+	liveCmd.Flags().BoolVar(&livePollingOnly, "polling-only", false,
+		"use 5-sec polling instead of fsnotify (fallback for systems "+
+			"where fsnotify isn't reliable)")
 }
 
 func runLive(cmd *cobra.Command, args []string) error {
@@ -76,11 +82,24 @@ func runLive(cmd *cobra.Command, args []string) error {
 			}
 			subCtx, cancel := context.WithCancel(ctx)
 			known[s.UUID] = cancel
+
+			if !livePollingOnly {
+				edr, err := lightsignals.NewEventDriven(s, liveStateDir)
+				if err == nil {
+					fmt.Printf("  start refresher: %s (%s) mode=fsnotify\n",
+						s.TmuxName, s.UUID[:8])
+					go edr.Loop(subCtx)
+					continue
+				}
+				fmt.Printf("  fsnotify init failed for %s (%v) — falling back to polling\n",
+					s.TmuxName, err)
+			}
 			ref := &lightsignals.Refresher{
 				Session:  s,
 				StateDir: liveStateDir,
 			}
-			fmt.Printf("  start refresher: %s (%s)\n", s.TmuxName, s.UUID[:8])
+			fmt.Printf("  start refresher: %s (%s) mode=polling\n",
+				s.TmuxName, s.UUID[:8])
 			go ref.Loop(subCtx)
 		}
 		// Stop refreshers for sessions that vanished.
