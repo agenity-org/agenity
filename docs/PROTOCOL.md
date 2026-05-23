@@ -55,54 +55,81 @@ protocol envelope.
 
 ## §1. Connection lifecycle
 
-### WebRTC mode (default)
+### WebRTC mode (default) — trickled ICE
+
+Two REST endpoint groups exist on the relay; modern clients use the
+trickled-ICE form (`/offer` + `/candidate` + `/candidates`). The legacy
+bundled-ICE form (`/initiate` + `/poll` + `/answer`) remains for older
+daemons.
 
 ```
 client                       relay (signaling only)              daemon
   │                                  │                              │
-  │── POST /v1/signaling/initiate ──►│                              │
-  │   {bastion_id, client_id, sdp}   │                              │
-  │                                  │── notify bastion (long-poll  │
-  │                                  │   or push channel)          │
-  │                                  │                              │
+  │── POST /v1/signaling/offer ─────►│                              │
+  │   {bastion_id, offer:{...}}      │                              │
+  │                                  │── queues offer ────────────►│
+  │                                  │   GET /v1/signaling/poll     │
+  │                                  │◄─────────────────────────────│
+  │                                  │                              │ SetRemoteDesc + CreateAnswer
+  │                                  │                              │ GatheringCompletePromise
   │                                  │◄─ POST /v1/signaling/answer ─│
-  │                                  │   {sdp_answer, ice_cands}    │
+  │                                  │   {sdp_answer + bundled ICE} │
   │                                  │                              │
-  │◄── 200 {sdp_answer, ice_cands} ──│                              │
+  │◄── 200 {answer, client_id} ──────│                              │
   │                                  │                              │
-  │ ─── ICE candidate exchange ────────────────────────────────────►│
-  │     (both sides POST candidates to signaling, poll for peer's)  │
-  │                                  │                              │
+  │── POST /v1/signaling/candidate ─►│                              │
+  │   {bastion_id, candidate}        │  enqueue per-peer            │
+  │                                  │◄── GET /v1/signaling/        │
+  │                                  │     candidates?bastion_id ───│
+  │                                  │  drain queue                 │
+  │                                  │                              │ AddICECandidate
+  │                                                                  │
   │═══ DataChannel established (DTLS, peer-to-peer) ════════════════│
   │     (signaling channel CAN be closed at this point)             │
-  │                                  │                              │
+  │                                                                  │
   │── {type:"register", ...} ──────────────────────────────────────►│
   │                                                                  │
   │◄── {type:"state", ...} ──────────────────────────────────────────│
-  │                                                                  │
-  │ ... long-running session ...                                    │
-  │                                                                  │
 ```
 
 ### WS-relay mode (opt-in)
 
 ```
-client                                                   relay (data + signaling)              daemon
-  │── WSS / Authorization: Bearer <token> ─────────────────►│                                       │
-  │   Sec-WebSocket-Protocol: chepherd.v1.ws                │                                       │
-  │◄── 101 Switching Protocols ─────────────────────────────│                                       │
-  │                                                          │── WSS / Bearer ─────────────────────►│
-  │                                                          │◄── 101 ──────────────────────────────│
-  │── {type:"subscribe", bastion_id:"emrah-bastion-01"} ────►│                                       │
-  │                                                          │                                       │
-  │                                                          │── {type:"register"} ──────────────────│
-  │                                                          │                                       │
-  │◄── {type:"state", ...} ──────── (multiplexed by bastion) ◄── {type:"state", ...} ──────────────│
-  │                                                          │                                       │
-  │── {type:"command", action:"pause"} ─────────────────────►│── {type:"command", action:"pause"} ──►│
-  │                                                          │                                       │
-  │◄── {type:"ack", ok:true} ─────────────────────────────── ◄── {type:"ack", ok:true} ───────────────│
+client                                              relay (data + signaling)              daemon
+  │── WSS upgrade ─────────────────────────────────►│                                       │
+  │   Sec-WebSocket-Protocol:                       │                                       │
+  │     chepherd-rc-v1.<bastion>.<token>            │                                       │
+  │   (browsers can't send Authorization;           │                                       │
+  │    daemons + Go clients may use Bearer)         │                                       │
+  │◄── 101 Switching Protocols ─────────────────────│                                       │
+  │   relay echoes back the EXACT subprotocol       │                                       │
+  │                                                  │── WSS /v1/signaling/ws ─────────────►│
+  │                                                  │   ?role=daemon&bastion_id=<id>       │
+  │                                                  │   Authorization: Bearer <daemon-tok> │
+  │                                                  │◄── 101 ──────────────────────────────│
+  │                                                  │                                       │
+  │                                                  │── {type:"register"} ──────────────────│
+  │                                                  │                                       │
+  │◄── {type:"state", ...} ──── (broadcast to ALL clients in room) ──── {type:"state", ...} ◄│
+  │                                                  │                                       │
+  │── {type:"command", action:"pause"} ─────────────►│── {type:"command", action:"pause"} ──►│
+  │                                                  │                                       │
+  │◄── {type:"ack", ok:true} ───────────────────────◄── {type:"ack", ok:true} ───────────────│
 ```
+
+The relay's `/v1/signaling/ws` hub is a per-bastion room: at most one
+daemon, many clients (web + iOS + Android can all watch the same
+daemon simultaneously). Client frames fan into the daemon; daemon
+frames broadcast to every client.
+
+**Auth on the WS path**:
+- **Browsers** (no Authorization header support): embed JWT in the
+  subprotocol — `chepherd-rc-v1.<bastion_id>.<jwt>`. The relay parses
+  the subprotocol on accept; relay negotiates back the EXACT string so
+  the browser completes the upgrade.
+- **Daemons + Go clients**: standard `Authorization: Bearer <jwt>` +
+  query string `?role=...&bastion_id=...`. The relay accepts both
+  forms on `/v1/signaling/ws`.
 
 In WS-relay mode, the relay is a stateful multiplexer; in WebRTC mode it
 only matchmakes and then steps out.
