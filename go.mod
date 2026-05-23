@@ -3,6 +3,7 @@ module github.com/chepherd/chepherd
 go 1.24.0
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/gdamore/tcell/v2 v2.13.9
 	github.com/rivo/tview v0.42.0
 	github.com/spf13/cobra v1.8.1
