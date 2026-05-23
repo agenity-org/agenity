@@ -12,16 +12,17 @@ import (
 	"github.com/chepherd/chepherd/internal/style"
 )
 
-// Dashboard is the W1 view: header + (session-list | detail) + log + footer.
+// Dashboard is the W1 view: header + daemon-banner + (session-list | detail) + log + footer.
 type Dashboard struct {
 	app *App
 
-	root    *tview.Flex
-	header  *tview.TextView
-	list    *tview.Table
-	detail  *tview.TextView
-	logView *tview.TextView
-	footer  *tview.TextView
+	root      *tview.Flex
+	header    *tview.TextView
+	daemonBar *tview.TextView // W10 — daemon-down/stale banner; empty when healthy
+	list      *tview.Table
+	detail    *tview.TextView
+	logView   *tview.TextView
+	footer    *tview.TextView
 
 	// Rolling log buffer reused by LogMode (W6) for full-screen view.
 	logBuffer []string
@@ -35,6 +36,12 @@ func newDashboard(a *App) *Dashboard {
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
 	d.header.SetBackgroundColor(tcell.ColorBlack)
+
+	// Daemon health banner — empty unless daemon down/stale (W10)
+	d.daemonBar = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	d.daemonBar.SetBackgroundColor(tcell.ColorBlack)
 
 	// Session list — k9s-style table, selectable rows
 	d.list = tview.NewTable().
@@ -85,6 +92,7 @@ func newDashboard(a *App) *Dashboard {
 
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(d.header, 1, 0, false).
+		AddItem(d.daemonBar, 1, 0, false). // W10 — shown only when daemon down/stale
 		AddItem(newBlankRow(), 1, 0, false).
 		AddItem(body, 0, 1, true).
 		AddItem(newBlankRow(), 1, 0, false).
@@ -109,6 +117,11 @@ func newBlankRow() *tview.TextView {
 func (d *Dashboard) render() {
 	d.header.SetText(d.app.FormatHeader())
 	d.footer.SetText(d.app.FormatFooter())
+
+	// W10 — daemon health banner (visible only on issues).
+	health := CheckDaemonHealth(d.app.Sessions())
+	d.daemonBar.SetText(FormatDaemonBanner(health))
+
 	d.renderList()
 	d.renderDetail()
 }

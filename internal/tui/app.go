@@ -101,6 +101,15 @@ func (a *App) installGlobalKeys() {
 		case 'n':
 			a.newSession.show()
 			return nil
+		case 's':
+			// W10 — attempt to start a stopped daemon.
+			msg, err := AttemptStartDaemon()
+			if err != nil {
+				a.dashboard.appendLog("[daemon-start] FAILED: " + err.Error())
+			} else {
+				a.dashboard.appendLog("[daemon-start] " + msg)
+			}
+			return nil
 		}
 		if ev.Key() == tcell.KeyEnter {
 			s := a.Selected()
