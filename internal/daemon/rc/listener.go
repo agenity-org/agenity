@@ -122,8 +122,9 @@ func New(cfg *Config) (*Listener, error) {
 		}
 	case "relayed":
 		l.factory = &transport.WSFactory{
-			RelayURL: cfg.RelayURL + "/v1/ws",
-			Token:    cfg.AuthToken,
+			RelayURL:  cfg.RelayURL + "/v1/signaling/ws",
+			Token:     cfg.AuthToken,
+			BastionID: cfg.BastionID,
 		}
 	default:
 		return nil, fmt.Errorf("rc: unknown mode %q (want privacy or relayed)", cfg.Mode)
