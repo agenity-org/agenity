@@ -35,10 +35,11 @@ type App struct {
 	tv        *tview.Application
 	pages     *tview.Pages
 	dashboard *Dashboard
-	help      *HelpOverlay
-	filter    *Filter
-	logMode   *LogMode
-	detail    *Detail
+	help       *HelpOverlay
+	filter     *Filter
+	logMode    *LogMode
+	detail     *Detail
+	newSession *NewSessionWizard
 
 	// Shared state — protected by mu.
 	mu          sync.Mutex
@@ -65,6 +66,7 @@ func New() *App {
 	a.filter = newFilter(a)
 	a.logMode = newLogMode(a)
 	a.detail = newDetail(a)
+	a.newSession = newNewSessionWizard(a)
 	a.pages.AddPage("dashboard", a.dashboard.root, true, true)
 	a.installGlobalKeys()
 	return a
@@ -95,6 +97,9 @@ func (a *App) installGlobalKeys() {
 			return nil
 		case 't':
 			a.TmuxAttachSelected()
+			return nil
+		case 'n':
+			a.newSession.show()
 			return nil
 		}
 		if ev.Key() == tcell.KeyEnter {
