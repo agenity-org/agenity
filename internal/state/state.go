@@ -48,6 +48,26 @@ type Session struct {
 
 	// Scorecard history — last ~20 ticks. Each entry has G/V/F/E + at.
 	ScorecardHistory []map[string]any `json:"scorecard_history,omitempty"`
+
+	// Live signals refreshed independently of the judge cadence
+	// (~5 sec polling by the lightsignals goroutine). Lets the dashboard
+	// show near-real-time issue counts + commit activity even when
+	// the judge is on a 30-min trusted cadence.
+	LiveSignals *LiveSignals `json:"live_signals,omitempty"`
+}
+
+// LiveSignals — cheap, free-to-compute snapshot of the session's local
+// + GitHub state. Mirror of internal/lightsignals.Live so the TUI can
+// read it without importing the daemon package.
+type LiveSignals struct {
+	RefreshedAt       string  `json:"refreshed_at"`
+	InProgressCount   int     `json:"in_progress_count"`
+	BacklogCount      int     `json:"backlog_count"`
+	UnclaimedCount    int     `json:"unclaimed_backlog_count"`
+	CommitCountLast1H int     `json:"commits_last_hour_count"`
+	LastCommitAgeMin  float64 `json:"git_last_commit_age_min"`
+	TrackerMtimeMin   float64 `json:"tracker_mtime_age_min"`
+	LastEventAgeMin   float64 `json:"jsonl_last_event_age_min"`
 }
 
 // FormatScorecard returns "G/V/F/E=N/N/N/N" or "?/?/?/?" if unavailable.
