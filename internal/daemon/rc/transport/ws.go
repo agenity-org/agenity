@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -175,42 +176,102 @@ func isClosed(err error) bool {
 
 // WSFactory builds WSTransports by dialing the relay's WSS endpoint with a
 // Bearer auth token.
+//
+// Wire (chepherd-relay@ace425c):
+//   URL          wss://relay.chepherd.org/v1/signaling/ws
+//                   ?role=client|daemon
+//                   &bastion_id=<id>
+//                   [&client_id=<id>]
+//   Subprotocol  chepherd-rc-v1
+//   Auth         Authorization: Bearer <jwt> (via the relay's middleware)
 type WSFactory struct {
-	RelayURL string // e.g. "wss://rc.openova.io/v1/ws"
-	Token    string // OAuth2 bearer
+	// RelayURL — base WSS endpoint on the relay. The factory appends
+	// the role + bastion_id query string automatically.
+	RelayURL string
+	// Token — OAuth2 bearer (user token for client-side, daemon token
+	// for daemon-side).
+	Token string
+	// BastionID — the room key on the relay. Required for both sides.
+	BastionID string
 }
 
 // Mode reports ModeWS.
 func (f *WSFactory) Mode() Mode { return ModeWS }
 
-// Dial opens a WSS connection to the relay + returns a Transport.
+// Dial opens a WSS connection as role=client + returns a Transport.
+// peerID is the target bastion_id (overrides f.BastionID for the dial).
 func (f *WSFactory) Dial(ctx context.Context, peerID string) (Transport, error) {
+	target := peerID
+	if target == "" {
+		target = f.BastionID
+	}
+	url := withWSQuery(f.RelayURL, "client", target, "")
+	conn, err := f.dialWS(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	return NewWSTransport(conn, target), nil
+}
+
+// Listen — daemon side: opens ONE long-lived WS connection as role=daemon
+// to the relay. Every frame the relay forwards from any connected client
+// appears on this single Transport (the wsrelay broadcasts daemon→clients
+// and fans clients→daemon in v0.2). onPeer is called exactly once with the
+// Transport; subsequent client connections are multiplexed onto it. When
+// the WS closes for any reason, Listen returns and the caller may retry.
+func (f *WSFactory) Listen(ctx context.Context, onPeer func(Transport)) error {
+	if f.BastionID == "" {
+		return errors.New("ws: BastionID required for Listen")
+	}
+	url := withWSQuery(f.RelayURL, "daemon", f.BastionID, "")
+	conn, err := f.dialWS(ctx, url)
+	if err != nil {
+		return err
+	}
+	t := NewWSTransport(conn, "relay")
+	onPeer(t)
+	// Block until the ctx is done OR the Transport closes.
+	<-ctx.Done()
+	_ = t.Close()
+	return ctx.Err()
+}
+
+// dialWS performs the actual websocket.Dial with the canonical subprotocol
+// and auth header. Errors mapped to ErrUnauthorized for 401 responses.
+func (f *WSFactory) dialWS(ctx context.Context, url string) (*websocket.Conn, error) {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+f.Token)
 	opts := &websocket.DialOptions{
 		HTTPHeader:   header,
-		Subprotocols: []string{"chepherd.v1.ws"},
+		Subprotocols: []string{"chepherd-rc-v1"},
 	}
-	conn, resp, err := websocket.Dial(ctx, f.RelayURL, opts)
+	conn, resp, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
 			return nil, ErrUnauthorized
 		}
-		return nil, fmt.Errorf("ws dial %s: %w", f.RelayURL, err)
+		return nil, fmt.Errorf("ws dial %s: %w", url, err)
 	}
-	if conn.Subprotocol() != "chepherd.v1.ws" {
+	if conn.Subprotocol() != "chepherd-rc-v1" {
 		conn.Close(websocket.StatusProtocolError, "subprotocol mismatch")
-		return nil, fmt.Errorf("ws: relay refused subprotocol chepherd.v1.ws")
+		return nil, fmt.Errorf("ws: relay refused subprotocol chepherd-rc-v1 (got %q)", conn.Subprotocol())
 	}
 	conn.SetReadLimit(int64(2 * 256 * 1024)) // 2x frame limit headroom
-	return NewWSTransport(conn, peerID), nil
+	return conn, nil
 }
 
-// Listen — server-side accept loop (not used by client-side daemons that
-// only Dial). Future: the chepherd-relay service implements this side.
-func (f *WSFactory) Listen(ctx context.Context, onPeer func(Transport)) error {
-	return errors.New("ws: server-side Listen not implemented in client SDK; " +
-		"chepherd-relay implements this side")
+func withWSQuery(base, role, bastionID, clientID string) string {
+	u := base
+	if !strings.Contains(u, "?") {
+		u += "?"
+	} else {
+		u += "&"
+	}
+	u += "role=" + role + "&bastion_id=" + bastionID
+	if clientID != "" {
+		u += "&client_id=" + clientID
+	}
+	return u
 }
 
 // Close releases factory-level resources (none for WS).

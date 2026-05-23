@@ -17,7 +17,7 @@ func TestWSTransport_Roundtrip(t *testing.T) {
 	// Echo server: accept WSS, mirror each frame back.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{"chepherd.v1.ws"},
+			Subprotocols: []string{"chepherd-rc-v1"},
 		})
 		if err != nil {
 			t.Errorf("accept: %v", err)
@@ -71,7 +71,7 @@ func TestWSTransport_Backpressure(t *testing.T) {
 	// A test server that NEVER reads, forcing the client send-buffer to fill.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, _ := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{"chepherd.v1.ws"},
+			Subprotocols: []string{"chepherd-rc-v1"},
 		})
 		<-r.Context().Done()
 		conn.Close(websocket.StatusNormalClosure, "")
@@ -108,7 +108,7 @@ func TestWSTransport_Backpressure(t *testing.T) {
 func TestWSTransport_CloseIsIdempotent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, _ := websocket.Accept(w, r, &websocket.AcceptOptions{
-			Subprotocols: []string{"chepherd.v1.ws"},
+			Subprotocols: []string{"chepherd-rc-v1"},
 		})
 		<-r.Context().Done()
 		conn.Close(websocket.StatusNormalClosure, "")
