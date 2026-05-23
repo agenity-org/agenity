@@ -118,6 +118,7 @@ func New(cfg *Config) (*Listener, error) {
 		l.factory = &transport.WebRTCFactory{
 			STUNServers: cfg.STUNServers,
 			Signaling:   signaling.New(cfg.RelayURL+"/v1/signaling", cfg.AuthToken, cfg.BastionID),
+			BastionID:   cfg.BastionID,
 		}
 	case "relayed":
 		l.factory = &transport.WSFactory{
