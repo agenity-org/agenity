@@ -14,7 +14,7 @@ var rcCmd = &cobra.Command{
 	Use:   "rc",
 	Short: "chepherd remote-control — drive the dashboard from web/mobile",
 	Long: `chepherd rc enables the remote-control subsystem: the local daemon
-registers with a relay (default: rc.openova.io) and accepts incoming peer
+registers with a relay (default: relay.chepherd.org) and accepts incoming peer
 connections from authorized web/iOS/Android clients.
 
 Two transport modes:
@@ -67,7 +67,7 @@ func init() {
 	rcCmd.AddCommand(rcEnableCmd, rcDisableCmd, rcStatusCmd)
 
 	rcEnableCmd.Flags().StringVar(&rcRelayURL, "relay",
-		"https://rc.openova.io", "relay endpoint (override for self-hosted)")
+		"https://relay.chepherd.org", "relay endpoint (override for self-hosted)")
 	rcEnableCmd.Flags().StringVar(&rcMode, "mode",
 		"privacy", "transport mode: privacy (WebRTC) or relayed (WebSocket)")
 	rcEnableCmd.Flags().BoolVar(&rcSelfSignal, "signaling-self", false,

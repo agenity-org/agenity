@@ -52,7 +52,7 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		return nil, err
 	}
-	cfg := &Config{Enabled: true, Mode: "privacy", RelayURL: "https://rc.openova.io"}
+	cfg := &Config{Enabled: true, Mode: "privacy", RelayURL: "https://relay.chepherd.org"}
 	for _, line := range splitLines(string(b)) {
 		k, v, ok := splitKV(line)
 		if !ok {

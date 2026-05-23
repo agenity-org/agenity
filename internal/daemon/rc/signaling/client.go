@@ -3,7 +3,7 @@
 // offers/answers + ICE candidates with peers.
 //
 // All endpoints are POST/GET against the chepherd-relay (default:
-// https://rc.openova.io/v1/signaling/*) — see docs/PROTOCOL.md §1
+// https://relay.chepherd.org/v1/signaling/*) — see docs/PROTOCOL.md §1
 // WebRTC mode diagram.
 //
 // Crucially the relay sees ONLY:
@@ -33,7 +33,7 @@ import (
 // HTTPClient is the REST signaling implementation. Implements
 // transport.SignalingClient.
 type HTTPClient struct {
-	BaseURL    string // e.g. "https://rc.openova.io/v1/signaling"
+	BaseURL    string // e.g. "https://relay.chepherd.org/v1/signaling"
 	Token      string // OAuth2 bearer
 	BastionID  string // own bastion identity — used in Listen-side polling
 	HTTP       *http.Client
