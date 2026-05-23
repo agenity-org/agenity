@@ -1,0 +1,91 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - heading "chepherd" [level=1] [ref=e4]
+    - generic [ref=e5]: /ʃep·hɜrd/ — a TUI supervisor for parallel AI coding agents
+  - generic [ref=e6]:
+    - link "stars" [ref=e7] [cursor=pointer]:
+      - /url: https://github.com/chepherd/chepherd
+      - img "stars" [ref=e8]
+    - link "MIT" [ref=e9] [cursor=pointer]:
+      - /url: https://github.com/chepherd/chepherd/blob/main/LICENSE
+      - img "MIT" [ref=e10]
+    - link "release" [ref=e11] [cursor=pointer]:
+      - /url: https://github.com/chepherd/chepherd/releases
+      - img "release" [ref=e12]
+    - link "last commit" [ref=e13] [cursor=pointer]:
+      - /url: https://github.com/chepherd/chepherd/commits/main
+      - img "last commit" [ref=e14]
+    - link "open issues" [ref=e15] [cursor=pointer]:
+      - /url: https://github.com/chepherd/chepherd/issues
+      - img "open issues" [ref=e16]
+  - paragraph [ref=e17]:
+    - text: A daemon and k9s-style terminal dashboard that watches every Claude Code session you run across all your repos, scores each on goal · velocity · focus · end-state-proximity, and coaches them when they drift — using your own
+    - code [ref=e18]: ~/.claude/CLAUDE.md
+    - text: as the rubric.
+  - generic [ref=e19]:
+    - text: "chepherd 0.1.0 ─ 6 sessions ─ 3 active ─ 02:55:13 UTC ─ refreshed 0.4s ago SESSIONS │ openova-27 │ ─ openova-io/openova ─ pid 498974 ● iogrid-8 7/7/8/6 ↑ │ trusted next 28m │ in-progress : 31 ▰▰▰▰▰▰▱▱▱▱ │ unclaimed : 26 ▰▰▰▰▰▱▱▱▱▱ ● ping-5 7/4/6/3 → │ backlog total : 78 concerned next 4m │ last commit : 2m ago │ tracker mtime : 4m ago"
+    - generic [ref=e20]: "> ● openova-27 3/1/1/0 ↓"
+    - text: "│ quiet ratio : 0.20"
+    - generic [ref=e21]: CRISIS next 2m
+    - text: "│ │ last verdict ○ cinova-30 paused │ ───────────── ○ talentmesh-3 paused │ verdict : intervene ○ vcard-4 paused │ ref : P9, P14 │ reason : Third consecutive totals today │ theater — coach 17:32 ticks : 487 │ said solve Pillar 1 injections : 23 │ PIN, session pivoted cost spent : $4.21 │ to SME prep instead avg V (1h) : 5.4 │ │ in-progress titles (top 5) │ #2173 axon: provider misconfig │ #2133 TBD-V57: Pillar 2 marketplace │ #2132 TBD-V56: cutover checkpoint │ #2125 CNI Cilium recovery │ #2118 EPIC: drop axon BankDhofar ↑↓ select enter details t tmux l log p/u pause / filter ? help q quit"
+  - generic [ref=e22]:
+    - heading "what it does" [level=2] [ref=e23]
+    - paragraph [ref=e24]: ─────────────
+    - list [ref=e25]:
+      - listitem [ref=e26]: ● watches every Claude Code session in tmux across all your repos — no setup per-session
+      - listitem [ref=e27]: ● reads each session's JSONL transcript + git log + GitHub issue state every tick
+      - listitem [ref=e28]: ● scores G / V / F / E (goal · velocity · focus · end-state-proximity) on every tick
+      - listitem [ref=e29]: ● coaches via tmux paste-buffer when divergence is real — cites principles by number from your CLAUDE.md
+      - listitem [ref=e30]: ● adaptive cadence (2 / 5 / 10 / 30 min) — concentrates attention on struggling sessions, leaves trusted sessions alone
+      - listitem [ref=e31]: ● escalates to Opus when in crisis band, stays on Sonnet otherwise
+      - listitem [ref=e32]: ● anti-theater detection — catches "ship busy commits to deflect from the named blocker" patterns
+      - listitem [ref=e33]: ● never closes issues (only the operator does, after walk-screenshot)
+  - generic [ref=e34]:
+    - heading "install" [level=2] [ref=e35]
+    - paragraph [ref=e36]: ─────────
+    - generic [ref=e37]: "# macOS + Linux — single binary, no runtime deps curl -fsSL https://chepherd.org/install.sh | sh # or via Go go install github.com/chepherd/chepherd@latest # first-time setup wizard (scans tmux, picks vcs adapter, installs systemd unit) chepherd init # open the dashboard chepherd"
+  - generic [ref=e38]:
+    - heading "under the hood" [level=2] [ref=e39]
+    - paragraph [ref=e40]: ───────────────
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - heading "TUI · tview" [level=3] [ref=e43]
+        - paragraph [ref=e44]: Same library powering k9s. Mouse + keyboard. True-color when terminal supports it; degrades to 256-color cleanly.
+      - generic [ref=e45]:
+        - heading "Daemon · Go" [level=3] [ref=e46]
+        - paragraph [ref=e47]: Single static binary, ~6 MB. systemd --user / launchd / OpenRC unit. Survives reboots.
+      - generic [ref=e48]:
+        - heading "Judge · Claude" [level=3] [ref=e49]
+        - paragraph [ref=e50]: Subscription-billed via claude-agent-sdk. No API key handling — uses your existing Claude Code credentials.
+      - generic [ref=e51]:
+        - heading "VCS · pluggable" [level=3] [ref=e52]
+        - paragraph [ref=e53]: GitHub (gh), GitLab (glab), Gitea (tea), or .chepherd/issues/*.md when there's no remote at all.
+      - generic [ref=e54]:
+        - heading "Sessions · adoptable" [level=3] [ref=e55]
+        - paragraph [ref=e56]: tmux sessions you already started are auto-discovered. No "use our spawner" lock-in.
+      - generic [ref=e57]:
+        - heading "Rubric · yours" [level=3] [ref=e58]
+        - paragraph [ref=e59]: Your CLAUDE.md is the single source of truth. chepherd cites your principles by number — never paraphrases.
+  - generic [ref=e60]:
+    - heading "not quite the same as" [level=2] [ref=e61]:
+      - text: not
+      - emphasis [ref=e62]: quite
+      - text: the same as
+    - paragraph [ref=e63]: ───────────────────────
+    - generic [ref=e64]:
+      - generic [ref=e65]:
+        - heading "Anthropic Agent Teams" [level=3] [ref=e66]
+        - paragraph [ref=e67]: In-session lead spawns N teammates inside one task scope. chepherd watches every session you launched yourself, across every repo, with your CLAUDE.md as the rubric — different layer.
+      - generic [ref=e68]:
+        - heading "Anthropic Routines" [level=3] [ref=e69]
+        - paragraph [ref=e70]: Cloud-scheduled fire-and-forget. chepherd is a continuous local watcher.
+      - generic [ref=e71]:
+        - heading "Overstory / Warren" [level=3] [ref=e72]
+        - paragraph [ref=e73]: Spawn their own workers and manage them. chepherd adopts what you already run.
+  - contentinfo [ref=e74]:
+    - generic [ref=e75]:
+      - text: MIT licensed · built by
+      - link "emrahbaysal" [ref=e76] [cursor=pointer]:
+        - /url: https://github.com/emrahbaysal
+    - link "github.com/chepherd/chepherd" [ref=e78] [cursor=pointer]:
+      - /url: https://github.com/chepherd/chepherd
