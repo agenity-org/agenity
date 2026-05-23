@@ -178,6 +178,10 @@ type WebRTCFactory struct {
 
 	// Signaling — REST client to chepherd-relay's /v1/signaling/* endpoints.
 	Signaling SignalingClient
+
+	// BastionID — this daemon's bastion identifier. Used in the trickled-ICE
+	// poll loop (acceptOffer) to identify which queue to drain.
+	BastionID string
 }
 
 // TURNServer config for symmetric-NAT fallback.
