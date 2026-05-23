@@ -241,6 +241,39 @@ func (d *Dashboard) renderDetail() {
 	fmt.Fprintf(w, "%s\n\n", style.Tag(style.Ambient,
 		"─ pid "+intOrDash(s.UUID)+" ─ uuid "+truncate(s.UUID, 12)))
 
+	// LIVE — near-real-time signals refreshed by 'chepherd live' (every 5s, no LLM)
+	if ls := s.LiveSignals; ls != nil {
+		fmt.Fprintf(w, "%s\n", style.Tag(style.Title, "LIVE"))
+		fmt.Fprintf(w, "%s %s\n",
+			style.Tag(style.TitleRule, "────"),
+			style.Tag(style.Timestamp, "(refreshed "+formatAgo(ls.RefreshedAt)+")"))
+		fmt.Fprintf(w, "  %s  %s\n",
+			style.Tag(style.Primary, "in-progress :"),
+			style.Tag(style.Metric, fmt.Sprintf("%d", ls.InProgressCount)))
+		fmt.Fprintf(w, "  %s  %s\n",
+			style.Tag(style.Primary, "unclaimed   :"),
+			style.Tag(style.Metric, fmt.Sprintf("%d", ls.UnclaimedCount)))
+		fmt.Fprintf(w, "  %s  %s\n",
+			style.Tag(style.Primary, "backlog     :"),
+			style.Tag(style.Metric, fmt.Sprintf("%d", ls.BacklogCount)))
+		fmt.Fprintf(w, "  %s  %s\n",
+			style.Tag(style.Primary, "commits 1h  :"),
+			style.Tag(style.Metric, fmt.Sprintf("%d", ls.CommitCountLast1H)))
+		if ls.LastCommitAgeMin > 0 {
+			fmt.Fprintf(w, "  %s  %s\n",
+				style.Tag(style.Primary, "last commit :"),
+				style.Tag(style.AgeColor(ls.LastCommitAgeMin),
+					fmt.Sprintf("%.0fm ago", ls.LastCommitAgeMin)))
+		}
+		if ls.TrackerMtimeMin > 0 {
+			fmt.Fprintf(w, "  %s  %s\n",
+				style.Tag(style.Primary, "TRACKER     :"),
+				style.Tag(style.AgeColor(ls.TrackerMtimeMin),
+					fmt.Sprintf("%.0fm ago", ls.TrackerMtimeMin)))
+		}
+		fmt.Fprintf(w, "\n")
+	}
+
 	// IDENTITY section
 	fmt.Fprintf(w, "%s\n", style.Tag(style.Title, "IDENTITY"))
 	fmt.Fprintf(w, "%s\n", style.Tag(style.TitleRule, "────────"))
@@ -324,6 +357,31 @@ func intOrDash(s string) string {
 		return "—"
 	}
 	return s[:8] + "…"
+}
+
+// formatAgo turns an RFC3339 timestamp into a human-readable "Xs ago" / "Xm ago".
+func formatAgo(ts string) string {
+	if ts == "" {
+		return "never"
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, ts)
+		if err != nil {
+			return "?"
+		}
+	}
+	d := time.Since(t)
+	switch {
+	case d < 10*time.Second:
+		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
 }
 
 // appendLog pushes a new log line into the bottom pane + the rolling buffer.
