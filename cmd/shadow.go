@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chepherd/chepherd/internal/daemon"
+	"github.com/chepherd/chepherd/internal/daemon/rc"
+	"github.com/chepherd/chepherd/internal/daemon/rc/envelope"
 	stylepkg "github.com/chepherd/chepherd/internal/style"
 )
 
@@ -56,20 +59,53 @@ func runShadow(cmd *cobra.Command, args []string) error {
 		stylepkg.Sprint(stylepkg.Logo, "chepherd shadow"),
 		cfg.SystemPromptPath, stateDir)
 
+	// Start rc Listener in background if rc is enabled.
+	rcCtx, rcCancel := context.WithCancel(context.Background())
+	defer rcCancel()
+	listener := startRCListener(rcCtx)
+
 	if shadowOnce {
-		return tickOnce(cfg, stateDir, shadowSession)
+		return tickOnce(cfg, stateDir, shadowSession, listener)
 	}
 
 	// Continuous loop — pick due session every minute (adaptive cadence).
 	for {
-		if err := tickOnce(cfg, stateDir, shadowSession); err != nil {
+		if err := tickOnce(cfg, stateDir, shadowSession, listener); err != nil {
 			fmt.Fprintln(os.Stderr, "tick error:", err)
 		}
 		time.Sleep(60 * time.Second)
 	}
 }
 
-func tickOnce(cfg daemon.JudgeConfig, stateDir, only string) error {
+// startRCListener reads rc.toml + spawns the Listener if enabled. Returns
+// nil when rc is disabled — the rest of the daemon treats nil as no-op
+// (all rc.Listener methods are nil-safe).
+func startRCListener(ctx context.Context) *rc.Listener {
+	cfg, err := rc.LoadConfig(rc.DefaultConfigPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rc config: %v (continuing with rc disabled)\n", err)
+		return nil
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	l, err := rc.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rc new: %v (continuing with rc disabled)\n", err)
+		return nil
+	}
+	fmt.Printf("  %s rc enabled — mode=%s relay=%s bastion=%s\n",
+		stylepkg.Sprint(stylepkg.BandTrusted, "✓"),
+		cfg.Mode, cfg.RelayURL, cfg.BastionID)
+	go func() {
+		if err := l.Run(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "rc listener: %v\n", err)
+		}
+	}()
+	return l
+}
+
+func tickOnce(cfg daemon.JudgeConfig, stateDir, only string, listener *rc.Listener) error {
 	sessions, err := daemon.DiscoverSessions()
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
@@ -142,6 +178,20 @@ func tickOnce(cfg daemon.JudgeConfig, stateDir, only string) error {
 		// Persist a log line that matches Python supervisor format so the
 		// tail/dashboard can read either daemon's output.
 		appendShadowLog(s.TmuxName, v, band, intervalMin)
+
+		// Publish to rc peers (no-op when rc disabled).
+		if listener != nil {
+			listener.PublishVerdict(envelope.VerdictPayload{
+				Session:       s.TmuxName,
+				Verdict:       v.Verdict,
+				PrincipleRef:  v.PrincipleRef,
+				Scorecard:     v.Scorecard,
+				ScorecardNote: v.ScorecardNote,
+				Message:       v.Message,
+				CostUSD:       v.CostUSD,
+				Injected:      false, // shadow mode never injects
+			})
+		}
 	}
 	return nil
 }
