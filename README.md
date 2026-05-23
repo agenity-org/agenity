@@ -1,5 +1,9 @@
 # chepherd
 
+[![release](https://img.shields.io/github/v/tag/chepherd/chepherd?label=release&sort=semver)](https://github.com/chepherd/chepherd/releases)
+[![license](https://img.shields.io/github/license/chepherd/chepherd)](LICENSE)
+[![chepherd-rc](https://img.shields.io/badge/chepherd--rc-v0.2.0--rc3-blue)](https://chepherd.org)
+
 > A TUI supervisor for parallel AI coding agents.
 
 `chepherd` (pronounced *shepherd*, spelled with a `c` — intentional) is a daemon + interactive terminal dashboard that watches every Claude Code session you run across all your repos, scores each on goal/velocity/focus/end-state-proximity, and coaches them when they drift — using your own `CLAUDE.md` as the rubric.
