@@ -22,6 +22,9 @@ type Dashboard struct {
 	detail  *tview.TextView
 	logView *tview.TextView
 	footer  *tview.TextView
+
+	// Rolling log buffer reused by LogMode (W6) for full-screen view.
+	logBuffer []string
 }
 
 func newDashboard(a *App) *Dashboard {
@@ -323,12 +326,29 @@ func intOrDash(s string) string {
 	return s[:8] + "…"
 }
 
-// appendLog pushes a new log line into the bottom pane.
+// appendLog pushes a new log line into the bottom pane + the rolling buffer.
 func (d *Dashboard) appendLog(line string) {
+	d.logBuffer = append(d.logBuffer, line)
+	if len(d.logBuffer) > 2000 {
+		d.logBuffer = d.logBuffer[len(d.logBuffer)-2000:]
+	}
+	// Only render in the small dashboard log pane if line matches selected session.
+	sel := d.app.Selected()
+	if sel != nil && !containsSession(line, sel.TmuxName) {
+		// Keep buffered but don't display — keeps the small pane focused.
+		return
+	}
 	colored := colorizeLogLine(line)
 	fmt.Fprintf(d.logView, "%s\n", colored)
-	// Auto-scroll to bottom for live tail effect.
 	d.logView.ScrollToEnd()
+	// Forward to LogMode if it's open.
+	if d.app.logMode != nil {
+		d.app.logMode.appendLog(line)
+	}
+}
+
+func containsSession(line, session string) bool {
+	return session == "" || strings.Contains(line, session+":")
 }
 
 // colorizeLogLine applies semantic colors to a supervisor log line.

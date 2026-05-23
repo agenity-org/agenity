@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -31,13 +32,19 @@ const LogPaneHistoryLines = 50
 
 // App is the root TUI application.
 type App struct {
-	tv         *tview.Application
-	pages      *tview.Pages
-	dashboard  *Dashboard
+	tv        *tview.Application
+	pages     *tview.Pages
+	dashboard *Dashboard
+	help      *HelpOverlay
+	filter    *Filter
+	logMode   *LogMode
+	detail    *Detail
 
 	// Shared state — protected by mu.
 	mu          sync.Mutex
 	sessions    []*state.Session
+	allSessions []*state.Session // unfiltered
+	filterText  string
 	selectedIdx int
 
 	// Log tailer
@@ -54,8 +61,124 @@ func New() *App {
 		logCh: make(chan chepherdlog.Line, 256),
 	}
 	a.dashboard = newDashboard(a)
+	a.help = newHelpOverlay(a)
+	a.filter = newFilter(a)
+	a.logMode = newLogMode(a)
+	a.detail = newDetail(a)
 	a.pages.AddPage("dashboard", a.dashboard.root, true, true)
+	a.installGlobalKeys()
 	return a
+}
+
+// installGlobalKeys wires the dashboard-level shortcuts that open overlays.
+func (a *App) installGlobalKeys() {
+	a.dashboard.list.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		switch ev.Rune() {
+		case '/':
+			a.filter.show()
+			return nil
+		case '?':
+			a.help.show()
+			return nil
+		case 'l':
+			a.logMode.show()
+			return nil
+		case 'p':
+			a.PauseSelected()
+			return nil
+		case 'u':
+			a.UnpauseSelected()
+			return nil
+		case 'r':
+			a.refreshState()
+			a.tv.QueueUpdateDraw(a.dashboard.render)
+			return nil
+		case 't':
+			a.TmuxAttachSelected()
+			return nil
+		}
+		if ev.Key() == tcell.KeyEnter {
+			s := a.Selected()
+			if s != nil {
+				a.detail.show(s)
+				return nil
+			}
+		}
+		return ev
+	})
+}
+
+// PauseSelected creates a sentinel file for the selected session.
+func (a *App) PauseSelected() {
+	s := a.Selected()
+	if s == nil {
+		return
+	}
+	dirs := state.DefaultStateDirs()
+	if len(dirs) == 0 {
+		return
+	}
+	path := dirs[0] + "/" + s.UUID + ".paused"
+	_ = os.WriteFile(path, []byte{}, 0o600)
+}
+
+// UnpauseSelected removes the sentinel file for the selected session.
+func (a *App) UnpauseSelected() {
+	s := a.Selected()
+	if s == nil {
+		return
+	}
+	for _, dir := range state.DefaultStateDirs() {
+		_ = os.Remove(dir + "/" + s.UUID + ".paused")
+	}
+}
+
+// TmuxAttachSelected attempts to switch the user to the selected session's
+// tmux pane. If we're inside tmux, uses switch-client; otherwise suspends
+// the TUI and runs attach in the foreground.
+func (a *App) TmuxAttachSelected() {
+	s := a.Selected()
+	if s == nil || s.TmuxName == "" {
+		return
+	}
+	if os.Getenv("TMUX") != "" {
+		_ = execCmd("tmux", "switch-client", "-t", s.TmuxName)
+		return
+	}
+	// Suspend, attach, return.
+	a.tv.Suspend(func() {
+		_ = execCmd("tmux", "attach", "-t", s.TmuxName)
+	})
+}
+
+func execCmd(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+// applyFilter updates the visible session set + repaints the dashboard.
+func (a *App) applyFilter(query string) {
+	a.mu.Lock()
+	a.filterText = query
+	a.applyFilterLocked()
+	a.mu.Unlock()
+	a.tv.QueueUpdateDraw(a.dashboard.render)
+}
+
+// applyFilterLocked recomputes a.sessions from a.allSessions + a.filterText.
+// Caller MUST hold a.mu.
+func (a *App) applyFilterLocked() {
+	if a.filterText == "" {
+		a.sessions = append([]*state.Session(nil), a.allSessions...)
+		return
+	}
+	a.sessions = a.sessions[:0]
+	for _, s := range a.allSessions {
+		if matchesFilter(s, a.filterText) {
+			a.sessions = append(a.sessions, s)
+		}
+	}
 }
 
 // Run blocks until the user quits the TUI.
@@ -137,8 +260,9 @@ func (a *App) refreshState() {
 		return ai < aj
 	})
 	a.mu.Lock()
-	a.sessions = sessions
-	if a.selectedIdx >= len(sessions) {
+	a.allSessions = sessions
+	a.applyFilterLocked()
+	if a.selectedIdx >= len(a.sessions) {
 		a.selectedIdx = 0
 	}
 	a.mu.Unlock()
