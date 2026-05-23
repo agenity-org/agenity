@@ -1,0 +1,26 @@
+# Binaries / build artifacts
+/chepherd
+/dist/
+/build/
+*.exe
+*.test
+*.out
+
+# Editor + OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Go
+vendor/
+*.prof
+
+# Environment
+.env
+.env.local
+
+# CI artifacts
+coverage.txt
+coverage.html
