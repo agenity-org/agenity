@@ -1,0 +1,81 @@
+version: 2
+project_name: chepherd
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: chepherd
+    main: .
+    binary: chepherd
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/chepherd/chepherd/cmd.Version={{.Version}}
+      - -X github.com/chepherd/chepherd/cmd.Commit={{.ShortCommit}}
+      - -X github.com/chepherd/chepherd/cmd.BuildDate={{.Date}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: chepherd
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+
+release:
+  github:
+    owner: chepherd
+    name: chepherd
+  draft: false
+  prerelease: auto
+  name_template: "chepherd {{ .Version }}"
+  header: |
+    # chepherd {{ .Version }}
+
+    A TUI supervisor for parallel AI coding agents.
+
+    Install via:
+    ```
+    curl -fsSL https://chepherd.org/install.sh | sh
+    ```
+
+    Or download a binary directly from the assets below.
+
+brews:
+  - name: chepherd
+    repository:
+      owner: chepherd
+      name: homebrew-chepherd
+    homepage: https://chepherd.org
+    description: A TUI supervisor for parallel AI coding agents
+    license: MIT
+    test: |
+      system "#{bin}/chepherd", "version"
+    install: |
+      bin.install "chepherd"
