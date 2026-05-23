@@ -9,7 +9,7 @@ import (
 
 // Set at build time via -ldflags. See the Makefile.
 var (
-	Version   = "0.0.1-dev"
+	Version   = "0.2.0-rc2"
 	Commit    = "unknown"
 	BuildDate = "unknown"
 )
