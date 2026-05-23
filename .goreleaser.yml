@@ -67,15 +67,16 @@ release:
 
     Or download a binary directly from the assets below.
 
-brews:
-  - name: chepherd
-    repository:
-      owner: chepherd
-      name: homebrew-chepherd
-    homepage: https://chepherd.org
-    description: A TUI supervisor for parallel AI coding agents
-    license: MIT
-    test: |
-      system "#{bin}/chepherd", "version"
-    install: |
-      bin.install "chepherd"
+# brews: ─── disabled until a cross-repo PAT is configured in this repo's
+# Actions secrets (`HOMEBREW_TAP_TOKEN` or similar). The default GITHUB_TOKEN
+# can only write to the current repo. Until then, the homebrew-chepherd tap
+# stays unpopulated and users install via the universal installer
+# (`curl -fsSL https://chepherd.org/install.sh | sh`) or `go install`.
+#
+# brews:
+#   - name: chepherd
+#     repository:
+#       owner: chepherd
+#       name: homebrew-chepherd
+#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+#     ...
