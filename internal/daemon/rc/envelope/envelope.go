@@ -101,15 +101,19 @@ func ValidateFrame(frame []byte) error {
 // Wrap-around (uint64 overflow) is impossible in practice: at 1000 frames/sec
 // continuously, wrap takes ~584 million years.
 type SequenceCounter struct {
-	v atomic.Uint64
+	a atomic.Uint64
 }
 
 // Next returns the next sequence number.
-func (s *SequenceCounter) Next() uint64 { return s.v.Add(1) }
+func (s *SequenceCounter) Next() uint64 { return s.a.Add(1) }
 
 // Current reports the last-issued sequence number (for resume coordination).
-func (s *SequenceCounter) Current() uint64 { return s.v.Load() }
+func (s *SequenceCounter) Current() uint64 { return s.a.Load() }
 
 // SetTo updates the counter — used during reconnect-resume when the peer
 // reports its last_seen_seq and we need to advance past it.
-func (s *SequenceCounter) SetTo(v uint64) { s.v.Store(v) }
+func (s *SequenceCounter) SetTo(v uint64) { s.a.Store(v) }
+
+// Atomic exposes the internal *atomic.Uint64 so callers can pass it directly
+// to envelope.New (which takes *atomic.Uint64).
+func (s *SequenceCounter) Atomic() *atomic.Uint64 { return &s.a }
