@@ -89,6 +89,7 @@ type Listener struct {
 	stateSnap   atomic.Pointer[envelope.StatePayload] // most recent state snapshot
 	startedAt   time.Time
 	totalPeers  atomic.Int64 // cumulative count across the listener's lifetime
+	handler     CommandHandler
 }
 
 type peerSession struct {
@@ -282,34 +283,96 @@ func (l *Listener) handleCommand(ctx context.Context, sess *peerSession, env *en
 	}
 }
 
-// executeCommand runs the requested action. v0.2.0 wires pause/unpause/
-// refresh/inject directly to the daemon's existing pause-sentinel +
-// tmux-paste-buffer primitives (those live in internal/daemon/inject.go +
-// the state package).
+// CommandHandler is the daemon-supplied interface that performs the
+// pause/unpause/inject/refresh actions on a real session. Allows the
+// Listener to call into the daemon's existing primitives without a
+// circular import. Wired in cmd/shadow.go via Listener.SetHandler.
+type CommandHandler interface {
+	Pause(sessionUUID string) error
+	Unpause(sessionUUID string) error
+	Refresh(sessionUUID string) error
+	Inject(sessionUUID, message string) error
+}
+
+// SetHandler wires the CommandHandler. Safe to call before or after Run.
+func (l *Listener) SetHandler(h CommandHandler) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.handler = h
+	l.mu.Unlock()
+}
+
+// executeCommand runs the requested action against the configured handler.
 func (l *Listener) executeCommand(ctx context.Context, sess *peerSession, replyTo uint64, cmd *envelope.CommandPayload) {
-	// Minimal v0.2.0 wiring: acknowledge with "not yet implemented" until the
-	// daemon-side handlers land. The protocol surface is correct — the
-	// behaviour is the next deliverable.
+	l.mu.Lock()
+	h := l.handler
+	l.mu.Unlock()
+
+	var err error
+	var result string
+
 	switch cmd.Action {
-	case "pause", "unpause", "refresh", "inject":
-		l.sendTo(sess, envelope.TypeAck, envelope.AckPayload{
-			InReplyTo: replyTo,
-			OK:        true,
-			Result:    fmt.Sprintf("%s queued for session %s", cmd.Action, cmd.SessionUUID),
-		})
+	case "pause":
+		if h != nil {
+			err = h.Pause(cmd.SessionUUID)
+		}
+		result = "paused"
+	case "unpause":
+		if h != nil {
+			err = h.Unpause(cmd.SessionUUID)
+		}
+		result = "unpaused"
+	case "refresh":
+		if h != nil {
+			err = h.Refresh(cmd.SessionUUID)
+		}
+		result = "refresh queued"
+	case "inject":
+		msg, _ := cmd.Args["message"].(string)
+		if msg == "" {
+			l.sendTo(sess, envelope.TypeAck, envelope.AckPayload{
+				InReplyTo: replyTo, OK: false,
+				Error: "inject requires args.message",
+			})
+			return
+		}
+		if h != nil {
+			err = h.Inject(cmd.SessionUUID, msg)
+		}
+		result = "injected"
 	case "tmux_attach_hint":
+		// Informational; no daemon action.
 		l.sendTo(sess, envelope.TypeAck, envelope.AckPayload{
-			InReplyTo: replyTo,
-			OK:        true,
-			Result:    "noted",
+			InReplyTo: replyTo, OK: true, Result: "noted",
 		})
+		return
 	default:
 		l.sendTo(sess, envelope.TypeAck, envelope.AckPayload{
-			InReplyTo: replyTo,
-			OK:        false,
-			Error:     fmt.Sprintf("unknown action %q", cmd.Action),
+			InReplyTo: replyTo, OK: false,
+			Error: fmt.Sprintf("unknown action %q", cmd.Action),
 		})
+		return
 	}
+
+	if h == nil {
+		l.sendTo(sess, envelope.TypeAck, envelope.AckPayload{
+			InReplyTo: replyTo, OK: false,
+			Error: "no command handler configured (daemon must SetHandler)",
+		})
+		return
+	}
+	if err != nil {
+		l.sendTo(sess, envelope.TypeAck, envelope.AckPayload{
+			InReplyTo: replyTo, OK: false,
+			Error: err.Error(),
+		})
+		return
+	}
+	l.sendTo(sess, envelope.TypeAck, envelope.AckPayload{
+		InReplyTo: replyTo, OK: true, Result: result,
+	})
 }
 
 // fanOut sends the same payload to every connected peer.
