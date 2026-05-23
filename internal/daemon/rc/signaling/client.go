@@ -132,6 +132,41 @@ func (c *HTTPClient) PostAnswer(ctx context.Context, peerID string, answer webrt
 	return err
 }
 
+// ─── trickled ICE (new relay endpoints from 48aed53) ────────────────────
+
+// PostCandidate sends ONE trickled ICE candidate to peerID via the
+// relay's /v1/signaling/candidate endpoint.
+//
+// Endpoint: POST /v1/signaling/candidate
+// Body:     { bastion_id: peerID, candidate: {...} }
+func (c *HTTPClient) PostCandidate(ctx context.Context, peerID string, cand webrtc.ICECandidateInit) error {
+	body := candidatePostBody{BastionID: peerID, Candidate: cand}
+	_, err := c.postJSON(ctx, "/candidate", body)
+	return err
+}
+
+// PollCandidates long-polls for trickled candidates addressed to selfID.
+//
+// Endpoint: GET /v1/signaling/candidates?bastion_id=<selfID>
+// Response: { candidates: [...], cursor: "..." }
+func (c *HTTPClient) PollCandidates(ctx context.Context, selfID string) ([]webrtc.ICECandidateInit, error) {
+	body, status, err := c.getRaw(ctx, "/candidates?bastion_id="+url.QueryEscape(selfID))
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNoContent {
+		return nil, nil
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("signaling: /candidates: HTTP %d", status)
+	}
+	var resp candidatesPollBody
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("signaling: decode candidates: %w", err)
+	}
+	return resp.Candidates, nil
+}
+
 // ─── HTTP plumbing ──────────────────────────────────────────────────────
 
 func (c *HTTPClient) postJSON(ctx context.Context, path string, body any) ([]byte, error) {
@@ -210,4 +245,14 @@ type incomingOfferBody struct {
 	Peer string                    `json:"peer"`
 	SDP  webrtc.SessionDescription `json:"sdp"`
 	ICE  []webrtc.ICECandidateInit `json:"ice,omitempty"`
+}
+
+type candidatePostBody struct {
+	BastionID string                  `json:"bastion_id"`
+	Candidate webrtc.ICECandidateInit `json:"candidate"`
+}
+
+type candidatesPollBody struct {
+	Candidates []webrtc.ICECandidateInit `json:"candidates"`
+	Cursor     string                    `json:"cursor"`
 }

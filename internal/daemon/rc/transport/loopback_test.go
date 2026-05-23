@@ -219,6 +219,23 @@ func (d *daemonSide) PostAnswer(ctx context.Context, peerID string, answer webrt
 	}
 }
 
+// Trickled-ICE stubs — the loopback test uses bundled-ICE (offer + answer
+// carry their candidates inline), so trickling is intentionally unsupported.
+// Returning ErrTricklingUnsupported lets WebRTCFactory fall back to the
+// bundled path without failing the whole test.
+func (c *clientSide) PostCandidate(_ context.Context, _ string, _ webrtc.ICECandidateInit) error {
+	return transport.ErrTricklingUnsupported
+}
+func (c *clientSide) PollCandidates(_ context.Context, _ string) ([]webrtc.ICECandidateInit, error) {
+	return nil, transport.ErrTricklingUnsupported
+}
+func (d *daemonSide) PostCandidate(_ context.Context, _ string, _ webrtc.ICECandidateInit) error {
+	return transport.ErrTricklingUnsupported
+}
+func (d *daemonSide) PollCandidates(_ context.Context, _ string) ([]webrtc.ICECandidateInit, error) {
+	return nil, transport.ErrTricklingUnsupported
+}
+
 var errNotApplicable = jsonError("loopback: method not applicable on this side")
 
 type jsonError string

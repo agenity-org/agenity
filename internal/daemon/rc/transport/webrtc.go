@@ -190,6 +190,12 @@ type TURNServer struct {
 // SignalingClient is the dependency injection point for the REST signaling
 // channel. Real impl lives in internal/daemon/rc/signaling/ (future commit);
 // tests use an in-memory mock.
+//
+// Trickled-ICE support — PostCandidate + PollCandidates — was added in
+// chepherd-relay@48aed53 to align the daemon with the new web/iOS/Android
+// clients (which all trickle by default). Implementations that don't
+// support trickling MAY return ErrTricklingUnsupported from these methods;
+// the WebRTCFactory then falls back to the legacy bundled-ICE flow.
 type SignalingClient interface {
 	// PostOffer sends an SDP offer + ICE candidates to the relay, addressed
 	// to the named peer. Returns the peer's SDP answer + ICE candidates.
@@ -202,7 +208,24 @@ type SignalingClient interface {
 	// PostAnswer (server-side) sends our SDP answer + ICE candidates back to
 	// the initiating peer.
 	PostAnswer(ctx context.Context, peerID string, answer webrtc.SessionDescription) error
+
+	// PostCandidate sends ONE trickled ICE candidate to the peer named by
+	// peerID. Implementations targeting chepherd-relay POST to
+	// /v1/signaling/candidate with {bastion_id: peerID, candidate}.
+	PostCandidate(ctx context.Context, peerID string, candidate webrtc.ICECandidateInit) error
+
+	// PollCandidates long-polls for trickled candidates addressed to OUR
+	// peerID (self). Implementations targeting chepherd-relay GET
+	// /v1/signaling/candidates?bastion_id=<self>. Blocks up to the relay's
+	// long-poll window (~25s) or returns sooner if candidates are queued.
+	// Returns ctx.Err() on cancel.
+	PollCandidates(ctx context.Context, selfID string) ([]webrtc.ICECandidateInit, error)
 }
+
+// ErrTricklingUnsupported — returned by SignalingClient impls that haven't
+// implemented trickled ICE yet. WebRTCFactory falls back to bundled-ICE
+// when this is the case.
+var ErrTricklingUnsupported = errors.New("signaling: trickled ICE not supported")
 
 // OfferAnswer bundles the peer's SDP answer + their ICE candidates.
 type OfferAnswer struct {
