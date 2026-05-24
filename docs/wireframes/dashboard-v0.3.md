@@ -7,27 +7,29 @@
 ## Final wireframe (96 cols × 19 rows)
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│  chepherd  ·  4 sessions · 3 active · 14:22 UTC                            ▰ chepherd 0.3   │
-├────────────────┬──────────────────────────────────────────────┬──────────────────────────────┤
-│ Sessions       │  tmux: openova-1                             │  Scorecard                   │
-│ ●▶ openova-1   │                                              │  ● trusted · next 28m        │
-│ ● iogrid-8     │  $ npm run dev                               │                              │
-│ ● talent-2     │  > openova@1.0.0 dev                         │  G  9 ████████░░             │
-│ ○ vcard-3 🔒   │  > vite                                      │  V  7 ███████░░░             │
-│                │  VITE v5.0.0  ready in 432 ms                │  F  6 ██████░░░░             │
-│                │  ➜  Local:   http://localhost:3000/          │  E  3 ███░░░░░░░             │
-│                │                                              │  trend G ▂▃▅▆▇█▇█            │
-│ ─────────────  │  watching for file changes...                ├──────────────────────────────┤
-│ active 3       │                                              │  Recent log                  │
-│ paused 1       │                                              │  14:21 silent V=7            │
-│ lapsed 1       │                                              │  14:18 coach: anti-theater   │
-│                │                                              │  14:15 silent V=6            │
-│                │                                              │  14:12 silent V=8            │
-├────────────────┴──────────────────────────────────────────────┴──────────────────────────────┤
-│ ↑↓ select   t attach   L login   l fullscreen log   /  filter   p/u pause   ?  q quit        │
-└──────────────────────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  chepherd  ·  4 sessions · 3 active · sort: score↓ · 14:22 UTC                  ▰ chepherd 0.3    │
+├──────────────────────────┬──────────────────────────────────────────────┬──────────────────────────┤
+│ Sessions    score        │  tmux: talent-2                              │  Scorecard               │
+│ ●▶ talent-2  4.0 ████░░░░│                                              │  ● crisis · next 2m      │
+│ ●  openova-1 5.7 █████░░░│  $ go test ./...                             │                          │
+│ ●  iogrid-8  8.0 ████████│  --- FAIL: TestE2EFlow                       │  G  9 ████████░░         │
+│ ○  vcard-3 🔒  —         │  PASS                                        │  V  9 █████████░         │
+│                          │  ok      iogrid/internal/feed 2.314s         │  F  9 █████████░         │
+│                          │                                              │  E  1 █░░░░░░░░░         │
+│                          │  $ █                                         │  trend G ▂▃▅▆▇█▇█        │
+│ ──────────────────────   │                                              ├──────────────────────────┤
+│ active 3                 │                                              │  Recent log              │
+│ paused 1                 │                                              │  14:21 silent V=7        │
+│ lapsed 1                 │                                              │  14:18 coach: theater    │
+│                          │                                              │  14:15 silent V=6        │
+│                          │                                              │  14:12 silent V=8        │
+├──────────────────────────┴──────────────────────────────────────────────┴──────────────────────────┤
+│ ↑↓ select   t attach   o sort   L login   l fullscreen log   /  filter   p/u pause   ?  q quit     │
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+Default sort is `score↓` (geomean, worst-first) so the broken session is always at the top of the list — triage view. Above: talent-2 has G=9 V=9 F=9 but E=1, geomean ≈ 4.0; it surfaces above iogrid-8's balanced 8.0 because the weak axis is what we need to act on.
 
 ## Spec (locked decisions)
 
@@ -47,6 +49,10 @@
 | Center never drops | mandate | the live tmux mirror is sacred |
 | Pre-attach detach hint | dismissible modal, persisted in `~/.config/chepherd/state.json` | shown until user ticks "don't show again" |
 | Persistent detach reminder | tmux `status-right` set to `[ Ctrl-B D → return to chepherd ]` for the attached session | restored on detach via tmux `set-hook` |
+| Overall score | geometric mean: `(G·V·F·E)^(1/4)` | one weak axis drags the score down — matches supervisor's weakest-link philosophy |
+| Score display | `5.7  █████░░░░░` (number + 10-cell gauge, gauge colored by band) | wide enough to read at a glance, narrow enough to fit in a 24-col left pane |
+| Sort modes | 4 cyclable: `score↓` (default, triage), `score↑`, `name`, `status` | cycled via single `o` keypress; current mode shown in header |
+| Status sort order | `in-progress` → `coach` → `silent` → `paused` | maps to band: crisis/concerned/trusted/paused |
 
 ## Hotkeys (final)
 
@@ -56,6 +62,7 @@ enter   open detail overlay
 t       tmux attach (suspend chepherd → full attach → C-b d returns)
 L       login (send '/login\n' + attach — for auth-lapsed sessions)
 l       fullscreen log view
+o       cycle sort: score↓ → score↑ → name → status → (loop)
 /       filter list
 p / u   pause / unpause selected session
 n       new session
@@ -157,7 +164,14 @@ explicit escape valve when full interaction is needed. k9s uses the same pattern
    - set chepherd's reminder via `tmux set-option`
    - register `set-hook -t <session> client-detached`  to restore
    - then suspend + attach
-10. Playwright walk on tmux + screenshot → comment on #39 → sub-agent reviewer → close
+10. `internal/state/state.go` — add `(s *Session) Geomean() float64` that returns
+    `(G·V·F·E)^(1/4)` from `LastScorecard`; returns 0 when scorecard is nil
+11. `internal/tui/dashboard.go` — left-pane row formatter renders `score gauge`
+    (2-char number + 10-cell `█`/`░` bar tinted by band)
+12. `internal/tui/sort.go` — 4 sort funcs (scoreDesc, scoreAsc, name, status);
+    `o` key in `installGlobalKeys` cycles via `a.cycleSort()`; header text shows
+    current mode
+13. Playwright walk on tmux + screenshot → comment on #39 → sub-agent reviewer → close
 
 ## Out of scope for v0.3.0
 
