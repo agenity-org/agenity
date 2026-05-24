@@ -36,26 +36,52 @@ const StaleThreshold = 35 * time.Minute
 func CheckDaemonHealth(sessions []*state.Session) DaemonHealth {
 	h := DaemonHealth{}
 
-	// 1. Process check — is supervisor.py or chepherd shadow running?
-	out, _ := exec.Command("pgrep", "-f", "supervisor.py").Output()
-	if len(out) > 0 {
-		h.Running = true
-		h.Source = "workflow"
+	// 1. Process check — supervisor candidates, in order of preference:
+	//    (a) chepherd daemon         (live Go supervisor, post-cutover)
+	//    (b) chepherd-go daemon      (live Go supervisor, /tmp binary)
+	//    (c) chepherd shadow         (dry-run Go supervisor, dual-daemon)
+	//    (d) supervisor.py           (legacy Python supervisor, pre-cutover)
+	probes := []struct {
+		pattern, source string
+	}{
+		{"chepherd daemon", "chepherd"},
+		{"chepherd-go daemon", "chepherd"},
+		{"chepherd shadow", "chepherd"},
+		{"supervisor.py", "workflow"},
 	}
-	out, _ = exec.Command("pgrep", "-f", "chepherd shadow").Output()
-	if len(out) > 0 {
-		h.Running = true
-		if h.Source == "" {
-			h.Source = "chepherd"
+	for _, p := range probes {
+		out, _ := exec.Command("pgrep", "-f", p.pattern).Output()
+		if len(out) > 0 {
+			h.Running = true
+			if h.Source == "" {
+				h.Source = p.source
+			}
 		}
 	}
 
-	// 2. Staleness — what's the freshest last_tick_at across all sessions?
+	// 2. Staleness — what's the freshest tick across all sessions?
+	// Walk a chain of candidate timestamps (most-recent-first):
+	//   a. NextTickAt (Go daemon writes this every tick, even silent)
+	//   b. LiveSignals.RefreshedAt (chepherd live runs at 5s cadence)
+	//   c. LastInterventionAt (only on coach/intervene — stale if all silent)
+	// If NextTickAt is in the FUTURE, the last tick was within one
+	// cadence interval (max ~30min) so we use 'now' as the proxy.
 	var newest time.Time
+	now := time.Now()
 	for _, s := range sessions {
-		// Look for refreshed_at in live_signals (chepherd live), else last_intervention_at.
 		var ts time.Time
-		if s.LiveSignals != nil && s.LiveSignals.RefreshedAt != "" {
+		if s.NextTickAt != "" {
+			nt, err := time.Parse(time.RFC3339, s.NextTickAt)
+			if err == nil {
+				if nt.After(now) {
+					// Future next-tick = tick happened within last interval.
+					ts = now
+				} else {
+					ts = nt
+				}
+			}
+		}
+		if ts.IsZero() && s.LiveSignals != nil && s.LiveSignals.RefreshedAt != "" {
 			ts, _ = time.Parse(time.RFC3339Nano, s.LiveSignals.RefreshedAt)
 			if ts.IsZero() {
 				ts, _ = time.Parse(time.RFC3339, s.LiveSignals.RefreshedAt)

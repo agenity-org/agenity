@@ -43,7 +43,7 @@ func newDashboard(a *App) *Dashboard {
 		SetTextAlign(tview.AlignLeft)
 	d.daemonBar.SetBackgroundColor(tcell.ColorBlack)
 
-	// Session list — k9s-style table, selectable rows
+	// Session list — k9s-style table, selectable rows, bordered box
 	d.list = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(true, false).
@@ -53,6 +53,12 @@ func newDashboard(a *App) *Dashboard {
 		Background(style.SelectedBg).
 		Foreground(style.SelectedFg).
 		Bold(true))
+	d.list.SetBorder(true).
+		SetBorderColor(style.Border).
+		SetBorderPadding(0, 0, 1, 1).
+		SetTitle(" Sessions ").
+		SetTitleColor(style.Title).
+		SetTitleAlign(tview.AlignLeft)
 	d.list.SetSelectionChangedFunc(func(row, col int) {
 		// Header row is row 0; data rows start at 1.
 		if row < 1 {
@@ -62,22 +68,32 @@ func newDashboard(a *App) *Dashboard {
 		d.renderDetail()
 	})
 
-	// Detail pane — right side
+	// Detail pane — right side, bordered box
 	d.detail = tview.NewTextView().
 		SetDynamicColors(true).
 		SetWordWrap(true).
 		SetScrollable(true)
 	d.detail.SetBackgroundColor(tcell.ColorBlack)
-	d.detail.SetBorderPadding(0, 0, 2, 2) // 2-space horizontal padding
+	d.detail.SetBorderPadding(0, 0, 1, 1).
+		SetBorder(true).
+		SetBorderColor(style.Border).
+		SetTitle(" Detail ").
+		SetTitleColor(style.Title).
+		SetTitleAlign(tview.AlignLeft)
 
-	// Log pane — bottom
+	// Log pane — bottom, bordered box
 	d.logView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetWordWrap(false).
 		SetScrollable(true).
 		SetChangedFunc(func() { a.tv.Draw() })
 	d.logView.SetBackgroundColor(tcell.ColorBlack)
-	d.logView.SetBorderPadding(0, 0, 2, 2)
+	d.logView.SetBorderPadding(0, 0, 1, 1).
+		SetBorder(true).
+		SetBorderColor(style.Border).
+		SetTitle(" Log ").
+		SetTitleColor(style.Title).
+		SetTitleAlign(tview.AlignLeft)
 
 	// Footer
 	d.footer = tview.NewTextView().
@@ -85,7 +101,9 @@ func newDashboard(a *App) *Dashboard {
 		SetTextAlign(tview.AlignLeft)
 	d.footer.SetBackgroundColor(tcell.ColorBlack)
 
-	// Layout assembly — body split (list | detail), log below, headers top/bottom.
+	// Layout assembly — tight k9s-style: header (1) → daemon-bar (1) →
+	// body=list|detail (flex) → log (10) → footer (1). NO blank-row
+	// spacers — bordered panes provide their own visual separation.
 	body := tview.NewFlex().SetDirection(tview.FlexColumn).
 		AddItem(d.list, 0, 2, true).
 		AddItem(d.detail, 0, 3, false)
@@ -93,11 +111,8 @@ func newDashboard(a *App) *Dashboard {
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(d.header, 1, 0, false).
 		AddItem(d.daemonBar, 1, 0, false). // W10 — shown only when daemon down/stale
-		AddItem(newBlankRow(), 1, 0, false).
 		AddItem(body, 0, 1, true).
-		AddItem(newBlankRow(), 1, 0, false).
-		AddItem(d.logView, 8, 0, false).
-		AddItem(newBlankRow(), 1, 0, false).
+		AddItem(d.logView, 10, 0, false).
 		AddItem(d.footer, 1, 0, false)
 	d.root.SetBackgroundColor(tcell.ColorBlack)
 

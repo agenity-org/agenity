@@ -40,6 +40,23 @@ func newFilter(a *App) *Filter {
 			f.dismiss(false) // keep filter, hide box
 		}
 	})
+	// Belt-and-suspenders: also capture Esc + Ctrl-G + Ctrl-C at the
+	// input level so the dismiss fires even if tview's SetDoneFunc
+	// chain is interrupted by a parent SetInputCapture. The filter
+	// box previously trapped the user — pressing Esc didn't escape.
+	f.input.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		switch ev.Key() {
+		case tcell.KeyEsc, tcell.KeyCtrlG:
+			f.dismiss(true)
+			return nil
+		case tcell.KeyCtrlC:
+			// Treat Ctrl-C as "abandon filter" inside the input rather
+			// than as "quit app" — the user expects a familiar escape.
+			f.dismiss(true)
+			return nil
+		}
+		return ev
+	})
 	return f
 }
 
@@ -74,8 +91,15 @@ func (f *Filter) dismiss(clear bool) {
 	} else {
 		f.prev = f.input.GetText()
 	}
+	// Switch back to the dashboard page FIRST, then drop the filter
+	// overlay. SwitchToPage forces a redraw so the filter modal
+	// actually disappears from the terminal — the previous bug
+	// trapped the user with a still-visible box even though the page
+	// had been removed from the page stack.
+	f.app.pages.SwitchToPage("dashboard")
 	f.app.pages.RemovePage("filter")
 	f.app.tv.SetFocus(f.app.dashboard.list)
+	f.app.tv.Draw()
 }
 
 // matches reports whether a session passes the current filter string.
