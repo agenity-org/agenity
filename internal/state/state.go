@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Session is the in-memory shape of one session's state file. Fields are
@@ -125,8 +126,12 @@ func DefaultStateDirs() []string {
 }
 
 // LoadAllSessions reads every <uuid>.json from every state directory and
-// returns the union, deduplicated by UUID (chepherd-native files win over
-// Python-legacy files when both exist for the same UUID).
+// returns the union, dedup'd in two passes:
+//   1. by UUID (chepherd-native files win over Python-legacy)
+//   2. by tmux_name (keep the most-recently-active state file) — fixes
+//      the case where one tmux pane was attached to multiple claude
+//      UUIDs over time, leaving stale state files that all claim the
+//      same tmux_name.
 func LoadAllSessions() ([]*Session, error) {
 	seen := map[string]*Session{}
 	for _, dir := range DefaultStateDirs() {
@@ -152,7 +157,6 @@ func LoadAllSessions() ([]*Session, error) {
 			path := filepath.Join(dir, name)
 			s, err := loadSession(path)
 			if err != nil {
-				// Don't fail the whole listing on one bad file.
 				continue
 			}
 			s.UUID = uuid
@@ -162,11 +166,63 @@ func LoadAllSessions() ([]*Session, error) {
 			seen[uuid] = s
 		}
 	}
-	out := make([]*Session, 0, len(seen))
+
+	// Pass 2: dedup by tmux_name. When >1 session share the same tmux_name,
+	// keep the one with the most recent activity timestamp — that's the
+	// currently-live attachment; the others are stale claude UUIDs from
+	// prior attachments to the same pane.
+	byTmux := map[string]*Session{}
 	for _, s := range seen {
+		key := s.TmuxName
+		if strings.HasSuffix(key, "…") {
+			// UUID-prefix fallback — never dedup these; they represent
+			// genuinely-different sessions whose tmux_name wasn't resolved
+			byTmux[s.UUID] = s
+			continue
+		}
+		existing, ok := byTmux[key]
+		if !ok {
+			byTmux[key] = s
+			continue
+		}
+		if sessionActivityTime(s).After(sessionActivityTime(existing)) {
+			byTmux[key] = s
+		}
+	}
+	out := make([]*Session, 0, len(byTmux))
+	for _, s := range byTmux {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// sessionActivityTime returns the most-recent activity timestamp on the
+// session. Used to pick the live state file when multiple share a
+// tmux_name. Walks NextTickAt (daemon-written each tick) → LiveSignals →
+// LastInterventionAt; falls back to zero time if none parse.
+func sessionActivityTime(s *Session) time.Time {
+	if s.NextTickAt != "" {
+		if t, err := time.Parse(time.RFC3339, s.NextTickAt); err == nil {
+			return t
+		}
+	}
+	if s.LiveSignals != nil && s.LiveSignals.RefreshedAt != "" {
+		if t, err := time.Parse(time.RFC3339Nano, s.LiveSignals.RefreshedAt); err == nil {
+			return t
+		}
+		if t, err := time.Parse(time.RFC3339, s.LiveSignals.RefreshedAt); err == nil {
+			return t
+		}
+	}
+	if s.LastInterventionAt != "" {
+		if t, err := time.Parse(time.RFC3339Nano, s.LastInterventionAt); err == nil {
+			return t
+		}
+		if t, err := time.Parse(time.RFC3339, s.LastInterventionAt); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func loadSession(path string) (*Session, error) {

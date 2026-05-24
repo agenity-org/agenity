@@ -198,8 +198,29 @@ func (lm *LogMode) matchesView(line string) bool {
 	if sess == nil {
 		return true
 	}
-	// Lines have format: "[timestamp] <session-name>: …"
-	return strings.Contains(line, sess.TmuxName+":")
+	// Daemon log lines look like "  openova-38 verdict=coach ref=..." —
+	// the session name appears bare (no colon, no fixed delimiter).
+	// Substring match on the tmux name is the right shape. Boundary
+	// check: require the char before the match to be space/start and
+	// the char after to be space/tab/end so 'iogrid-8' doesn't match
+	// 'iogrid-80'.
+	target := sess.TmuxName
+	idx := strings.Index(line, target)
+	for idx >= 0 {
+		beforeOK := idx == 0 || line[idx-1] == ' ' || line[idx-1] == '\t' || line[idx-1] == '['
+		end := idx + len(target)
+		afterOK := end == len(line) || line[end] == ' ' || line[end] == '\t' || line[end] == ':' || line[end] == ']'
+		if beforeOK && afterOK {
+			return true
+		}
+		// search rest
+		more := strings.Index(line[end:], target)
+		if more < 0 {
+			break
+		}
+		idx = end + more
+	}
+	return false
 }
 
 // appendLog pushes a new tail line.

@@ -45,9 +45,9 @@ type Dashboard struct {
 func newDashboard(a *App) *Dashboard {
 	d := &Dashboard{app: a}
 
-	// Header — top status bar (1 row). Two text views in a Flex so the
-	// tiny brand mark on the right (`▰ chepherd 0.3`) stays right-anchored
-	// regardless of terminal width. Left side carries the wordmark + stats.
+	// Header — 3-row block. Left side carries a 3-line ASCII art chepherd
+	// brand mark + version below; right side carries stats + sort + hotkey
+	// hint inline (founder #75/#3: move control hints into the header).
 	d.headerL = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
@@ -57,8 +57,8 @@ func newDashboard(a *App) *Dashboard {
 		SetTextAlign(tview.AlignRight)
 	d.headerR.SetBackgroundColor(tcell.ColorBlack)
 	d.header = tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(d.headerL, 0, 1, false).
-		AddItem(d.headerR, 16, 0, false) // 14 cols for "▰ chepherd 0.3" + padding
+		AddItem(d.headerL, 32, 0, false). // fixed-width logo column (3 rows × 30 cols)
+		AddItem(d.headerR, 0, 1, false)   // stats + hotkeys flow right side
 
 	// Daemon health banner — empty unless daemon down/stale (W10)
 	d.daemonBar = tview.NewTextView().
@@ -152,7 +152,7 @@ func newDashboard(a *App) *Dashboard {
 		SetTitleAlign(tview.AlignLeft)
 
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(d.header, 1, 0, false).
+		AddItem(d.header, 3, 0, false).
 		AddItem(d.daemonBar, 1, 0, false). // W10 — shown only when daemon down/stale
 		AddItem(body, 0, 1, true).
 		AddItem(d.logView, 5, 0, false). // log strip — 5 rows incl. border
@@ -231,7 +231,7 @@ func (d *Dashboard) applyNarrowMode() {
 		body.AddItem(d.detail, 0, 28, false) // scorecard pane
 	}
 	d.root.Clear()
-	d.root.AddItem(d.header, 1, 0, false).
+	d.root.AddItem(d.header, 3, 0, false).
 		AddItem(d.daemonBar, 1, 0, false).
 		AddItem(body, 0, 1, true).
 		AddItem(d.logView, 5, 0, false). // log strip — visible at all widths
@@ -273,17 +273,15 @@ func (d *Dashboard) renderList() {
 	prevRow, _ := d.list.GetSelection()
 	d.list.Clear()
 
-	// Section title row (k9s convention: bold title + dim underline below)
-	d.list.SetCell(0, 0, tview.NewTableCell(style.Tag(style.Title, "SESSIONS")).
+	// Header row: only "name" + "score" — pane title (" Sessions ") IS the
+	// section header; redundant SESSIONS row removed per founder #75/#12.
+	// Founder #75/#13 asked for "only session-name + score (no bar)";
+	// dropped GVFE / band / next columns (all visible in the detail pane
+	// when a session is selected).
+	d.list.SetCell(0, 0, tview.NewTableCell(style.Tag(style.TitleRule, "  name")).
 		SetSelectable(false).
 		SetExpansion(2))
 	d.list.SetCell(0, 1, tview.NewTableCell(style.Tag(style.TitleRule, "  score")).
-		SetSelectable(false))
-	d.list.SetCell(0, 2, tview.NewTableCell(style.Tag(style.TitleRule, "  GVFE")).
-		SetSelectable(false))
-	d.list.SetCell(0, 3, tview.NewTableCell(style.Tag(style.TitleRule, "  band")).
-		SetSelectable(false))
-	d.list.SetCell(0, 4, tview.NewTableCell(style.Tag(style.TitleRule, "  next")).
 		SetSelectable(false))
 
 	// Each session = one row
@@ -307,21 +305,10 @@ func (d *Dashboard) renderList() {
 		d.list.SetCell(row, 0, tview.NewTableCell(nameCell).
 			SetExpansion(2))
 
-		// Overall score (geomean of G·V·F·E) + 10-cell gauge — v0.3 spec.
-		overallCell := formatGeomeanGauge(s)
-		d.list.SetCell(row, 1, tview.NewTableCell("  "+overallCell))
-
-		// Scorecard G/V/F/E
-		scoreCell := formatScorecard(s)
-		d.list.SetCell(row, 2, tview.NewTableCell("  "+scoreCell))
-
-		// Band text
-		bandText := formatBandText(band)
-		d.list.SetCell(row, 3, tview.NewTableCell("  "+bandText))
-
-		// Next tick countdown
-		nextCell := formatNextTick(s)
-		d.list.SetCell(row, 4, tview.NewTableCell("  "+nextCell))
+		// Overall score: geomean number only (no gauge). Color reflects
+		// band; nothing else. Detail pane carries the rest.
+		scoreCell := formatGeomeanNumberOnly(s)
+		d.list.SetCell(row, 1, tview.NewTableCell("  "+scoreCell))
 	}
 
 	// Restore the user's row selection after the rebuild. Founder
@@ -351,6 +338,23 @@ func formatScorecard(s *state.Session) string {
 		style.Tag(style.ScoreColor(v), digitStr(v)),
 		style.Tag(style.ScoreColor(f), digitStr(f)),
 		style.Tag(style.ScoreColor(e), digitStr(e)))
+}
+
+// formatGeomeanNumberOnly returns just the geomean number (3 chars max),
+// colored by band. No gauge bar — founder #75/#13 asked for "score, no bar".
+func formatGeomeanNumberOnly(s *state.Session) string {
+	gm := s.Geomean()
+	if gm < 0 {
+		return style.Tag(style.Ambient, "  —")
+	}
+	rounded := int(gm + 0.5)
+	if rounded < 0 {
+		rounded = 0
+	}
+	if rounded > 10 {
+		rounded = 10
+	}
+	return style.TagBold(style.ScoreColor(rounded), fmt.Sprintf("%3.1f", gm))
 }
 
 // formatGeomeanGauge renders the v0.3 left-pane "overall" column:

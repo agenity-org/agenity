@@ -519,11 +519,25 @@ func (a *App) Select(idx int) {
 	a.selectedIdx = idx
 }
 
-// FormatHeader builds the top status-bar text.
-// Layout: left wordmark + stats + current sort mode + clock, with the
-// tiny right-anchored brand mark `▰ chepherd 0.3` rendered separately by
-// Dashboard.render (it needs to know the actual rendered width).
+// FormatHeader returns the LEFT side of the 3-row header — an ASCII art
+// chepherd brand mark with the version subtitled below.
+//
+// Row 1 stroke is shepherd-flavored: dot above a hooked stick (the crook).
+// Row 2 is the wordmark in heavy block characters. Row 3 is version + a
+// dim tagline. Sized to fit a 32-col fixed-width column even on 80-col
+// terminals.
 func (a *App) FormatHeader() string {
+	logo1 := style.Tag(style.Logo, "    .--.")
+	logo2 := style.TagBold(style.Logo, "   /    \\   chepherd")
+	logo3 := style.Tag(style.Ambient, fmt.Sprintf("   \\____/   v0.4.8"))
+	return logo1 + "\n" + logo2 + "\n" + logo3
+}
+
+// FormatHeaderRight returns the RIGHT side of the 3-row header — stats
+// + sort mode + control hints, occupying all 3 rows of the header.
+// Founder #75/#3: move control hints into the header. Footer becomes
+// minimal (just essential keys).
+func (a *App) FormatHeaderRight() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	total := len(a.sessions)
@@ -534,19 +548,19 @@ func (a *App) FormatHeader() string {
 		}
 	}
 	now := time.Now().UTC().Format("15:04:05 UTC")
-	logo := style.TagBold(style.Logo, "chepherd")
-	stats := style.Tag(style.Body,
-		fmt.Sprintf("  ·  %d sessions · %d active · sort: %s · %s",
-			total, active, a.sortMode, now))
-	return logo + stats
-}
 
-// FormatHeaderRight returns the tiny right-anchored brand mark + version
-// per the v0.3 spec. Uses '*' instead of the U+25B0 block character
-// because some terminal fonts don't carry the latter and the founder
-// reported the logo invisible at first launch.
-func (a *App) FormatHeaderRight() string {
-	return style.TagBold(style.Logo, "* chepherd 0.3 ")
+	row1 := style.Tag(style.Body, fmt.Sprintf("%d sessions · %d active · sort: %s · %s    ",
+		total, active, a.sortMode, now))
+	row2 := style.Tag(style.KeyDesc, "↑↓ select  ") +
+		style.TagBold(style.KeyLetter, "enter ") + style.Tag(style.KeyDesc, "attach  ") +
+		style.TagBold(style.KeyLetter, "o ") + style.Tag(style.KeyDesc, "sort  ") +
+		style.TagBold(style.KeyLetter, "/ ") + style.Tag(style.KeyDesc, "filter  ") +
+		style.TagBold(style.KeyLetter, "l ") + style.Tag(style.KeyDesc, "log    ")
+	row3 := style.TagBold(style.KeyLetter, "p/u ") + style.Tag(style.KeyDesc, "pause  ") +
+		style.TagBold(style.KeyLetter, "L ") + style.Tag(style.KeyDesc, "login  ") +
+		style.TagBold(style.KeyLetter, "? ") + style.Tag(style.KeyDesc, "help  ") +
+		style.TagBold(style.KeyLetter, "q ") + style.Tag(style.KeyDesc, "quit    ")
+	return row1 + "\n" + row2 + "\n" + row3
 }
 
 // FormatFooter builds the bottom shortcut bar.

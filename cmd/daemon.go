@@ -163,11 +163,15 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 			if v.Message == "" {
 				fmt.Fprintf(os.Stderr, "  %s judge said %s but message empty; not injecting\n",
 					s.TmuxName, v.Verdict)
+			} else if daemon.IsHumanEngaged(s.JSONLPath) {
+				// Defer injection — the human is actively in dialogue with
+				// this session (most recent user-typed message in JSONL is
+				// within EngagementWindow). Pushing a SUPERVISOR message
+				// now would interrupt the conversation.
+				fmt.Printf("  %s deferred — human engaged in conversation\n", s.TmuxName)
 			} else if daemon.IsUserTyping(s.TmuxName) {
-				// Defer injection — user is mid-keystroke. Pushing a
-				// SUPERVISOR message now would clobber their half-written
-				// prompt. Skip this tick; the message becomes stale +
-				// the next tick will re-evaluate fresh signals.
+				// Backstop for the narrow window: user is typing RIGHT NOW
+				// (last 800ms) but no user message yet in the JSONL.
 				fmt.Printf("  %s deferred — user is typing\n", s.TmuxName)
 			} else if err := tmuxPaste(s.TmuxName, v.Message); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s inject failed: %v\n", s.TmuxName, err)
