@@ -37,8 +37,9 @@ type App struct {
 	help       *HelpOverlay
 	filter     *Filter
 	logMode    *LogMode
-	detail     *Detail
-	newSession *NewSessionWizard
+	detail      *Detail
+	newSession  *NewSessionWizard
+	attachModal *AttachModal // v0.3 — pre-attach hint shown on first 't' press
 
 	// Shared state — protected by mu.
 	mu          sync.Mutex
@@ -67,6 +68,7 @@ func New() *App {
 	a.logMode = newLogMode(a)
 	a.detail = newDetail(a)
 	a.newSession = newNewSessionWizard(a)
+	a.attachModal = newAttachModal(a)
 	a.pages.AddPage("dashboard", a.dashboard.root, true, true)
 	a.installGlobalKeys()
 	return a
@@ -157,14 +159,16 @@ func (a *App) UnpauseSelected() {
 	}
 }
 
-// TmuxAttachSelected attempts to switch the user to the selected session's
-// tmux pane. If we're inside tmux, uses switch-client; otherwise suspends
-// the TUI and runs attach in the foreground.
+// TmuxAttachSelected attempts to attach the user to the selected session's
+// tmux pane. v0.3 flow:
 //
-// Errors are appended to the dashboard log pane — the previous version
-// swallowed them with `_ = execCmd(...)` so when 't' silently no-op'd
-// (e.g. when the row's TmuxName was a UUID-prefix fallback that doesn't
-// match any actual tmux session) the user saw nothing.
+//  1. Validate selection has a real tmux_name.
+//  2. Show the pre-attach modal (or skip if user has dismissed it).
+//  3. On confirm: save target's current status-right, set our
+//     'Ctrl-B D → return to chepherd' reminder, register a set-hook to
+//     restore on detach, then suspend + attach (or switch-client if nested).
+//
+// Errors are appended to the dashboard log pane.
 func (a *App) TmuxAttachSelected() {
 	s := a.Selected()
 	if s == nil {
@@ -178,20 +182,59 @@ func (a *App) TmuxAttachSelected() {
 			s.UUID))
 		return
 	}
-	if os.Getenv("TMUX") != "" {
-		if err := execCmd("tmux", "switch-client", "-t", s.TmuxName); err != nil {
-			a.dashboard.appendLog(fmt.Sprintf(
-				"[tmux-attach] switch-client -t %s failed: %v", s.TmuxName, err))
+
+	target := s.TmuxName
+	a.attachModal.ShowOrAttach(target, func(attach bool, _ bool) {
+		if !attach {
+			return
 		}
+		a.performTmuxAttach(target)
+	})
+}
+
+// performTmuxAttach does the actual attach, wrapping it in the
+// status-right save/restore so the user sees a persistent reminder of
+// the detach key while inside the session.
+func (a *App) performTmuxAttach(target string) {
+	// Save the user's current status-right so we can restore it on detach.
+	// `tmux show-options -v` prints just the value (or empty if unset).
+	origStatusRight := ""
+	if out, err := exec.Command("tmux", "show-options", "-t", target,
+		"-v", "status-right").Output(); err == nil {
+		origStatusRight = strings.TrimRight(string(out), "\n")
+	}
+
+	// Set our reminder.
+	reminder := "#[bg=red,fg=white,bold] Ctrl-B D → return to chepherd #[default]"
+	_ = exec.Command("tmux", "set-option", "-t", target, "status-right", reminder).Run()
+
+	// Restore on detach via a tmux client-detached hook. The hook fires
+	// exactly when the user presses Ctrl-B D from inside this session.
+	restoreCmd := fmt.Sprintf("set-option -t %s status-right %q",
+		target, origStatusRight)
+	_ = exec.Command("tmux", "set-hook", "-t", target,
+		"client-detached", restoreCmd).Run()
+
+	doAttach := func() {
+		if os.Getenv("TMUX") != "" {
+			if err := execCmd("tmux", "switch-client", "-t", target); err != nil {
+				a.dashboard.appendLog(fmt.Sprintf(
+					"[tmux-attach] switch-client -t %s failed: %v", target, err))
+			}
+			return
+		}
+		if err := execCmd("tmux", "attach", "-t", target); err != nil {
+			a.dashboard.appendLog(fmt.Sprintf(
+				"[tmux-attach] attach -t %s failed: %v", target, err))
+		}
+	}
+
+	if os.Getenv("TMUX") != "" {
+		// Nested case — switch-client doesn't suspend us; just call it.
+		doAttach()
 		return
 	}
-	// Outside tmux: suspend the TUI + run attach in the foreground.
-	a.tv.Suspend(func() {
-		if err := execCmd("tmux", "attach", "-t", s.TmuxName); err != nil {
-			a.dashboard.appendLog(fmt.Sprintf(
-				"[tmux-attach] attach -t %s failed: %v", s.TmuxName, err))
-		}
-	})
+	a.tv.Suspend(doAttach)
 }
 
 // LoginSelected handles 'L' — drops the user into the selected session's
