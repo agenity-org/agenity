@@ -151,7 +151,7 @@ func (m *AttachModal) finish(attach bool) {
 	m.app.pages.SwitchToPage("dashboard")
 	m.app.pages.RemovePage("attach-modal")
 	m.app.tv.SetFocus(m.app.dashboard.list)
-	m.app.tv.Draw()
+	// No tv.Draw() — input-handler re-entry froze on founder's TTY.
 
 	if dismiss {
 		_ = saveUIState(uiState{HideAttachHint: true})

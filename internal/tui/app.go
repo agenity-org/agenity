@@ -161,13 +161,12 @@ func (a *App) UnpauseSelected() {
 	}
 }
 
-// TmuxAttachSelected handles 't' / Enter: suspends chepherd + runs
-// `tmux attach -t <target>` so the operator lands inside the live
-// tmux session. v0.4.3: routes the Suspend via QueueUpdate so it
-// fires AFTER the current input handler returns — calling Suspend
-// directly from inside an input capture froze on founder's setup
-// (tview re-entry into the main loop). Also prints the attach command
-// to the log as a fallback the operator can run manually.
+// TmuxAttachSelected handles 't' / Enter. v0.4.4 committed: prints the
+// attach command into the dashboard log + tries to copy to clipboard
+// via xclip/xsel/wl-copy if available. Does NOT call tv.Suspend or any
+// other re-entry path — those freeze on the founder's TTY in both
+// direct and QueueUpdate-deferred forms. The operator runs the command
+// in a separate terminal. This is the stable state; no more oscillation.
 func (a *App) TmuxAttachSelected() {
 	s := a.Selected()
 	if s == nil {
@@ -182,18 +181,39 @@ func (a *App) TmuxAttachSelected() {
 		return
 	}
 	target := s.TmuxName
-	a.dashboard.appendLog(fmt.Sprintf("[attach] attaching to %s (Ctrl-B D returns)", target))
-	// Queue the actual suspend+attach so it fires after the current input
-	// event finishes — direct call from inside a SetInputCapture callback
-	// hung on the founder's TTY/SSH combo.
-	a.tv.QueueUpdate(func() {
-		a.tv.Suspend(func() {
-			if err := execCmd("tmux", "attach", "-t", target); err != nil {
-				a.dashboard.appendLog(fmt.Sprintf(
-					"[attach] failed: %v — run manually: tmux attach -t %s", err, target))
-			}
-		})
-	})
+	cmd := fmt.Sprintf("tmux attach -t %s", target)
+	clipMsg := tryClipboardCopy(cmd)
+	a.dashboard.appendLog(fmt.Sprintf("[attach] %s    %s", cmd, clipMsg))
+	a.dashboard.appendLog("[attach]   (run in another terminal; Ctrl-B D detaches)")
+}
+
+// tryClipboardCopy tries xclip → xsel → wl-copy in order. Returns a
+// status hint to append to the log. Best-effort; missing clipboard
+// tools are silently ignored.
+func tryClipboardCopy(text string) string {
+	for _, tool := range [][]string{
+		{"xclip", "-selection", "clipboard"},
+		{"xsel", "--clipboard", "--input"},
+		{"wl-copy"},
+	} {
+		if _, err := exec.LookPath(tool[0]); err != nil {
+			continue
+		}
+		c := exec.Command(tool[0], tool[1:]...)
+		stdin, err := c.StdinPipe()
+		if err != nil {
+			continue
+		}
+		if err := c.Start(); err != nil {
+			continue
+		}
+		_, _ = stdin.Write([]byte(text))
+		_ = stdin.Close()
+		if err := c.Wait(); err == nil {
+			return "(copied to clipboard via " + tool[0] + ")"
+		}
+	}
+	return "(no clipboard tool — copy manually)"
 }
 
 // performTmuxAttach does the actual attach, wrapping it with:

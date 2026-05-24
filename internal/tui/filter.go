@@ -91,15 +91,14 @@ func (f *Filter) dismiss(clear bool) {
 	} else {
 		f.prev = f.input.GetText()
 	}
-	// Switch back to the dashboard page FIRST, then drop the filter
-	// overlay. SwitchToPage forces a redraw so the filter modal
-	// actually disappears from the terminal — the previous bug
-	// trapped the user with a still-visible box even though the page
-	// had been removed from the page stack.
+	// Switch back to the dashboard page + drop the filter overlay.
+	// Do NOT call tv.Draw() — that's a tview re-entry from inside an
+	// input handler (Esc/Enter routed here via SetInputCapture +
+	// SetDoneFunc) and froze the dismiss on the founder's TTY.
+	// SwitchToPage + RemovePage are enough; tickerLoop redraws ≤1s.
 	f.app.pages.SwitchToPage("dashboard")
 	f.app.pages.RemovePage("filter")
 	f.app.tv.SetFocus(f.app.dashboard.list)
-	f.app.tv.Draw()
 }
 
 // matches reports whether a session passes the current filter string.

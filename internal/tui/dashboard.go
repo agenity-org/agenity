@@ -112,7 +112,7 @@ func newDashboard(a *App) *Dashboard {
 		SetDynamicColors(true).
 		SetWordWrap(false).
 		SetScrollable(true).
-		SetChangedFunc(func() { a.tv.Draw() })
+		SetChangedFunc(func() {}) // intentionally empty — tv.Draw() re-enters loop
 	d.logView.SetBackgroundColor(tcell.ColorBlack)
 	d.logView.SetBorderPadding(0, 0, 1, 1).
 		SetBorder(true).

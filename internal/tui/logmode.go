@@ -44,7 +44,7 @@ func newLogMode(a *App) *LogMode {
 		SetDynamicColors(true).
 		SetWordWrap(false).
 		SetScrollable(true).
-		SetChangedFunc(func() { a.tv.Draw() })
+		SetChangedFunc(func() {})
 	lm.logView.SetBackgroundColor(tcell.ColorBlack)
 	lm.logView.SetBorderPadding(0, 0, 2, 2)
 

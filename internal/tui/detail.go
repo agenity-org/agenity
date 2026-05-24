@@ -89,14 +89,12 @@ func (d *Detail) show(s *state.Session) {
 }
 
 func (d *Detail) dismiss() {
-	// Same pattern as filter.dismiss — SwitchToPage FIRST so tview
-	// repaints, then drop the detail overlay. Previously RemovePage
-	// alone left the user looking at a stale frame; Esc appeared to do
-	// nothing.
+	// SwitchToPage + RemovePage; no tv.Draw() — that re-enters the
+	// tview loop from inside an input handler (Esc routed here from
+	// SetInputCapture) and froze on the founder's TTY.
 	d.app.pages.SwitchToPage("dashboard")
 	d.app.pages.RemovePage("detail")
 	d.app.tv.SetFocus(d.app.dashboard.list)
-	d.app.tv.Draw()
 }
 
 func (d *Detail) render(s *state.Session) {
