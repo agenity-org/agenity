@@ -36,10 +36,10 @@ type Dashboard struct {
 	// Rolling log buffer reused by LogMode (W6) for full-screen view.
 	logBuffer []string
 
-	// lastWidth tracks the most recent terminal width so applyNarrowMode
-	// only re-shuffles the layout when the width actually crosses a
-	// breakpoint, not every render tick.
-	lastWidth int
+	// lastBreakpoint is the most recent width-bucket (bpNarrow/Mid/Wide)
+	// so applyNarrowMode only reshuffles when we cross a boundary, not
+	// every render tick. 0 = uninitialized.
+	lastBreakpoint int
 }
 
 func newDashboard(a *App) *Dashboard {
@@ -189,12 +189,32 @@ func (d *Dashboard) render() {
 // applyNarrowMode collapses panes when the terminal is too small.
 // Per v0.3 spec: hide right pane <100 cols, hide left <70 cols. Center
 // is never dropped — the live tmux mirror is the dashboard's reason to exist.
+//
+// Only rebuilds the layout when the width crosses a breakpoint (wide↔mid↔narrow);
+// on first render we trust newDashboard's already-correct assembly and just
+// record the current breakpoint. This avoids clearing the root before tview
+// has assigned focus to d.list, which previously left arrow keys + 't' dead.
 func (d *Dashboard) applyNarrowMode() {
 	_, _, w, _ := d.root.GetRect()
 	if w == 0 {
 		return // not yet sized
 	}
-	// Re-build the body Flex per current width.
+	bp := widthBreakpoint(w)
+	if d.lastBreakpoint == bp {
+		return
+	}
+	prev := d.lastBreakpoint
+	d.lastBreakpoint = bp
+	if prev == 0 {
+		// First sized render — newDashboard's layout already matches the
+		// current breakpoint (it built the full 3-pane body by default,
+		// which is correct for any w >= 100). Skip the rebuild so focus
+		// on d.list is preserved.
+		if bp == bpWide {
+			return
+		}
+		// First render IS narrow → rebuild needed.
+	}
 	body := tview.NewFlex().SetDirection(tview.FlexColumn)
 	if w >= 70 {
 		body.AddItem(d.list, 0, 18, true)
@@ -206,17 +226,30 @@ func (d *Dashboard) applyNarrowMode() {
 			AddItem(d.logView, 0, 2, false)
 		body.AddItem(rightCol, 0, 30, false)
 	}
-	// Re-assemble root only if the body shape actually changed —
-	// guarded via a tracked width to avoid every-tick layout reshuffles.
-	if d.lastWidth == w {
-		return
-	}
-	d.lastWidth = w
 	d.root.Clear()
 	d.root.AddItem(d.header, 1, 0, false).
 		AddItem(d.daemonBar, 1, 0, false).
 		AddItem(body, 0, 1, true).
 		AddItem(d.footer, 1, 0, false)
+	// Restore focus to the list after the rebuild — tview's focus
+	// reference would otherwise dangle on the orphaned old body.
+	d.app.tv.SetFocus(d.list)
+}
+
+const (
+	bpNarrow = 1 // < 70 cols  — center only
+	bpMid    = 2 // 70-99 cols — list + center
+	bpWide   = 3 // >= 100     — list + center + right
+)
+
+func widthBreakpoint(w int) int {
+	if w < 70 {
+		return bpNarrow
+	}
+	if w < 100 {
+		return bpMid
+	}
+	return bpWide
 }
 
 // renderList rebuilds the session table.

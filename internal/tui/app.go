@@ -492,10 +492,11 @@ func (a *App) FormatHeader() string {
 }
 
 // FormatHeaderRight returns the tiny right-anchored brand mark + version
-// per the v0.3 spec: `▰ chepherd 0.3`. Kept separate from FormatHeader
-// so the dashboard renderer can right-anchor it.
+// per the v0.3 spec. Uses '*' instead of the U+25B0 block character
+// because some terminal fonts don't carry the latter and the founder
+// reported the logo invisible at first launch.
 func (a *App) FormatHeaderRight() string {
-	return style.Tag(style.Logo, "▰ chepherd 0.3")
+	return style.TagBold(style.Logo, "* chepherd 0.3 ")
 }
 
 // FormatFooter builds the bottom shortcut bar.
