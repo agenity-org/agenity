@@ -9,6 +9,12 @@
   - Scorecard panel in the right column (stub for now: chepherd needs an
     analyzer goroutine to populate G/V/F/E — filed as follow-up).
 -->
+<script module>
+  // SpiderChart — pure-SVG radar plot. Used inline by Dashboard for
+  // the per-session scorecard. Each axis is {label, value (0..10)}.
+  // 4 axes give the cleanest read at this size; more is supported.
+</script>
+
 <script>
   import { onMount } from 'svelte';
   // xterm ships its own CSS — without this, .xterm-screen and .xterm-rows
@@ -16,6 +22,7 @@
   // the page instead of inside .xterm-viewport, leaving the terminal
   // pane visually empty even though chunks arrive over the WebSocket.
   import '@xterm/xterm/css/xterm.css';
+  import SpiderChart from './SpiderChart.svelte';
 
   let sessions = $state([]);
   let selectedName = $state(null);
@@ -291,6 +298,40 @@
     if (seconds < 3600) return Math.floor(seconds/60) + 'm';
     return Math.floor(seconds/3600) + 'h ' + Math.floor((seconds%3600)/60) + 'm';
   }
+  // Normalize raw session counters into 5 axes for the spider chart.
+  // Each axis returns 0..10. The set was tuned to give a meaningful
+  // pentagon instead of a degenerate square — Engagement (burst rate)
+  // is the 5th axis the founder requested.
+  function spiderAxesFor(info) {
+    if (!info) return [];
+    const total = info.total_bytes || 0;
+    const recent = info.bytes_5m || 0;
+    const idle = info.idle_seconds || 0;
+    const ageSec = (Date.now() - new Date(info.created_at).getTime()) / 1000;
+    const chunks5m = info.chunks_5m || 0;
+
+    // ACTIVITY — bytes in last 5min (more = more active). Log-scaled.
+    // 100B = 1, 1KiB = 3, 10KiB = 5, 100KiB = 7, 1MiB+ = 10.
+    const activity = recent === 0 ? 0 : Math.min(10, Math.log10(recent / 10 + 1) * 2.2);
+    // LIVENESS — recency of last output. Idle <2s = 10, idle >5min = 0.
+    const liveness = Math.max(0, Math.min(10, 10 * (1 - idle / 300)));
+    // VOLUME — total bytes streamed since spawn. Log-scaled.
+    const volume = total === 0 ? 0 : Math.min(10, Math.log10(total + 1) * 1.5);
+    // UPTIME — how long alive. <1min = 1, 1hr = 5, 24h = 10.
+    const uptime = ageSec === 0 ? 0 : Math.min(10, Math.log10(ageSec / 60 + 1) * 2.8);
+    // ENGAGEMENT — output bursts per minute in last 5min.
+    // 0 bursts = 0, 5/min = 5, 20+/min = 10.
+    const engagement = chunks5m === 0 ? 0 : Math.min(10, (chunks5m / 5) * 2);
+
+    return [
+      { label: 'Activity',   value: activity },
+      { label: 'Liveness',   value: liveness },
+      { label: 'Engagement', value: engagement },
+      { label: 'Uptime',     value: uptime },
+      { label: 'Volume',     value: volume },
+    ];
+  }
+
   function relTime(ts) {
     if (!ts) return '';
     const s = Math.floor((Date.now() - new Date(ts).getTime())/1000);
@@ -462,54 +503,69 @@
     <!-- Center: xterm fills available height -->
     <section class="center">
       <div class="title">
-        {#if selectedName}
-          <span class="dot" class:shepherd={selectedInfo?.role==='shepherd'}>{selectedInfo?.role==='shepherd' ? '✻' : '●'}</span>
-          {selectedName}
-          <span class="subtitle">— live attach via WebSocket</span>
-        {:else}
-          <span class="subtitle">Pick a session ← or click "+ spawn agent" to create one</span>
+        <div class="title-left">
+          {#if selectedName}
+            <span class="dot" class:shepherd={selectedInfo?.role==='shepherd'}>{selectedInfo?.role==='shepherd' ? '✻' : '●'}</span>
+            <span class="title-name">{selectedName}</span>
+            <span class="subtitle">— live attach via WebSocket</span>
+          {:else}
+            <span class="subtitle">Pick a session ← or click "+ spawn agent" to create one</span>
+          {/if}
+        </div>
+        {#if selectedInfo}
+          <div class="title-actions">
+            {#if selectedInfo.paused}
+              <button class="secondary" on:click={() => pauseSession(false)} title="Resume session">▶ resume</button>
+            {:else}
+              <button class="secondary" on:click={() => pauseSession(true)} title="Pause session">⏸ pause</button>
+            {/if}
+            <button class="danger" on:click={stopSession} title="Stop session">⨯ stop</button>
+          </div>
         {/if}
       </div>
       <div class="term" bind:this={termContainer}></div>
     </section>
 
-    <!-- Right: details + scorecard + actions -->
+    <!-- Right: identity / location / scores — grouped in cards -->
     <aside class="right">
       {#if selectedInfo}
-        <h2>Session</h2>
-        <dl>
-          <dt>Name</dt><dd><code>{selectedInfo.name}</code></dd>
-          <dt>Agent</dt><dd>{selectedInfo.agent}</dd>
-          <dt>Role</dt><dd>{selectedInfo.role}</dd>
-          <dt>Tribe</dt><dd>{selectedInfo.tribe}</dd>
-          <dt>Cwd</dt><dd><code class="cwd">{selectedInfo.cwd || '—'}</code></dd>
-          <dt>Started</dt><dd>{ageString(selectedInfo.created_at)} ago</dd>
-          <dt>Status</dt><dd>{selectedInfo.paused ? 'paused ⏸' : 'live'}</dd>
-          {#if selectedInfo.shepherding && selectedInfo.shepherding.length}
-            <dt>Watching</dt><dd>{selectedInfo.shepherding.join(', ')}</dd>
-          {/if}
-        </dl>
+        <!-- Card 1: Identity (who) -->
+        <section class="card">
+          <h3>Identity</h3>
+          <dl>
+            <dt>Name</dt><dd><code>{selectedInfo.name}</code></dd>
+            <dt>Agent</dt><dd>{selectedInfo.agent}</dd>
+            <dt>Role</dt><dd>
+              <span class="role-pill" class:shepherd={selectedInfo.role==='shepherd'}>{selectedInfo.role}</span>
+            </dd>
+            <dt>Tribe</dt><dd>{selectedInfo.tribe}</dd>
+            {#if selectedInfo.shepherding && selectedInfo.shepherding.length}
+              <dt>Watching</dt><dd>{selectedInfo.shepherding.join(', ')}</dd>
+            {/if}
+          </dl>
+        </section>
 
-        <h2 style="margin-top:1.3rem;">Activity</h2>
-        <div class="scorecard">
-          <div class="score-row"><span>Idle</span><span class="score-val">{selectedInfo.idle_seconds != null ? relTimeShort(selectedInfo.idle_seconds) : '—'}</span></div>
-          <div class="score-row"><span>Bytes / 5min</span><span class="score-val">{formatBytes(selectedInfo.bytes_5m)}</span></div>
-          <div class="score-row"><span>Total bytes</span><span class="score-val">{formatBytes(selectedInfo.total_bytes)}</span></div>
-          <div class="score-row"><span>Heartbeat</span><span class="score-val">{selectedInfo.bytes_5m > 0 ? '● live' : '○ idle'}</span></div>
-        </div>
+        <!-- Card 2: Location & lifecycle (where + when) -->
+        <section class="card">
+          <h3>Location</h3>
+          <dl>
+            <dt>Cwd</dt><dd><code class="cwd">{selectedInfo.cwd || '—'}</code></dd>
+            <dt>Started</dt><dd>{ageString(selectedInfo.created_at)} ago</dd>
+            <dt>Status</dt><dd>{selectedInfo.paused ? '⏸ paused' : (selectedInfo.bytes_5m > 0 ? '● live' : '○ idle')}</dd>
+          </dl>
+        </section>
 
-        <h2 style="margin-top:1.3rem;">Actions</h2>
-        <div class="action-buttons">
-          {#if selectedInfo.paused}
-            <button class="secondary" on:click={() => pauseSession(false)}>▶ resume</button>
-          {:else}
-            <button class="secondary" on:click={() => pauseSession(true)}>⏸ pause</button>
-          {/if}
-          <button class="danger" on:click={stopSession}>⨯ stop</button>
-        </div>
+        <!-- Card 3: Scorecard (spider chart) -->
+        <section class="card">
+          <h3>Scorecard</h3>
+          <SpiderChart axes={spiderAxesFor(selectedInfo)} />
+          <p class="score-note">5-min rolling window. Activity = inverse-idle.</p>
+        </section>
       {:else}
-        <h2>Details</h2>
-        <p style="color:#888;font-size:0.88rem;">Pick a session on the left to see details + actions.</p>
+        <section class="card">
+          <h3>Details</h3>
+          <p class="hint">Pick a session on the left to see identity, location, and scorecard.</p>
+        </section>
       {/if}
     </aside>
   </div>
@@ -599,9 +655,12 @@
               <option value="shepherd">shepherd (opt-in 4-eyes)</option>
             </select>
           </label>
-          <label class="check">
+          <label class="check" title="Inject chepherd's built-in {spawnForm.role} brief as the agent's system prompt — it teaches the agent how to use chepherd MCP tools (spawn peers, @target relay, alert_human). Off = vanilla agent with no chepherd awareness.">
             <input type="checkbox" bind:checked={spawnForm.use_default_prompt} />
-            <span>Use default {spawnForm.role} system prompt</span>
+            <span>
+              Use chepherd's {spawnForm.role} brief
+              <em class="check-hint">— teaches the agent how to talk to peers and the operator via chepherd MCP tools</em>
+            </span>
           </label>
         </div>
 
@@ -756,28 +815,33 @@
 
   /* Center pane */
   .center { flex: 1; display: flex; flex-direction: column; background: var(--bg); min-width: 0; min-height: 0; }
-  .center .title { padding: 0.5rem 1rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); color: var(--fg); font-family: ui-monospace, monospace; font-size: 0.88rem; flex-shrink: 0; }
+  .center .title { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; padding: 0.5rem 1rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); color: var(--fg); font-family: ui-monospace, monospace; font-size: 0.88rem; flex-shrink: 0; }
+  .center .title-left { display: flex; align-items: center; min-width: 0; overflow: hidden; }
+  .center .title-name { font-weight: 600; }
   .center .title .dot { color: var(--accent-2); margin-right: 0.4rem; }
   .center .title .dot.shepherd { color: var(--accent); }
-  .center .title .subtitle { color: var(--fg-muted); font-size: 0.82rem; margin-left: 0.5rem; }
+  .center .title .subtitle { color: var(--fg-muted); font-size: 0.82rem; margin-left: 0.5rem; white-space: nowrap; }
+  .center .title-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+  .center .title-actions button { font-size: 0.82rem; padding: 0.32rem 0.7rem; }
   .center .term { flex: 1; padding: 0.4rem 0.5rem; min-height: 0; overflow: hidden; }
   .center .term :global(.xterm) { height: 100%; }
   .center .term :global(.xterm-viewport) { height: 100% !important; }
 
   /* Right pane */
-  .right { width: 240px; min-width: 240px; background: var(--bg); border-left: 1px solid var(--border); padding: 0.9rem 1rem; overflow-y: auto; }
-  .right h2 { font-size: 0.78rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 0 0 0.5rem 0; font-weight: 600; }
+  .right { width: 280px; min-width: 280px; background: var(--bg); border-left: 1px solid var(--border); padding: 0.9rem 0.9rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+  .right .card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 0.9rem; }
+  .right .card h3 { font-size: 0.74rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 0 0 0.55rem 0; font-weight: 600; }
+  .right .card .hint { color: var(--fg-faint); font-size: 0.85rem; margin: 0; line-height: 1.4; }
   .right dl { margin: 0; }
-  .right dt { color: var(--fg-muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.6rem; }
+  .right dt { color: var(--fg-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.5rem; }
+  .right dt:first-child { margin-top: 0; }
   .right dd { margin: 0.15rem 0 0 0; color: var(--fg); font-size: 0.9rem; word-break: break-word; }
   .right dd code { font-size: 0.85rem; color: var(--accent-2); }
-  .right dd code.cwd { font-size: 0.8rem; word-break: break-all; }
-  .action-buttons { display: flex; flex-direction: column; gap: 0.4rem; }
+  .right dd code.cwd { font-size: 0.78rem; word-break: break-all; color: var(--accent-2); }
+  .role-pill { display: inline-block; padding: 0.05rem 0.5rem; border-radius: 9px; font-size: 0.74rem; background: var(--accent-2); color: #000; font-weight: 600; }
+  .role-pill.shepherd { background: var(--accent); color: #000; }
 
-  .scorecard { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem; }
-  .score-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--fg); padding: 0.18rem 0; }
-  .score-val { color: var(--accent); font-weight: 600; min-width: 1.8rem; text-align: right; }
-  .score-note { font-size: 0.75rem; color: var(--fg-faint); margin: 0.45rem 0 0 0; font-style: italic; }
+  .score-note { font-size: 0.72rem; color: var(--fg-faint); margin: 0.55rem 0 0 0; font-style: italic; text-align: center; }
 
   /* Modal */
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
@@ -790,6 +854,7 @@
   .modal-body label { display: block; margin-top: 0.75rem; }
   .modal-body label.check { display: flex; align-items: center; gap: 0.5rem; margin-top: 1.7rem; }
   .modal-body label.check span { margin-bottom: 0; font-size: 0.88rem; color: var(--fg); text-transform: none; letter-spacing: normal; font-weight: normal; }
+  .modal-body .check-hint { display: block; font-size: 0.78rem; color: var(--fg-faint); font-style: normal; margin-top: 0.15rem; }
   .modal-body label span { display: block; font-size: 0.78rem; color: var(--fg-muted); margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.04em; }
   .modal-body label em { color: var(--fg-faint); font-style: normal; text-transform: none; }
   .modal-body input[type=text], .modal-body select { width: 100%; padding: 0.5rem 0.65rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 0.9rem; box-sizing: border-box; }

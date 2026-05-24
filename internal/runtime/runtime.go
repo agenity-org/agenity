@@ -46,9 +46,10 @@ type SessionInfo struct {
 
 	// Activity counters (populated by the runtime's per-session sniffer).
 	// Reported on every Get/List; values are wall-clock snapshots.
-	TotalBytes    int64   `json:"total_bytes"`
-	Bytes5m       int64   `json:"bytes_5m"`
-	IdleSeconds   float64 `json:"idle_seconds"`
+	TotalBytes  int64   `json:"total_bytes"`
+	Bytes5m     int64   `json:"bytes_5m"`
+	Chunks5m    int     `json:"chunks_5m"` // distinct PTY writes in last 5 min — engagement / burst rate
+	IdleSeconds float64 `json:"idle_seconds"`
 }
 
 // sessionActivity holds the running tally for one session — used by the
@@ -70,13 +71,14 @@ type recentChunk struct {
 // snapshot returns a copy of the activity counters with the 5-min
 // window trimmed to the current wall clock. Safe to call from any
 // goroutine (locks internally).
-func (a *sessionActivity) snapshot() (total int64, bytes5m int64, idleSeconds float64) {
+func (a *sessionActivity) snapshot() (total int64, bytes5m int64, chunks5m int, idleSeconds float64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cutoff := time.Now().Add(-5 * time.Minute)
 	for len(a.recent) > 0 && a.recent[0].at.Before(cutoff) {
 		a.recent = a.recent[1:]
 	}
+	chunks5m = len(a.recent)
 	for _, c := range a.recent {
 		bytes5m += int64(c.size)
 	}
@@ -480,7 +482,7 @@ func (r *Runtime) List() []*SessionInfo {
 	for _, p := range pairs {
 		c := *p.info
 		if p.act != nil {
-			c.TotalBytes, c.Bytes5m, c.IdleSeconds = p.act.snapshot()
+			c.TotalBytes, c.Bytes5m, c.Chunks5m, c.IdleSeconds = p.act.snapshot()
 		}
 		out = append(out, &c)
 	}
