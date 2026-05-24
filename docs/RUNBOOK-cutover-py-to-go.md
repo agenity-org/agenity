@@ -54,9 +54,20 @@ pgrep -f 'python.*supervisor.py' && {
   exit 1
 }
 
-# 4. Start Go daemon (foreground first for observability).
+# 4. Start Go daemon. Two options:
+#
+#    a) Foreground (recommended for first cutover — watch stdout live):
 /tmp/chepherd-go daemon &
 GO_PID=$!
+#
+#    b) Persistent via systemd (after foreground walk passes — survives
+#       terminal exit + restarts on crash). One-time install:
+#         mkdir -p ~/.config/systemd/user
+#         cp ~/repos/chepherd/docs/systemd/chepherd-daemon.service \
+#            ~/.config/systemd/user/
+#         systemctl --user daemon-reload
+#         systemctl --user enable --now chepherd-daemon
+#         journalctl --user -u chepherd-daemon -f   # live log tail
 
 # 5. Watch first 3 verdict cycles — should be silent/coach for healthy
 #    sessions, intervene for any that drift. Compare to your mental
