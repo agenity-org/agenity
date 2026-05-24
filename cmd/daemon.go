@@ -163,6 +163,12 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 			if v.Message == "" {
 				fmt.Fprintf(os.Stderr, "  %s judge said %s but message empty; not injecting\n",
 					s.TmuxName, v.Verdict)
+			} else if daemon.IsUserTyping(s.TmuxName) {
+				// Defer injection — user is mid-keystroke. Pushing a
+				// SUPERVISOR message now would clobber their half-written
+				// prompt. Skip this tick; the message becomes stale +
+				// the next tick will re-evaluate fresh signals.
+				fmt.Printf("  %s deferred — user is typing\n", s.TmuxName)
 			} else if err := tmuxPaste(s.TmuxName, v.Message); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s inject failed: %v\n", s.TmuxName, err)
 			} else {
