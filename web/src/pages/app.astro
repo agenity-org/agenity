@@ -1,0 +1,9 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Dashboard from '../components/Dashboard.svelte';
+---
+<Layout title="chepherd — dashboard">
+  <main style="padding: 1rem 2rem; min-height: 100vh;">
+    <Dashboard client:load />
+  </main>
+</Layout>

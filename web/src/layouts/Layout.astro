@@ -1,0 +1,32 @@
+---
+import '../styles/global.css';
+const { title = "chepherd — agent runtime for AI engineering", description = "Multi-agent dashboard + supervisor + runtime — one install, one team that grows" } = Astro.props;
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <nav class="topbar container">
+      <a href="/" class="brand-link">✻ chepherd</a>
+      <div>
+        <a href="/docs">Docs</a>
+        <a href="/download">Download</a>
+        <a href="https://github.com/chepherd/chepherd">GitHub</a>
+      </div>
+    </nav>
+    <slot />
+    <footer class="footer">
+      <div class="container">
+        chepherd — agent runtime + supervisor + multi-agent dashboard ·
+        <a href="https://openova-io.github.io">powered by OpenOva</a> ·
+        Apache 2.0
+      </div>
+    </footer>
+  </body>
+</html>

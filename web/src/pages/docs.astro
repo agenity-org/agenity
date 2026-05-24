@@ -1,0 +1,42 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="chepherd documentation">
+  <main class="container" style="padding: 4rem 0;">
+    <h1 style="font-size: 2.5rem; margin-bottom: 2rem;">Documentation</h1>
+    <p style="font-size: 1.1rem; color: #ccc; margin-bottom: 2.5rem;">
+      Documentation site coming with v0.7 — see GitHub README for now.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Concepts</h3>
+        <ul style="color: #aaa; margin-top: 0.5rem;">
+          <li>Adam — the worker agent</li>
+          <li>Chepherd — the meta-shepherd</li>
+          <li>Tribes — addressable groups</li>
+          <li>@target relay — agent messaging</li>
+          <li>4-eyes principle</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Install</h3>
+        <ul style="color: #aaa; margin-top: 0.5rem;">
+          <li>macOS / Windows / Linux desktop</li>
+          <li>Docker / Podman</li>
+          <li>OpenOva Sovereign (bp-chepherd Blueprint)</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Providers</h3>
+        <ul style="color: #aaa; margin-top: 0.5rem;">
+          <li>Claude OAuth (subscription)</li>
+          <li>Anthropic API</li>
+          <li>OpenRouter</li>
+          <li>OpenOva NewAPI</li>
+          <li>Ollama (local)</li>
+        </ul>
+      </div>
+    </div>
+  </main>
+</Layout>

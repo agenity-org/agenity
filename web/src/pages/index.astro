@@ -1,0 +1,75 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout>
+  <main>
+    <section class="hero container">
+      <h1>A <span class="brand">control room</span> for your<br/>AI engineering team.</h1>
+      <p class="lede">
+        Start with one agent. Grow to a tribe.
+        Chepherd watches your team's work,
+        catches drift, and keeps the human in command.
+        One install. Local-first. Open-source.
+      </p>
+      <a class="cta" href="/download">Get chepherd</a>
+      <a class="cta secondary" href="/docs">Read the docs</a>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2 style="font-size: 2rem; margin-bottom: 2rem;">How it works</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Meet Adam</h3>
+            <p>Your default working agent. Talk to Adam like you'd talk to Claude — but Adam can recruit specialists when the work warrants it.</p>
+          </div>
+          <div class="card">
+            <h3>Meet Chepherd</h3>
+            <p>Adam's watcher. The prophet figure. Reads Adam's work from above and catches stuck patterns, quality drift, scope creep. 4-eyes principle, always on.</p>
+          </div>
+          <div class="card">
+            <h3>Grow the team</h3>
+            <p>When Adam spawns a peer (or you do), it appears in the dashboard. Agents talk to each other via <code>@target</code>. You can join the conversation any time.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2 style="font-size: 2rem; margin-bottom: 2rem;">Three ways to use it</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Terminal (TUI)</h3>
+            <p>Developers + SSH'd servers. <code>chepherd run</code> in any shell. k9s-style live dashboard.</p>
+          </div>
+          <div class="card">
+            <h3>Browser (web)</h3>
+            <p>For non-developers. Open localhost:8080 after install. Full dashboard, xterm.js-rendered panes.</p>
+          </div>
+          <div class="card">
+            <h3>Phone (iOS/Android)</h3>
+            <p>Push notifications, quick replies, remote control. Pair to your laptop with a QR code or connect to a hosted Sovereign.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <h2 style="font-size: 2rem; margin-bottom: 1rem;">Quick start</h2>
+        <pre class="code-block mono"><code># macOS / Linux / Windows — pick your OS
+curl -fsSL https://chepherd.io/install.sh | sh
+
+# Or Homebrew
+brew install chepherd
+
+# Run it
+chepherd run</code></pre>
+        <p style="color: #aaa; margin-top: 1rem;">
+          Your provider (Claude / Anthropic API / OpenRouter / OpenOva NewAPI / Ollama) sets up in 60 seconds via <code>chepherd setup</code>.
+        </p>
+      </div>
+    </section>
+  </main>
+</Layout>

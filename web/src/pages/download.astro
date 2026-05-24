@@ -1,0 +1,46 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="Download chepherd">
+  <main class="container" style="padding: 4rem 0;">
+    <h1 style="font-size: 2.5rem; margin-bottom: 2rem;">Get chepherd</h1>
+    <p style="font-size: 1.2rem; color: #ccc; margin-bottom: 3rem;">
+      Free for personal use. Apache 2.0. No account required.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <h3>macOS</h3>
+        <p>Signed + notarized .pkg installer</p>
+        <a class="cta" style="margin-top: 1rem; display: block; text-align: center;" href="https://github.com/chepherd/chepherd/releases/latest">Download .pkg</a>
+        <p style="margin-top: 1rem; color: #888;">Or: <code>brew install chepherd</code></p>
+      </div>
+      <div class="card">
+        <h3>Windows</h3>
+        <p>Signed .msi installer (EV cert)</p>
+        <a class="cta" style="margin-top: 1rem; display: block; text-align: center;" href="https://github.com/chepherd/chepherd/releases/latest">Download .msi</a>
+      </div>
+      <div class="card">
+        <h3>Linux</h3>
+        <p>.deb / .rpm / AppImage / Flathub</p>
+        <a class="cta" style="margin-top: 1rem; display: block; text-align: center;" href="https://github.com/chepherd/chepherd/releases/latest">Releases</a>
+      </div>
+    </div>
+
+    <h2 style="font-size: 1.75rem; margin: 3rem 0 1rem;">Mobile companion</h2>
+    <p>Pair your phone to your laptop's chepherd for remote control + push notifications.</p>
+    <div class="grid" style="margin-top: 1.5rem;">
+      <div class="card">
+        <h3>iOS / iPadOS</h3>
+        <p>App Store — coming with v0.7</p>
+      </div>
+      <div class="card">
+        <h3>Android</h3>
+        <p>Play Store — coming with v0.7</p>
+      </div>
+      <div class="card">
+        <h3>Self-host on a Sovereign</h3>
+        <p>Install bp-chepherd Blueprint in any OpenOva Sovereign for hosted access.</p>
+      </div>
+    </div>
+  </main>
+</Layout>
