@@ -150,9 +150,14 @@ func (d *Dashboard) renderList() {
 	d.list.SetCell(0, 0, tview.NewTableCell(style.Tag(style.Title, "SESSIONS")).
 		SetSelectable(false).
 		SetExpansion(2))
-	d.list.SetCell(0, 1, tview.NewTableCell("").SetSelectable(false))
-	d.list.SetCell(0, 2, tview.NewTableCell("").SetSelectable(false))
-	d.list.SetCell(0, 3, tview.NewTableCell("").SetSelectable(false))
+	d.list.SetCell(0, 1, tview.NewTableCell(style.Tag(style.TitleRule, "  score")).
+		SetSelectable(false))
+	d.list.SetCell(0, 2, tview.NewTableCell(style.Tag(style.TitleRule, "  GVFE")).
+		SetSelectable(false))
+	d.list.SetCell(0, 3, tview.NewTableCell(style.Tag(style.TitleRule, "  band")).
+		SetSelectable(false))
+	d.list.SetCell(0, 4, tview.NewTableCell(style.Tag(style.TitleRule, "  next")).
+		SetSelectable(false))
 
 	// Each session = one row
 	for i, s := range sessions {
@@ -175,17 +180,21 @@ func (d *Dashboard) renderList() {
 		d.list.SetCell(row, 0, tview.NewTableCell(nameCell).
 			SetExpansion(2))
 
-		// Scorecard
+		// Overall score (geomean of G·V·F·E) + 10-cell gauge — v0.3 spec.
+		overallCell := formatGeomeanGauge(s)
+		d.list.SetCell(row, 1, tview.NewTableCell("  "+overallCell))
+
+		// Scorecard G/V/F/E
 		scoreCell := formatScorecard(s)
-		d.list.SetCell(row, 1, tview.NewTableCell("  "+scoreCell))
+		d.list.SetCell(row, 2, tview.NewTableCell("  "+scoreCell))
 
 		// Band text
 		bandText := formatBandText(band)
-		d.list.SetCell(row, 2, tview.NewTableCell("  "+bandText))
+		d.list.SetCell(row, 3, tview.NewTableCell("  "+bandText))
 
 		// Next tick countdown
 		nextCell := formatNextTick(s)
-		d.list.SetCell(row, 3, tview.NewTableCell("  "+nextCell))
+		d.list.SetCell(row, 4, tview.NewTableCell("  "+nextCell))
 	}
 
 	// Select first row by default
@@ -207,6 +216,33 @@ func formatScorecard(s *state.Session) string {
 		style.Tag(style.ScoreColor(v), digitStr(v)),
 		style.Tag(style.ScoreColor(f), digitStr(f)),
 		style.Tag(style.ScoreColor(e), digitStr(e)))
+}
+
+// formatGeomeanGauge renders the v0.3 left-pane "overall" column:
+//
+//	"5.7  █████░░░░░"
+//
+// Number is the geometric mean of G·V·F·E (one weak axis drags it down),
+// 10-cell gauge maps 0–10 to filled/empty cells. Color = ScoreColor of
+// the rounded geomean so the eye picks crisis sessions instantly. '—'
+// when no scorecard yet.
+func formatGeomeanGauge(s *state.Session) string {
+	gm := s.Geomean()
+	if gm < 0 {
+		return style.Tag(style.Ambient, " —")
+	}
+	filled := int(gm + 0.5)
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > 10 {
+		filled = 10
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
+	color := style.ScoreColor(filled)
+	return fmt.Sprintf("%s %s",
+		style.TagBold(color, fmt.Sprintf("%3.1f", gm)),
+		style.Tag(color, bar))
 }
 
 func digitStr(n int) string {

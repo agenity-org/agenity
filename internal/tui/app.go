@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +46,7 @@ type App struct {
 	allSessions []*state.Session // unfiltered
 	filterText  string
 	selectedIdx int
+	sortMode    SortMode // cycled by 'o' hotkey, default SortScoreDesc
 
 	// Log tailer
 	logCtx    context.Context
@@ -103,6 +103,10 @@ func (a *App) installGlobalKeys() {
 			// session's pane + send '/login' so they can re-auth.
 			// Only useful when the session is AuthLapsed.
 			a.LoginSelected()
+			return nil
+		case 'o':
+			// 'o' = order/sort cycle (score↓ → score↑ → name → status)
+			a.cycleSort()
 			return nil
 		case 'n':
 			a.newSession.show()
@@ -319,23 +323,31 @@ func (a *App) refreshState() {
 		// Soft failure — keep previous state, just log later if needed.
 		return
 	}
-	// Stable alphabetical sort by tmux_name
-	sort.Slice(sessions, func(i, j int) bool {
-		ai, aj := sessions[i].TmuxName, sessions[j].TmuxName
-		// Push paused sessions to the bottom.
-		ip, jp := isPaused(sessions[i]), isPaused(sessions[j])
-		if ip != jp {
-			return !ip
-		}
-		return ai < aj
-	})
 	a.mu.Lock()
+	SortSessions(sessions, a.sortMode)
 	a.allSessions = sessions
 	a.applyFilterLocked()
 	if a.selectedIdx >= len(a.sessions) {
 		a.selectedIdx = 0
 	}
 	a.mu.Unlock()
+}
+
+// cycleSort advances the sort mode + re-sorts the current session list.
+func (a *App) cycleSort() {
+	a.mu.Lock()
+	a.sortMode = a.sortMode.Next()
+	SortSessions(a.allSessions, a.sortMode)
+	a.applyFilterLocked()
+	a.mu.Unlock()
+	a.tv.QueueUpdateDraw(a.dashboard.render)
+}
+
+// SortMode returns the current sort mode for header rendering.
+func (a *App) SortMode() SortMode {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sortMode
 }
 
 // isPaused checks for a sentinel file at $XDG_STATE/chepherd/sessions/<uuid>.paused
@@ -412,6 +424,9 @@ func (a *App) Select(idx int) {
 }
 
 // FormatHeader builds the top status-bar text.
+// Layout: left wordmark + stats + current sort mode + clock, with the
+// tiny right-anchored brand mark `▰ chepherd 0.3` rendered separately by
+// Dashboard.render (it needs to know the actual rendered width).
 func (a *App) FormatHeader() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -423,12 +438,18 @@ func (a *App) FormatHeader() string {
 		}
 	}
 	now := time.Now().UTC().Format("15:04:05 UTC")
-	logo := style.Tag(style.Logo, "chepherd")
-	ver := style.Tag(style.Logo, "0.0.1-dev")
+	logo := style.TagBold(style.Logo, "chepherd")
 	stats := style.Tag(style.Body,
-		fmt.Sprintf(" ─ %d sessions ─ %d active ─ %s", total, active, now))
-	fresh := style.Tag(style.Timestamp, " ─ refreshed 0s ago")
-	return fmt.Sprintf("%s %s%s%s", logo, ver, stats, fresh)
+		fmt.Sprintf("  ·  %d sessions · %d active · sort: %s · %s",
+			total, active, a.sortMode, now))
+	return logo + stats
+}
+
+// FormatHeaderRight returns the tiny right-anchored brand mark + version
+// per the v0.3 spec: `▰ chepherd 0.3`. Kept separate from FormatHeader
+// so the dashboard renderer can right-anchor it.
+func (a *App) FormatHeaderRight() string {
+	return style.Tag(style.Logo, "▰ chepherd 0.3")
 }
 
 // FormatFooter builds the bottom shortcut bar.
@@ -436,9 +457,11 @@ func (a *App) FormatFooter() string {
 	pairs := []struct{ key, desc string }{
 		{"↑↓", "select"},
 		{"enter", "details"},
-		{"t", "tmux"},
+		{"t", "attach"},
+		{"o", "sort"},
+		{"L", "login"},
 		{"l", "log"},
-		{"p/u", "pause/unpause"},
+		{"p/u", "pause"},
 		{"/", "filter"},
 		{"?", "help"},
 		{"q", "quit"},

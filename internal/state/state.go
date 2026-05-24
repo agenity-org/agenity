@@ -8,6 +8,7 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,32 @@ func (s *Session) FormatScorecard() string {
 	}
 	g, v, f, e := s.LastScorecard["G"], s.LastScorecard["V"], s.LastScorecard["F"], s.LastScorecard["E"]
 	return fmt.Sprintf("%d/%d/%d/%d", g, v, f, e)
+}
+
+// Geomean returns the geometric mean of the four scorecard axes
+// (G·V·F·E)^(1/4). Used as the "overall score" in the dashboard list so
+// one weak axis drags the overall down — matches the supervisor's
+// weakest-link philosophy. Any axis equal to 0 returns 0 (a zero
+// strongly indicates one dimension has collapsed). Returns -1 when
+// the scorecard isn't available so callers can render '—'.
+func (s *Session) Geomean() float64 {
+	if s.LastScorecard == nil {
+		return -1
+	}
+	axes := []int{
+		s.LastScorecard["G"],
+		s.LastScorecard["V"],
+		s.LastScorecard["F"],
+		s.LastScorecard["E"],
+	}
+	product := 1.0
+	for _, n := range axes {
+		if n <= 0 {
+			return 0
+		}
+		product *= float64(n)
+	}
+	return math.Pow(product, 1.0/float64(len(axes)))
 }
 
 // DefaultStateDirs returns the directories to look in for session JSON files,
