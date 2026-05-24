@@ -148,7 +148,32 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime.Spawn: unknown agent %q: %w", spec.AgentSlug, err)
 	}
-	argv, env := agent.Resolve(spec.AgentArgs, envSliceToMap(spec.Env))
+
+	// Inject system prompt via the agent CLI's append-prompt flag when
+	// SpawnSpec.SystemPrompt is non-empty. claude-code: --append-system-prompt
+	// qwen-code: --system-prompt (qwen takes it as-is). Other agents: skip
+	// silently — the prompt is still embedded in our per-agent MCP config
+	// payload for agents that read it from there.
+	extraArgs := append([]string(nil), spec.AgentArgs...)
+	if spec.SystemPrompt != "" {
+		switch spec.AgentSlug {
+		case "claude-code":
+			extraArgs = append(extraArgs, "--append-system-prompt", spec.SystemPrompt)
+		case "qwen-code":
+			extraArgs = append(extraArgs, "--system-prompt", spec.SystemPrompt)
+		}
+	}
+
+	// Write per-session MCP config so the agent discovers chepherd's MCP
+	// server. Writes a project-scoped .mcp.json next to the agent's cwd
+	// AND a per-session env var pointing to it. Idempotent.
+	mcpEnv, err := r.writeMCPConfig(spec.Name, spec.Cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: warning: mcp config write failed for %s: %v\n", spec.Name, err)
+	}
+	envWithMCP := append(append([]string(nil), spec.Env...), mcpEnv...)
+
+	argv, env := agent.Resolve(extraArgs, envSliceToMap(envWithMCP))
 
 	// Spawn the PTY child via ptyhost
 	id := newSessionID(spec.Name)
@@ -396,6 +421,48 @@ func (r *Runtime) persistInfoLocked(info *SessionInfo) error {
 	err := r.persistInfo(info)
 	r.mu.Lock()
 	return err
+}
+
+// writeMCPConfig writes a per-session .mcp.json into the session's CWD
+// (or a chepherd-managed dir if cwd is empty) so the spawned agent
+// discovers chepherd's MCP server. Returns env vars to forward to the
+// child process for tools that prefer env-pointing over file discovery.
+func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, error) {
+	cfgDir := filepath.Join(r.stateDir, "sessions", sessionName)
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		return nil, err
+	}
+	sockPath := filepath.Join(r.stateDir, "runtime.sock")
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"chepherd": map[string]any{
+				"command": "chepherd",
+				"args":    []string{"mcp", "--sock", sockPath},
+				"env":     map[string]string{},
+			},
+		},
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	cfgPath := filepath.Join(cfgDir, ".mcp.json")
+	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+		return nil, err
+	}
+	// Symlink into cwd as ./.mcp.json if cwd is set + writable + doesn't have one.
+	if cwd != "" {
+		target := filepath.Join(cwd, ".mcp.json")
+		if _, statErr := os.Stat(target); os.IsNotExist(statErr) {
+			_ = os.Symlink(cfgPath, target)
+		}
+	}
+	// Env hint for agents that read MCP server URL directly (e.g. some
+	// experimental SDK paths). Harmless if unused.
+	return []string{
+		"CHEPHERD_MCP_SOCK=" + sockPath,
+		"CHEPHERD_MCP_CONFIG=" + cfgPath,
+	}, nil
 }
 
 // --- utilities ---
