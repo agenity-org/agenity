@@ -21,6 +21,7 @@ package runtimetui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,15 +41,16 @@ type App struct {
 	header *tview.TextView
 	list   *tview.Table
 	center *tview.TextView
+	logBar *tview.TextView // bottom log strip — relay + system events
 	footer *tview.TextView
 	root   *tview.Flex
 
-	mu             sync.Mutex
-	selected       string                // session name currently focused
-	centerSub      *session.Subscriber   // subscriber for selected session
-	centerCancel   context.CancelFunc    // for tearing down old subscription
-	interactMode   bool                  // routes keystrokes to selected session
-	stoppingCenter chan struct{}
+	mu           sync.Mutex
+	selected     string              // session name currently focused
+	centerSub    *session.Subscriber // subscriber for selected session
+	centerCancel context.CancelFunc  // for tearing down old subscription
+	interactMode bool                // routes keystrokes to selected session
+	logLines     []string            // ring of recent log strip entries
 }
 
 // New constructs the App. Call Run() to start.
@@ -79,16 +81,21 @@ func (a *App) buildLayout() {
 	a.center.SetBackgroundColor(tcell.ColorBlack)
 	a.center.SetBorder(true).SetTitle(" (no selection) ").SetTitleAlign(tview.AlignLeft)
 
+	a.logBar = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetScrollable(true)
+	a.logBar.SetBackgroundColor(tcell.ColorBlack)
+	a.logBar.SetBorder(true).SetTitle(" Log ").SetTitleAlign(tview.AlignLeft)
+
 	a.footer = tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignLeft)
 	a.footer.SetBackgroundColor(tcell.ColorBlack)
 
 	body := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(a.list, 0, 25, true).
-		AddItem(a.center, 0, 75, false)
+		AddItem(a.list, 0, 30, true).
+		AddItem(a.center, 0, 70, false)
 
 	a.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.header, 1, 0, false).
 		AddItem(body, 0, 1, true).
+		AddItem(a.logBar, 5, 0, false).
 		AddItem(a.footer, 1, 0, false)
 	a.root.SetBackgroundColor(tcell.ColorBlack)
 
@@ -209,7 +216,11 @@ func (a *App) selectSession(name string) {
 	if a.centerCancel != nil {
 		a.centerCancel()
 	}
+	prev := a.selected
 	a.selected = name
+	if prev != name {
+		go a.appendLog(fmt.Sprintf("[blue]select[-] %s", name))
+	}
 	s, _ := a.rt.Get(name)
 	if s == nil {
 		a.center.SetText("")
@@ -289,6 +300,11 @@ func (a *App) togglePauseSelected() {
 		return
 	}
 	_ = a.rt.Pause(target, !info.Paused)
+	if info.Paused {
+		a.appendLog(fmt.Sprintf("[green]unpause[-] %s", target))
+	} else {
+		a.appendLog(fmt.Sprintf("[yellow]pause[-] %s", target))
+	}
 	a.refreshList()
 }
 
@@ -311,7 +327,9 @@ func (a *App) showSpawnPrompt() {
 			Role:      runtime.RoleWorker,
 		})
 		if err != nil {
-			a.center.SetText(fmt.Sprintf("[red]spawn failed: %v", err))
+			a.appendLog(fmt.Sprintf("[red]spawn[-] %s failed: %v", name, err))
+		} else {
+			a.appendLog(fmt.Sprintf("[green]spawn[-] %s (worker, default)", name))
 		}
 		a.refreshList()
 	})
@@ -324,23 +342,62 @@ func (a *App) showSpawnPrompt() {
 }
 
 // refreshList re-renders the session list from runtime.List().
+//
+// Sessions are grouped by tribe — shepherds first within each tribe,
+// then workers alphabetically. A blank divider row separates tribes when
+// there are more than one.
 func (a *App) refreshList() {
 	a.tv.QueueUpdateDraw(func() {
 		prevRow, _ := a.list.GetSelection()
 		a.list.Clear()
-		a.list.SetCell(0, 0, tview.NewTableCell("[::b]Name[-:-:-]").SetSelectable(false))
+		a.list.SetCell(0, 0, tview.NewTableCell("[::b]Session[-:-:-]").SetSelectable(false).SetExpansion(2))
 		a.list.SetCell(0, 1, tview.NewTableCell("[::b]Role[-:-:-]").SetSelectable(false))
 		a.list.SetCell(0, 2, tview.NewTableCell("[::b]Tribe[-:-:-]").SetSelectable(false))
+
+		// Group by tribe, then sort within tribe (shepherd first, then alpha)
 		infos := a.rt.List()
-		for i, info := range infos {
-			row := i + 1
-			marker := ""
-			if info.Paused {
-				marker = "[grey]⏸[-]"
+		byTribe := map[string][]*runtime.SessionInfo{}
+		var tribes []string
+		for _, info := range infos {
+			if _, seen := byTribe[info.Tribe]; !seen {
+				tribes = append(tribes, info.Tribe)
 			}
-			a.list.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("%s %s", marker, info.Name)).SetReference(info.Name))
-			a.list.SetCell(row, 1, tview.NewTableCell(string(info.Role)))
-			a.list.SetCell(row, 2, tview.NewTableCell(info.Tribe))
+			byTribe[info.Tribe] = append(byTribe[info.Tribe], info)
+		}
+		sort.Strings(tribes)
+		row := 0
+		for ti, tribe := range tribes {
+			members := byTribe[tribe]
+			sort.Slice(members, func(i, j int) bool {
+				if (members[i].Role == runtime.RoleShepherd) != (members[j].Role == runtime.RoleShepherd) {
+					return members[i].Role == runtime.RoleShepherd
+				}
+				return members[i].Name < members[j].Name
+			})
+			if ti > 0 && len(tribes) > 1 {
+				row++
+				a.list.SetCell(row, 0, tview.NewTableCell(" ").SetSelectable(false))
+			}
+			for _, info := range members {
+				row++
+				icon := ""
+				roleTag := ""
+				switch info.Role {
+				case runtime.RoleShepherd:
+					icon = "[orange]✻[-]"
+					roleTag = "[orange]shepherd[-]"
+				default:
+					icon = "[teal]●[-]"
+					roleTag = "worker"
+				}
+				if info.Paused {
+					icon = "[grey]⏸[-]"
+				}
+				a.list.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf(" %s %s", icon, info.Name)).
+					SetReference(info.Name).SetExpansion(2))
+				a.list.SetCell(row, 1, tview.NewTableCell(roleTag))
+				a.list.SetCell(row, 2, tview.NewTableCell(info.Tribe))
+			}
 		}
 		// Restore selection
 		target := prevRow
@@ -358,28 +415,59 @@ func (a *App) refreshHeader() {
 	a.tv.QueueUpdateDraw(func() {
 		infos := a.rt.List()
 		tribes := map[string]bool{}
+		paused := 0
+		shepherds := 0
 		for _, info := range infos {
 			tribes[info.Tribe] = true
+			if info.Paused {
+				paused++
+			}
+			if info.Role == runtime.RoleShepherd {
+				shepherds++
+			}
 		}
 		now := time.Now().UTC().Format("15:04:05 UTC")
-		a.header.SetText(fmt.Sprintf("[orange]chepherd[-]  ·  %d sessions  ·  %d tribes  ·  %s",
-			len(infos), len(tribes), now))
+		a.header.SetText(fmt.Sprintf("[orange::b]✻ chepherd 0.5[-:-:-]  ·  %d sessions (%d shepherd%s, %d paused)  ·  %d tribe%s  ·  %s",
+			len(infos), shepherds, plural(shepherds), paused, len(tribes), plural(len(tribes)), now))
+	})
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// appendLog adds a line to the bottom log strip + scrolls.
+func (a *App) appendLog(line string) {
+	a.mu.Lock()
+	a.logLines = append(a.logLines, time.Now().UTC().Format("15:04:05 ")+line)
+	if len(a.logLines) > 200 {
+		a.logLines = a.logLines[len(a.logLines)-200:]
+	}
+	snap := make([]string, len(a.logLines))
+	copy(snap, a.logLines)
+	a.mu.Unlock()
+	a.tv.QueueUpdateDraw(func() {
+		a.logBar.SetText(strings.Join(snap, "\n"))
+		a.logBar.ScrollToEnd()
 	})
 }
 
 // refreshFooter re-renders the footer hotkey strip.
 func (a *App) refreshFooter() {
 	a.tv.QueueUpdateDraw(func() {
-		mode := "select"
-		extra := ""
 		a.mu.Lock()
-		if a.interactMode {
-			mode = "[red]interact[-]"
-			extra = "   [yellow]Esc to exit interact[-]"
-		}
+		interacting := a.interactMode
 		a.mu.Unlock()
-		a.footer.SetText(fmt.Sprintf("  [::b]↑↓[-:-:-] select   [::b]Enter/i[-:-:-] interact   [::b]n[-:-:-] spawn   [::b]p[-:-:-] pause   [::b]r[-:-:-] refresh   [::b]q[-:-:-] quit   ·   mode: %s%s",
-			mode, extra))
+		var text string
+		if interacting {
+			text = "  [red::b]INTERACT[-:-:-] — keystrokes route to selected session   ·   [::b]Esc[-:-:-] exit interact mode"
+		} else {
+			text = "  [::b]↑↓[-:-:-] select   [::b]Enter/i[-:-:-] interact   [::b]n[-:-:-] spawn   [::b]p[-:-:-] pause   [::b]r[-:-:-] refresh   [::b]q[-:-:-] quit"
+		}
+		a.footer.SetText(text)
 	})
 }
 
