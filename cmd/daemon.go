@@ -160,26 +160,42 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 
 		injected := false
 		if v.Verdict == "coach" || v.Verdict == "intervene" {
-			if v.Message == "" {
+			// Per-session inject cooldown — never two injects within
+			// MinInjectInterval, regardless of judge cadence.
+			cooledDown := true
+			if lastIA, ok := state["last_intervention_at"].(string); ok {
+				if dt, err := time.Parse(time.RFC3339, lastIA); err == nil {
+					if time.Since(dt) < daemon.MinInjectInterval {
+						cooledDown = false
+					}
+				}
+			}
+			switch {
+			case v.Message == "":
 				fmt.Fprintf(os.Stderr, "  %s judge said %s but message empty; not injecting\n",
 					s.TmuxName, v.Verdict)
-			} else if daemon.IsHumanEngaged(s.JSONLPath) {
-				// Defer injection — the human is actively in dialogue with
-				// this session (most recent user-typed message in JSONL is
-				// within EngagementWindow). Pushing a SUPERVISOR message
-				// now would interrupt the conversation.
-				fmt.Printf("  %s deferred — human engaged in conversation\n", s.TmuxName)
-			} else if daemon.IsUserTyping(s.TmuxName) {
-				// Backstop for the narrow window: user is typing RIGHT NOW
-				// (last 800ms) but no user message yet in the JSONL.
+			case !cooledDown:
+				fmt.Printf("  %s deferred — min-interval cooldown (last inject < %v ago)\n",
+					s.TmuxName, daemon.MinInjectInterval)
+			case daemon.HasRecentInterruptionEvidence(s.JSONLPath):
+				// Past inject got merged into user input — evidence we're
+				// causing harm. Back off hard.
+				fmt.Printf("  %s deferred — prior injection contaminated user input; backing off\n",
+					s.TmuxName)
+			case daemon.IsHumanEngaged(s.JSONLPath):
+				fmt.Printf("  %s deferred — human engaged in conversation (last user msg < %v ago)\n",
+					s.TmuxName, daemon.EngagementWindow)
+			case daemon.IsUserTyping(s.TmuxName):
 				fmt.Printf("  %s deferred — user is typing\n", s.TmuxName)
-			} else if err := tmuxPaste(s.TmuxName, v.Message); err != nil {
-				fmt.Fprintf(os.Stderr, "  %s inject failed: %v\n", s.TmuxName, err)
-			} else {
-				injected = true
-				cnt, _ := state["intervention_count"].(int)
-				state["intervention_count"] = cnt + 1
-				state["last_intervention_at"] = now.Format(time.RFC3339)
+			default:
+				if err := tmuxPaste(s.TmuxName, v.Message); err != nil {
+					fmt.Fprintf(os.Stderr, "  %s inject failed: %v\n", s.TmuxName, err)
+				} else {
+					injected = true
+					cnt, _ := state["intervention_count"].(int)
+					state["intervention_count"] = cnt + 1
+					state["last_intervention_at"] = now.Format(time.RFC3339)
+				}
 			}
 		}
 

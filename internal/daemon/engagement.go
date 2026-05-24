@@ -24,10 +24,89 @@ import (
 )
 
 // EngagementWindow is how recent a user message has to be to count the
-// human as actively engaged. 5 minutes covers most "thinking, typing
-// next prompt" gaps; anything older and the user has clearly stepped
-// away or yielded the floor to the agent.
-const EngagementWindow = 5 * time.Minute
+// human as actively engaged. 15 minutes is the conservative side of
+// "still in this conversation" — short enough that a truly walked-away
+// user isn't blocking coaching forever; long enough that the daemon
+// doesn't slip an injection between user prompts during normal think-
+// type-reply pacing.
+const EngagementWindow = 15 * time.Minute
+
+// InterruptionEvidenceWindow scans the recent JSONL for past-injection
+// contamination — user messages that contain "[SUPERVISOR" substring,
+// meaning the daemon previously injected into a pending-typing buffer
+// and got concatenated into the eventual committed user prompt. When
+// such evidence exists within this window, the daemon backs off
+// HARDER (no injection for InterruptionDeferWindow).
+const InterruptionEvidenceWindow = 60 * time.Minute
+
+// InterruptionDeferWindow is how long we hold off injection after
+// detecting evidence of a prior typing-interruption. Twice the normal
+// engagement window — gives the user a real chance to finish their
+// thread without further interference.
+const InterruptionDeferWindow = 30 * time.Minute
+
+// MinInjectInterval is the hard minimum between coach injections for a
+// single session, regardless of judge cadence. Prevents back-to-back
+// SUPERVISOR pile-ups even when JSONL signals don't gate.
+const MinInjectInterval = 10 * time.Minute
+
+// HasRecentInterruptionEvidence scans the recent JSONL for user messages
+// containing "[SUPERVISOR" — a fingerprint of past injections that got
+// concatenated into pending-typing input. If true, a previous inject
+// interrupted the operator; back off for InterruptionDeferWindow.
+func HasRecentInterruptionEvidence(jsonlPath string) bool {
+	if jsonlPath == "" {
+		return false
+	}
+	f, err := os.Open(jsonlPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	cutoff := time.Now().Add(-InterruptionEvidenceWindow)
+	const tailBytes = 1024 * 1024
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	size := st.Size()
+	startAt := int64(0)
+	if size > tailBytes {
+		startAt = size - tailBytes
+	}
+	if _, err := f.Seek(startAt, 0); err != nil {
+		return false
+	}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !bytesContains(line, []byte(`"type":"user"`)) {
+			continue
+		}
+		if !bytesContains(line, []byte(`[SUPERVISOR`)) && !bytesContains(line, []byte(`SUPERVISOR — `)) {
+			continue
+		}
+		var event struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			continue
+		}
+		if event.Type != "user" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, event.Timestamp)
+		if err != nil {
+			continue
+		}
+		if t.After(cutoff) {
+			return true
+		}
+	}
+	return false
+}
 
 // IsHumanEngaged reports whether the most recent USER-typed message in
 // the session's JSONL transcript happened within EngagementWindow.
