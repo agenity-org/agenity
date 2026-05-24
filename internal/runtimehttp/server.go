@@ -18,6 +18,7 @@
 package runtimehttp
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -66,6 +67,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/sessions", s.sessionsRoot)
 	mux.HandleFunc("/api/v1/sessions/", s.sessionByName)
 	mux.HandleFunc("/api/v1/inbox", s.inbox)
+	mux.HandleFunc("/api/v1/inbox/", s.inboxByID)
+	mux.HandleFunc("/api/v1/inbox/read-all", s.inboxReadAll)
 	mux.HandleFunc("/api/v1/claude-sessions", s.claudeSessions)
 	mux.HandleFunc("/api/v1/folders/recent", s.recentFolders)
 	return logMiddleware(mux)
@@ -187,6 +190,36 @@ func (s *Server) inbox(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"inbox": s.rt.Inbox()})
 }
 
+// inboxByID handles POST /api/v1/inbox/{id}/read — flip a single entry to read.
+func (s *Server) inboxByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/inbox/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 || parts[1] != "read" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ok := s.rt.MarkInboxRead(parts[0])
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such message: " + parts[0]})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// inboxReadAll handles POST /api/v1/inbox/read-all — flip all entries to read.
+func (s *Server) inboxReadAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	n := s.rt.MarkAllInboxRead()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "marked": n})
+}
+
 // handleAttach upgrades to WebSocket + attaches the connection to the
 // session's PTY: ring-buffer replay first, then live fan-out. Client
 // sends binary frames → PTY stdin via session.Write.
@@ -304,6 +337,13 @@ func (s *Server) claudeSessions(w http.ResponseWriter, r *http.Request) {
 		if !projDir.IsDir() {
 			continue
 		}
+		// The directory name is the project's canonical cwd (Claude
+		// persists sessions by where they were started). A session's
+		// first-record cwd field may have drifted (resumed under a
+		// different cwd, e.g. iogrid#477 was started in iogrid but its
+		// first record says openova-private). Treat the directory as
+		// authoritative for "which project this session belongs to".
+		decodedDir := decodeClaudeProjectDir(projDir.Name())
 		projPath := filepath.Join(root, projDir.Name())
 		files, err := os.ReadDir(projPath)
 		if err != nil {
@@ -318,7 +358,9 @@ func (s *Server) claudeSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			uuid := strings.TrimSuffix(f.Name(), ".jsonl")
-			cwd, first := readSessionMeta(filepath.Join(projPath, f.Name()))
+			_, first := readSessionMeta(filepath.Join(projPath, f.Name()))
+			// The directory-decoded cwd is what we filter and display by.
+			cwd := decodedDir
 			if filterCwd != "" && cwd != filterCwd {
 				continue
 			}
@@ -356,17 +398,17 @@ func (s *Server) recentFolders(w http.ResponseWriter, _ *http.Request) {
 		if !d.IsDir() {
 			continue
 		}
+		// Directory name → cwd (authoritative; see claudeSessions comment).
+		cwd := decodeClaudeProjectDir(d.Name())
+		if cwd == "" {
+			continue
+		}
 		files, err := os.ReadDir(filepath.Join(root, d.Name()))
 		if err != nil {
 			continue
 		}
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
-				continue
-			}
-			fp := filepath.Join(root, d.Name(), f.Name())
-			cwd, _ := readSessionMeta(fp)
-			if cwd == "" {
 				continue
 			}
 			info, err := f.Info()
@@ -392,22 +434,30 @@ func (s *Server) recentFolders(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"folders": out})
 }
 
-// readSessionMeta scans the first ~16KB of a Claude session JSONL and
-// returns (cwd, first_user_message). Either field may be "" if not
-// found. The cwd comes from the first record carrying a top-level cwd
-// field (typically the first user record). first_user_message is the
-// first user role message content (string or text-content array).
+// readSessionMeta scans a Claude session JSONL line-by-line and returns
+// (cwd, first_user_message). Earlier versions read a fixed 16KB window
+// which dropped sessions where the first user record is past 16KB
+// (e.g. long multi-hour sessions like iogrid#477 "Apple Developer setup",
+// 98MB, where many summary/queue-operation records precede the first
+// user message). We now stream via bufio.Scanner with a large line cap.
+// Fallback: derive cwd from the encoded directory name when the JSONL
+// has no cwd field at all (very early Claude versions).
 func readSessionMeta(path string) (string, string) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", ""
 	}
 	defer f.Close()
-	buf := make([]byte, 16384)
-	n, _ := f.Read(buf)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1024*1024), 4*1024*1024) // 4 MiB max line
 	var cwd, first string
-	for _, line := range strings.Split(string(buf[:n]), "\n") {
-		if line == "" {
+	// Cap how many lines we'll scan so a 100 MB file doesn't block the API.
+	const maxLines = 5000
+	scanned := 0
+	for sc.Scan() && scanned < maxLines {
+		scanned++
+		line := sc.Bytes()
+		if len(line) == 0 {
 			continue
 		}
 		var rec struct {
@@ -418,7 +468,7 @@ func readSessionMeta(path string) (string, string) {
 				Content any    `json:"content"`
 			} `json:"message"`
 		}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil {
 			continue
 		}
 		if cwd == "" && rec.Cwd != "" {
@@ -443,7 +493,70 @@ func readSessionMeta(path string) (string, string) {
 			break
 		}
 	}
+	// Fallback: decode the parent directory name. This is lossy for
+	// hyphenated repos (talent-mesh would become /talent/mesh) but it's
+	// strictly better than dropping the session from the picker entirely.
+	if cwd == "" {
+		dir := filepath.Base(filepath.Dir(path))
+		if strings.HasPrefix(dir, "-") {
+			cwd = "/" + strings.ReplaceAll(strings.TrimPrefix(dir, "-"), "-", "/")
+		}
+	}
 	return cwd, first
+}
+
+// decodeClaudeProjectDir converts Claude's "-home-openova-repos-iogrid"
+// directory name back to "/home/openova/repos/iogrid". Hyphens are
+// ambiguous (talent-mesh could be "/talent/mesh" or "/talent-mesh") —
+// we resolve by trying each interpretation and picking the one that
+// exists on disk. Falls back to naive "-"→"/" replacement if no
+// candidate is found.
+func decodeClaudeProjectDir(dirName string) string {
+	if !strings.HasPrefix(dirName, "-") {
+		return ""
+	}
+	trimmed := strings.TrimPrefix(dirName, "-")
+	// Recursive search: at each hyphen, try both "/" and literal "-" and
+	// pick the longest existing prefix. Bounded to keep cost predictable.
+	resolved := resolveClaudeDirName("/", trimmed, 0)
+	if resolved != "" {
+		return resolved
+	}
+	// Last-resort: naive decode.
+	return "/" + strings.ReplaceAll(trimmed, "-", "/")
+}
+
+func resolveClaudeDirName(prefix, remaining string, depth int) string {
+	if depth > 12 || remaining == "" {
+		full := prefix + remaining
+		if _, err := os.Stat(full); err == nil {
+			return full
+		}
+		return ""
+	}
+	// Try splitting at the leftmost hyphen.
+	idx := strings.IndexByte(remaining, '-')
+	if idx < 0 {
+		full := prefix + remaining
+		if _, err := os.Stat(full); err == nil {
+			return full
+		}
+		return ""
+	}
+	head := remaining[:idx]
+	tail := remaining[idx+1:]
+	// Prefer the slash interpretation when the prefix+head exists as a dir.
+	if head != "" {
+		slashCandidate := prefix + head
+		if fi, err := os.Stat(slashCandidate); err == nil && fi.IsDir() {
+			r := resolveClaudeDirName(slashCandidate+"/", tail, depth+1)
+			if r != "" {
+				return r
+			}
+		}
+	}
+	// Else try keeping the hyphen literal and recursing.
+	return resolveClaudeDirName(prefix, head+"-"+tail, depth+1)
 }
 
 func truncate(s string, n int) string {

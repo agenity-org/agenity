@@ -43,6 +43,50 @@ type SessionInfo struct {
 
 	// Set non-empty only when Role == RoleShepherd. Tribes this shepherd oversees.
 	Shepherding []string `json:"shepherding,omitempty"`
+
+	// Activity counters (populated by the runtime's per-session sniffer).
+	// Reported on every Get/List; values are wall-clock snapshots.
+	TotalBytes    int64   `json:"total_bytes"`
+	Bytes5m       int64   `json:"bytes_5m"`
+	IdleSeconds   float64 `json:"idle_seconds"`
+}
+
+// sessionActivity holds the running tally for one session — used by the
+// runtime's per-session sniffer goroutine to populate SessionInfo's
+// activity counters without locking the main runtime.
+type sessionActivity struct {
+	mu         sync.Mutex
+	total      int64
+	last       time.Time
+	created    time.Time
+	recent     []recentChunk // chunks within the last 5 minutes
+}
+
+type recentChunk struct {
+	at   time.Time
+	size int
+}
+
+// snapshot returns a copy of the activity counters with the 5-min
+// window trimmed to the current wall clock. Safe to call from any
+// goroutine (locks internally).
+func (a *sessionActivity) snapshot() (total int64, bytes5m int64, idleSeconds float64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cutoff := time.Now().Add(-5 * time.Minute)
+	for len(a.recent) > 0 && a.recent[0].at.Before(cutoff) {
+		a.recent = a.recent[1:]
+	}
+	for _, c := range a.recent {
+		bytes5m += int64(c.size)
+	}
+	total = a.total
+	if a.last.IsZero() {
+		idleSeconds = time.Since(a.created).Seconds()
+	} else {
+		idleSeconds = time.Since(a.last).Seconds()
+	}
+	return
 }
 
 // Grant is a cross-tribe permission edge: agents in fromTribe may
@@ -79,6 +123,11 @@ type Runtime struct {
 	// hook here so dynamically-spawned agents (via chepherd.spawn MCP
 	// tool) get their output watched for @target relay routing.
 	spawnHooks []func(*session.Session, string)
+
+	// activity counters by session ID. Populated by per-session sniffer
+	// goroutines attached at Spawn time; read on every List/Get to fill
+	// SessionInfo.{TotalBytes,Bytes5m,IdleSeconds}.
+	activity map[string]*sessionActivity
 }
 
 // AddSpawnHook registers a callback invoked after every successful Spawn.
@@ -91,9 +140,11 @@ func (r *Runtime) AddSpawnHook(hook func(*session.Session, string)) {
 
 // HumanInboxEntry is a routed @human message in the dashboard's "Messages → Human" view.
 type HumanInboxEntry struct {
+	ID   string    `json:"id"`
 	From string    `json:"from"`
 	Body string    `json:"body"`
 	At   time.Time `json:"at"`
+	Read bool      `json:"read"`
 }
 
 // New constructs an empty Runtime rooted at stateDir.
@@ -109,6 +160,7 @@ func New(stateDir string) (*Runtime, error) {
 		byName:   make(map[string]string),
 		info:     make(map[string]*SessionInfo),
 		stateDir: stateDir,
+		activity: make(map[string]*sessionActivity),
 	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
@@ -222,10 +274,12 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		info.Shepherding = []string{spec.Tribe}
 	}
 
+	act := &sessionActivity{created: time.Now()}
 	r.mu.Lock()
 	r.sessions[id] = s
 	r.byName[spec.Name] = id
 	r.info[id] = info
+	r.activity[id] = act
 	hooks := append([]func(*session.Session, string){}, r.spawnHooks...)
 	r.mu.Unlock()
 
@@ -233,11 +287,45 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		// Non-fatal: session is live, just won't survive restart.
 		fmt.Fprintf(os.Stderr, "runtime: persist %s failed: %v\n", id, err)
 	}
+	// Spawn a sniffer goroutine on the PTY output stream. It writes to
+	// the activity tracker without ever touching r.mu so it can't deadlock
+	// any caller of List/Get.
+	go r.runActivitySniffer(s, act)
 	for _, h := range hooks {
 		h(s, spec.Name)
 	}
 	r.broadcast()
 	return info, s, nil
+}
+
+// runActivitySniffer subscribes to a session's PTY output stream and
+// tallies bytes per chunk. Stops when the session closes.
+func (r *Runtime) runActivitySniffer(s *session.Session, act *sessionActivity) {
+	sub, _, err := s.Subscribe(256)
+	if err != nil {
+		return
+	}
+	defer s.Unsubscribe(sub)
+	for {
+		select {
+		case <-sub.Done:
+			return
+		case chunk, ok := <-sub.Ch:
+			if !ok {
+				return
+			}
+			act.mu.Lock()
+			act.total += int64(len(chunk))
+			act.last = time.Now()
+			act.recent = append(act.recent, recentChunk{at: act.last, size: len(chunk)})
+			// Trim windows older than 5 min so this slice doesn't grow unbounded.
+			cutoff := time.Now().Add(-5 * time.Minute)
+			for len(act.recent) > 0 && act.recent[0].at.Before(cutoff) {
+				act.recent = act.recent[1:]
+			}
+			act.mu.Unlock()
+		}
+	}
 }
 
 // Assign updates an existing session's tribe + role. Used for transfer_adam,
@@ -311,12 +399,41 @@ func (r *Runtime) SessionsByTribe(tribe string) []*session.Session {
 // HumanInbox implements messagebus.SessionRegistry.
 func (r *Runtime) HumanInbox(from, body string) {
 	r.mu.Lock()
-	r.humanInbox = append(r.humanInbox, HumanInboxEntry{From: from, Body: body, At: time.Now()})
+	id := fmt.Sprintf("msg-%d", time.Now().UnixNano())
+	r.humanInbox = append(r.humanInbox, HumanInboxEntry{ID: id, From: from, Body: body, At: time.Now(), Read: false})
 	if len(r.humanInbox) > 500 {
 		r.humanInbox = r.humanInbox[len(r.humanInbox)-500:]
 	}
 	r.cond.Broadcast()
 	r.mu.Unlock()
+}
+
+// MarkInboxRead flips Read=true on a specific message by ID (idempotent).
+// Returns false if the ID wasn't found.
+func (r *Runtime) MarkInboxRead(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.humanInbox {
+		if r.humanInbox[i].ID == id {
+			r.humanInbox[i].Read = true
+			return true
+		}
+	}
+	return false
+}
+
+// MarkAllInboxRead marks every entry Read=true. Returns count touched.
+func (r *Runtime) MarkAllInboxRead() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for i := range r.humanInbox {
+		if !r.humanInbox[i].Read {
+			r.humanInbox[i].Read = true
+			n++
+		}
+	}
+	return n
 }
 
 // IsCrossTribeGranted implements messagebus.SessionRegistry.
@@ -344,13 +461,27 @@ func (r *Runtime) IsSessionPaused(s *session.Session) bool {
 	return false
 }
 
-// List returns a snapshot of all session metadata.
+// List returns a snapshot of all session metadata, augmented with the
+// activity counters from each session's sniffer.
 func (r *Runtime) List() []*SessionInfo {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]*SessionInfo, 0, len(r.info))
-	for _, info := range r.info {
-		c := *info
+	// Copy out under the lock; compute snapshot() outside it (sniffer
+	// has its own mu).
+	type pair struct {
+		info *SessionInfo
+		act  *sessionActivity
+	}
+	pairs := make([]pair, 0, len(r.info))
+	for id, info := range r.info {
+		pairs = append(pairs, pair{info: info, act: r.activity[id]})
+	}
+	r.mu.Unlock()
+	out := make([]*SessionInfo, 0, len(pairs))
+	for _, p := range pairs {
+		c := *p.info
+		if p.act != nil {
+			c.TotalBytes, c.Bytes5m, c.IdleSeconds = p.act.snapshot()
+		}
 		out = append(out, &c)
 	}
 	return out

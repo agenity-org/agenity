@@ -37,6 +37,7 @@
   });
   let folderQuery = $state('');
   let folderFocused = $state(false);
+  let folderSuppressed = $state(false); // true after pick — hide until user types
   let allFolders = $state([]);
   let confirmDialog = $state(null); // { title, body, onConfirm }
   let claudeSessions = $state([]);
@@ -208,6 +209,7 @@
     spawnForm.cwd = path;
     folderQuery = path;
     folderFocused = false;
+    folderSuppressed = true; // stays hidden until user types again
     if (spawnForm.mode === 'resume') refreshClaudeSessions(path);
     if (!spawnForm.name) spawnForm.name = autoName(path);
   }
@@ -265,6 +267,39 @@
       }
     } catch (e) { spawnError = String(e); }
     finally { spawnBusy = false; }
+  }
+
+  async function markRead(id) {
+    // Optimistic: flip locally then sync.
+    inbox = inbox.map(m => m.id === id ? { ...m, read: true } : m);
+    try { await fetch(`${API}/inbox/${encodeURIComponent(id)}/read`, { method: 'POST' }); } catch {}
+  }
+  async function markAllRead() {
+    inbox = inbox.map(m => ({ ...m, read: true }));
+    try { await fetch(`${API}/inbox/read-all`, { method: 'POST' }); } catch {}
+  }
+
+  function formatBytes(n) {
+    if (n == null) return '—';
+    if (n < 1024) return n + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KiB';
+    return (n/1024/1024).toFixed(2) + ' MiB';
+  }
+  function relTimeShort(seconds) {
+    if (seconds == null) return '—';
+    if (seconds < 60) return Math.floor(seconds) + 's';
+    if (seconds < 3600) return Math.floor(seconds/60) + 'm';
+    return Math.floor(seconds/3600) + 'h ' + Math.floor((seconds%3600)/60) + 'm';
+  }
+  function relTime(ts) {
+    if (!ts) return '';
+    const s = Math.floor((Date.now() - new Date(ts).getTime())/1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s/60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m/60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h/24)}d ago`;
   }
 
   async function pauseSession(paused) {
@@ -402,11 +437,22 @@
       </section>
 
       {#if inbox.length}
-        <section style="margin-top: 1.2rem;">
-          <h2>Human inbox <span class="count">({inbox.length})</span></h2>
+        {@const unread = inbox.filter(m => !m.read).length}
+        <section style="margin-top: 1.2rem;" data-testid="inbox">
+          <h2 class="inbox-h2">
+            Inbox
+            {#if unread > 0}<span class="unread-badge">{unread}</span>{/if}
+            {#if unread > 0}<button class="link-btn" on:click={markAllRead}>mark all read</button>{/if}
+          </h2>
           <ul class="inbox">
-            {#each inbox.slice(-5).reverse() as m}
-              <li><strong>@{m.from}</strong> · {m.body}</li>
+            {#each inbox.slice(-10).reverse() as m (m.id)}
+              <li class:unread={!m.read} on:click={() => markRead(m.id)} title="Click to mark read">
+                <div class="inbox-meta">
+                  <strong>@{m.from}</strong>
+                  <span class="inbox-when">{relTime(m.at)}</span>
+                </div>
+                <div class="inbox-body">{m.body}</div>
+              </li>
             {/each}
           </ul>
         </section>
@@ -444,13 +490,12 @@
           {/if}
         </dl>
 
-        <h2 style="margin-top:1.3rem;">Scorecard</h2>
+        <h2 style="margin-top:1.3rem;">Activity</h2>
         <div class="scorecard">
-          <div class="score-row"><span>G — goal clarity</span><span class="score-val">—</span></div>
-          <div class="score-row"><span>V — velocity</span><span class="score-val">—</span></div>
-          <div class="score-row"><span>F — focus</span><span class="score-val">—</span></div>
-          <div class="score-row"><span>E — end-state proximity</span><span class="score-val">—</span></div>
-          <p class="score-note">Analyzer goroutine not yet wired (follow-up).</p>
+          <div class="score-row"><span>Idle</span><span class="score-val">{selectedInfo.idle_seconds != null ? relTimeShort(selectedInfo.idle_seconds) : '—'}</span></div>
+          <div class="score-row"><span>Bytes / 5min</span><span class="score-val">{formatBytes(selectedInfo.bytes_5m)}</span></div>
+          <div class="score-row"><span>Total bytes</span><span class="score-val">{formatBytes(selectedInfo.total_bytes)}</span></div>
+          <div class="score-row"><span>Heartbeat</span><span class="score-val">{selectedInfo.bytes_5m > 0 ? '● live' : '○ idle'}</span></div>
         </div>
 
         <h2 style="margin-top:1.3rem;">Actions</h2>
@@ -489,11 +534,13 @@
           <span>Working directory <em>(start typing to filter)</em></span>
           <div class="autocomplete">
             <input type="text" bind:value={folderQuery}
-                   on:focus={() => { folderFocused = true; if (allFolders.length===0) loadAllFolders(); }}
-                   on:blur={() => setTimeout(() => folderFocused = false, 250)}
+                   on:input={() => { folderSuppressed = false; }}
+                   on:focus={() => { folderFocused = true; folderSuppressed = false; if (allFolders.length===0) loadAllFolders(); }}
+                   on:blur={() => setTimeout(() => folderFocused = false, 200)}
+                   on:keydown={(e) => { if (e.key === 'Escape') { folderSuppressed = true; e.target.blur(); } }}
                    placeholder="/home/openova/repos/yourproject" autocomplete="off"
                    data-testid="spawn-cwd-input" />
-            {#if (folderFocused || folderQuery) && folderResults.length > 0}
+            {#if !folderSuppressed && folderFocused && folderResults.length > 0}
               <ul class="suggestions" data-testid="spawn-cwd-suggestions">
                 {#each folderResults as f}
                   <li on:mousedown|preventDefault={() => pickFolder(f.path)}>
@@ -693,9 +740,19 @@
   .row2 { font-size: 0.8rem; color: var(--fg-muted); margin-top: 0.2rem; padding-left: 1.3rem; }
   .badge { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: var(--border-strong); color: var(--fg-muted); }
 
+  .inbox-h2 { display: flex; align-items: center; gap: 0.5rem; }
+  .unread-badge { background: var(--accent); color: #000; border-radius: 9px; padding: 0.05rem 0.5rem; font-size: 0.72rem; font-weight: 700; }
+  .link-btn { background: transparent; border: none; color: var(--accent-2); cursor: pointer; font-size: 0.74rem; padding: 0; text-decoration: underline; margin-left: auto; }
+  .link-btn:hover { color: var(--accent); }
   .inbox { list-style: none; padding: 0; margin: 0; }
-  .inbox li { padding: 0.45rem 0.4rem; font-size: 0.85rem; color: var(--fg); border-bottom: 1px solid var(--border); }
-  .inbox li strong { color: var(--accent); }
+  .inbox li { padding: 0.5rem 0.55rem; font-size: 0.84rem; color: var(--fg-muted); border-left: 3px solid transparent; border-bottom: 1px solid var(--border); cursor: pointer; transition: background-color 0.15s; }
+  .inbox li:hover { background: var(--bg-elev); }
+  .inbox li.unread { border-left-color: var(--accent); color: var(--fg); background: rgba(255,165,0,0.04); }
+  .inbox li.unread strong { color: var(--accent); }
+  .inbox-meta { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.2rem; }
+  .inbox-meta strong { font-size: 0.85rem; color: var(--accent-2); font-weight: 600; }
+  .inbox-when { font-size: 0.72rem; color: var(--fg-faint); }
+  .inbox-body { line-height: 1.35; }
 
   /* Center pane */
   .center { flex: 1; display: flex; flex-direction: column; background: var(--bg); min-width: 0; min-height: 0; }
