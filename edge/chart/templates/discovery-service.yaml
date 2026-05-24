@@ -1,0 +1,12 @@
+{{- if .Values.discovery.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: discovery
+  labels: { app: discovery }
+spec:
+  type: ClusterIP
+  selector: { app: discovery }
+  ports:
+    - { name: https, port: {{ .Values.discovery.service.port }}, targetPort: https }
+{{- end }}

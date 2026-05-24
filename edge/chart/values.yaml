@@ -1,0 +1,45 @@
+coturn:
+  enabled: true
+  image:
+    repository: coturn/coturn
+    tag: "4.6.2"
+  # External STUN port + TURN port — must reach the public IP via NodePort
+  # or LoadBalancer. For a Sovereign with Cilium GW, prefer LB with a
+  # reserved IP allocated from the operator's pool.
+  stunPort: 3478
+  turnTLSPort: 5349
+  # Realm — visible to clients during TURN auth challenges.
+  realm: chepherd.io
+  # Static auth secret (TURN long-term-credential mode) — also reflected
+  # into Secret. Operators rotate via reflector/external-secrets.
+  authSecretRef:
+    name: coturn-auth
+    key: shared-secret
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 1, memory: 256Mi }
+  # Bandwidth cap for free tier — protects the host Sovereign from a
+  # runaway TURN relay (15% of mobile sessions fall back to TURN).
+  maxBpsPerSession: 256000  # 256 kbps; fine for chepherd dashboard updates
+
+discovery:
+  enabled: true
+  image:
+    repository: ghcr.io/chepherd/chepherd-discovery
+    tag: "0.5.0"
+  replicas: 1
+  service:
+    port: 8443
+  database:
+    # Tiny — pairing tokens + device records only. SQLite via emptyDir is
+    # fine for v0.5; promote to CNPG when traffic warrants.
+    type: sqlite-emptydir
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits:   { cpu: 500m, memory: 128Mi }
+
+# Operator-visible "powered by OpenOva" branding lockup. Burnt into the
+# discovery service's pairing-success HTML page + the response headers.
+branding:
+  poweredBy: OpenOva
+  poweredByURL: https://openova-io.github.io

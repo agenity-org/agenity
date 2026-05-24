@@ -1,0 +1,34 @@
+# Chepherd v0.5+ runtime — systemd user unit
+#
+# Install via the chepherd .deb/.rpm package, or manually:
+#   mkdir -p ~/.config/systemd/user
+#   cp /usr/lib/systemd/user/chepherd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now chepherd
+#
+# Logs: journalctl --user -u chepherd -f
+
+[Unit]
+Description=chepherd — agent runtime + supervisor + multi-agent dashboard
+Documentation=https://chepherd.io
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/chepherd run --headless
+WorkingDirectory=%h
+Restart=on-failure
+RestartSec=10s
+StartLimitInterval=10min
+StartLimitBurst=5
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Modest memory + CPU caps — the runtime is light; agent PTYs are the
+# heavy bit and they cap themselves via SANDBOX_RING_BUFFER_BYTES.
+MemoryMax=1G
+CPUQuota=200%
+StandardOutput=journal
+StandardError=journal
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,106 @@
+version: 2
+
+project_name: chepherd
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: chepherd
+    main: .
+    binary: chepherd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: chepherd
+    formats: ["tar.gz"]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE*
+      - README.md
+      - internal/ptyhost/LICENSE-NOTICE
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+
+# macOS .pkg installer — signed/notarized in CI (Apple Developer ID).
+# Run as: goreleaser release with APPLE_CERT + APPLE_PASSWORD env set.
+# Locally without signing creds, --skip=sign --skip=publish.
+nfpms:
+  - id: chepherd-pkg
+    package_name: chepherd
+    homepage: https://chepherd.io
+    maintainer: chepherd team <hi@chepherd.io>
+    description: "Agent runtime + supervisor + multi-agent dashboard for AI engineering"
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/local/bin
+    contents:
+      - src: ./scripts/systemd/chepherd.service
+        dst: /usr/lib/systemd/user/chepherd.service
+        type: config
+      - src: ./internal/ptyhost/LICENSE-NOTICE
+        dst: /usr/share/doc/chepherd/LICENSE-NOTICE.ptyhost
+
+# Checksums for download-page integrity verification.
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# Snapshot builds for dev/CI (no tag required).
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+# Release notes pulled from git log + EPIC issue references.
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "Merge pull request"
+  groups:
+    - title: "Features"
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: "Refactor / cleanup"
+      regexp: "^.*(refactor|chore)[(\\w)]*:+.*$"
+      order: 2
+
+# Homebrew tap for `brew install chepherd/tap/chepherd`.
+brews:
+  - name: chepherd
+    repository:
+      owner: chepherd
+      name: homebrew-tap
+    homepage: https://chepherd.io
+    description: "Agent runtime + supervisor + multi-agent dashboard for AI engineering"
+    license: Apache-2.0
+    install: |
+      bin.install "chepherd"
+    test: |
+      system "#{bin}/chepherd version"

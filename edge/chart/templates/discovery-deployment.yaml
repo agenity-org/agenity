@@ -1,0 +1,31 @@
+{{- if .Values.discovery.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discovery
+  labels: { app: discovery }
+spec:
+  replicas: {{ .Values.discovery.replicas }}
+  selector: { matchLabels: { app: discovery } }
+  template:
+    metadata: { labels: { app: discovery } }
+    spec:
+      containers:
+        - name: discovery
+          image: {{ .Values.discovery.image.repository }}:{{ .Values.discovery.image.tag }}
+          ports:
+            - { name: https, containerPort: {{ .Values.discovery.service.port }}, protocol: TCP }
+          env:
+            - name: DISCOVERY_DB_PATH
+              value: /var/discovery/discovery.db
+            - name: BRANDING_POWERED_BY
+              value: {{ .Values.branding.poweredBy | quote }}
+            - name: BRANDING_POWERED_BY_URL
+              value: {{ .Values.branding.poweredByURL | quote }}
+          volumeMounts:
+            - { name: db, mountPath: /var/discovery }
+          resources: {{- toYaml .Values.discovery.resources | nindent 12 }}
+      volumes:
+        - name: db
+          emptyDir: {}
+{{- end }}
