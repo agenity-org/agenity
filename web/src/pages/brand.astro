@@ -1,0 +1,80 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="chepherd brand">
+  <main class="container" style="padding: 4rem 0;">
+    <h1 style="font-size: 2.5rem;">Brand kit</h1>
+    <p style="font-size: 1.1rem; color: #ccc; margin: 1rem 0 2.5rem;">
+      Visual identity for chepherd v0.5+. Press / partners welcome to use these assets per the Apache 2.0 license + the rules below.
+    </p>
+
+    <h2 style="margin-top: 1.5rem;">The mark</h2>
+    <p style="color: #aaa; margin-bottom: 1rem;">
+      Primary mark is the <strong>asterisk-cross glyph</strong> (U+273B, "✻") in chepherd orange.
+      It evokes the prophet/star symbol (Chepherd as the watcher) and reads at any size from a 32×32 favicon to a 5-line ASCII banner.
+    </p>
+    <div style="background: #111; padding: 2rem; border-radius: 6px; display: flex; gap: 3rem; align-items: center;">
+      <span style="font-size: 4rem; color: #ffa500;">✻</span>
+      <span style="font-size: 4rem; color: #ffa500;">✻ chepherd</span>
+      <span style="font-size: 2rem; color: #ffa500;">✻ chepherd 0.5</span>
+    </div>
+
+    <h2 style="margin-top: 2.5rem;">Wordmark</h2>
+    <p style="color: #aaa; margin-bottom: 1rem;">
+      Lowercase "chepherd" in a system sans-serif (Inter or your default UI font is fine — there's no custom typeface).
+      Pair with the mark for the brand lockup; use alone for inline references.
+    </p>
+
+    <h2 style="margin-top: 2.5rem;">Colors</h2>
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-top: 1rem;">
+      <div style="background: #ffa500; padding: 1.5rem; border-radius: 6px; color: #000;">
+        <strong>--accent</strong><br />#FFA500<br /><small>chepherd orange (worker, brand)</small>
+      </div>
+      <div style="background: #87ceeb; padding: 1.5rem; border-radius: 6px; color: #000;">
+        <strong>--accent-2</strong><br />#87CEEB<br /><small>shepherd blue (meta-supervisor)</small>
+      </div>
+      <div style="background: #0a0a0a; padding: 1.5rem; border-radius: 6px; color: #fff; border: 1px solid #333;">
+        <strong>--bg</strong><br />#0A0A0A<br /><small>page background</small>
+      </div>
+      <div style="background: #f5f5f5; padding: 1.5rem; border-radius: 6px; color: #000;">
+        <strong>--fg</strong><br />#F5F5F5<br /><small>primary text</small>
+      </div>
+    </div>
+
+    <h2 style="margin-top: 2.5rem;">Role-based color use</h2>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li><strong style="color: #ffa500;">✻ shepherd</strong> — orange, the prophet color (Chepherd, the watcher)</li>
+      <li><strong style="color: #87ceeb;">● worker</strong> — blue, the doer color (Adam + peers)</li>
+      <li><strong style="color: #888;">⏸ paused</strong> — grey</li>
+      <li><strong style="color: #ff6b6b;">crisis</strong> — red (used sparingly for genuine warnings)</li>
+    </ul>
+
+    <h2 style="margin-top: 2.5rem;">Typography</h2>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li><strong>UI sans-serif</strong>: <code>ui-sans-serif, system-ui, -apple-system, sans-serif</code> — body, headings</li>
+      <li><strong>Monospace</strong>: <code>ui-monospace, "JetBrains Mono", monospace</code> — code, CLI commands, session names</li>
+    </ul>
+
+    <h2 style="margin-top: 2.5rem;">"Powered by OpenOva" lockup</h2>
+    <p style="color: #aaa; margin-bottom: 1rem;">
+      chepherd.io edge infrastructure (STUN/TURN, discovery, hosted demo) is powered by OpenOva. Show the lockup in:
+    </p>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li>The pairing-success screen in the mobile app</li>
+      <li>The Providers panel — next to the NewAPI entry</li>
+      <li>The footer of every chepherd.io page</li>
+    </ul>
+    <div style="background: #111; padding: 2rem; border-radius: 6px; margin-top: 1rem;">
+      <p style="color: #888; font-size: 0.9rem;">powered by</p>
+      <p style="color: #ffa500; font-size: 1.5rem; font-weight: 700;">OpenOva</p>
+    </div>
+
+    <h2 style="margin-top: 2.5rem;">Don't</h2>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li>Don't recolor the mark — orange or a single neutral (white/black) only</li>
+      <li>Don't add a drop shadow or 3D effect to the mark</li>
+      <li>Don't stretch the wordmark</li>
+      <li>Don't use the mark next to a competitor's mark in a way that implies endorsement</li>
+    </ul>
+  </main>
+</Layout>

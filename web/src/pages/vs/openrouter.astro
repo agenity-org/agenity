@@ -1,0 +1,46 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="chepherd vs. OpenRouter">
+  <main class="container" style="padding: 4rem 0;">
+    <h1 style="font-size: 2.5rem;">OpenOva NewAPI via chepherd vs. OpenRouter directly</h1>
+    <p style="font-size: 1.1rem; color: #ccc; margin: 1rem 0 2rem;">
+      Both give you many models behind one API. What's different?
+    </p>
+
+    <table style="width: 100%; border-collapse: collapse; margin: 2rem 0;">
+      <thead>
+        <tr>
+          <th style="text-align: left; padding: 0.75rem; border-bottom: 1px solid #1e1e1e;">Feature</th>
+          <th style="text-align: left; padding: 0.75rem; border-bottom: 1px solid #1e1e1e;">OpenRouter</th>
+          <th style="text-align: left; padding: 0.75rem; border-bottom: 1px solid #1e1e1e; color: #ffa500;">OpenOva NewAPI</th>
+        </tr>
+      </thead>
+      <tbody style="color: #aaa;">
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">Many models behind one API</td><td>✓</td><td>✓</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">OpenAI-compatible /v1/chat/completions</td><td>✓</td><td>✓</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">Bearer-token auth</td><td>✓</td><td>✓</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">Hosted, no self-hosting</td><td>✓</td><td>—</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">Self-hostable</td><td>—</td><td style="color:#ffa500;">✓ (your Sovereign)</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">Data stays in your control</td><td>—</td><td style="color:#ffa500;">✓</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">Per-org billing + observability</td><td>limited</td><td style="color:#ffa500;">✓</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">mDNS auto-discovery on your network</td><td>—</td><td style="color:#ffa500;">✓</td></tr>
+        <tr style="border-bottom: 1px solid #1e1e1e;"><td style="padding: 0.75rem;">Free quota</td><td>per-model</td><td>operator-set</td></tr>
+      </tbody>
+    </table>
+
+    <h2 style="margin-top: 2rem;">When OpenRouter is right</h2>
+    <p style="color: #aaa;">
+      Hosted, no infrastructure to run, want to try many models without commitment. chepherd has OpenRouter as a first-class provider for exactly this case.
+    </p>
+
+    <h2 style="margin-top: 2rem;">When NewAPI (via chepherd) is right</h2>
+    <p style="color: #aaa;">
+      You're running an OpenOva Sovereign (or your team is) — NewAPI gives you the same many-models-behind-one-API experience with your data staying on infrastructure you control. chepherd discovers your Sovereign via mDNS when you're on its network and offers it as a one-tap setup option.
+    </p>
+
+    <p style="margin-top: 2.5rem; padding: 1.5rem; background: #111; border-left: 3px solid #ffa500;">
+      <strong>Use both:</strong> nothing stops you. Configure OpenRouter as your default + NewAPI for sensitive workloads where data residency matters. chepherd supports multiple providers simultaneously.
+    </p>
+  </main>
+</Layout>

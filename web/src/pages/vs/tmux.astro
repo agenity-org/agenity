@@ -1,0 +1,36 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="chepherd vs. tmux">
+  <main class="container" style="padding: 4rem 0;">
+    <h1 style="font-size: 2.5rem;">chepherd vs. tmux</h1>
+    <p style="font-size: 1.1rem; color: #ccc; margin: 1rem 0 2rem;">
+      "I used to manage my Claude sessions in tmux. What does chepherd add?"
+    </p>
+
+    <h2 style="margin-top: 2rem;">What tmux gives you</h2>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li>Persistent terminal sessions that survive disconnect</li>
+      <li>Multiple panes per window</li>
+      <li>You can attach from a different terminal</li>
+    </ul>
+
+    <h2 style="margin-top: 2.5rem;">What chepherd adds</h2>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li><strong style="color:#ffa500;">Multi-agent collaboration</strong> — agents talk to each other via <code>@target</code>, not just to you. You can join the conversation any time.</li>
+      <li><strong style="color:#ffa500;">A meta-supervisor</strong> — Chepherd watches your working agent's methodology + quality. 4-eyes principle, on by default. Catches drift, stuck patterns, scope creep.</li>
+      <li><strong style="color:#ffa500;">Dashboard with structure</strong> — sessions grouped by tribe, role icons, scorecard, log strip. Visual at-a-glance.</li>
+      <li><strong style="color:#ffa500;">Web + mobile clients</strong> — same backend serves your laptop's browser, your phone, and a hosted Sovereign.</li>
+      <li><strong style="color:#ffa500;">No tmux to learn</strong> — chepherd hosts PTYs in-process. Press <code>i</code> to interact, <code>Esc</code> to leave. No prefix key, no <code>Ctrl-B D</code>.</li>
+    </ul>
+
+    <h2 style="margin-top: 2.5rem;">What chepherd doesn't replace</h2>
+    <p style="color: #aaa;">
+      tmux is still the right tool for shell-only sessions (your editor, your build process, your random shell hacks). chepherd is specifically for AI agents — Claude Code, qwen-code, aider, etc. — and the multi-agent collaboration patterns that emerge when you have more than one running.
+    </p>
+
+    <p style="margin-top: 2.5rem; padding: 1.5rem; background: #111; border-left: 3px solid #ffa500;">
+      <strong>The honest summary:</strong> if you only ever run one Claude session at a time and you're happy managing it manually, plain Claude Code (or tmux + Claude Code) is fine. chepherd's value shows up when you have <em>multiple</em> agents working in parallel and want them visible, coordinated, and supervised — without you ferrying questions between them.
+    </p>
+  </main>
+</Layout>

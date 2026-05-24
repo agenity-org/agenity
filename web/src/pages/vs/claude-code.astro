@@ -1,0 +1,49 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+<Layout title="chepherd vs. Claude Code's sub-agents">
+  <main class="container" style="padding: 4rem 0;">
+    <h1 style="font-size: 2.5rem;">chepherd-spawned peers vs. Claude Code's sub-agents</h1>
+    <p style="font-size: 1.1rem; color: #ccc; margin: 1rem 0 2rem;">
+      Claude Code can already spawn sub-agents and run worktrees. Why use <code>chepherd.spawn_session</code> instead?
+    </p>
+
+    <h2 style="margin-top: 1.5rem;">Claude Code's built-in sub-agents</h2>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li>Run inside Adam's process boundary</li>
+      <li>You only see what Adam reports back</li>
+      <li>Token cost rolled into Adam's bill, not separately attributable</li>
+      <li>Can't be coached or replaced independently</li>
+      <li>Adam is the only entity that talks to them</li>
+    </ul>
+
+    <h2 style="margin-top: 2.5rem;">chepherd-spawned peers</h2>
+    <ul style="color: #aaa; line-height: 1.8;">
+      <li><strong style="color:#ffa500;">Visible in the dashboard</strong> — every peer appears as a session with role + tribe</li>
+      <li><strong style="color:#ffa500;">Addressable by name</strong> — <code>@iogrid-1: …</code> reaches them; you can join the conversation</li>
+      <li><strong style="color:#ffa500;">Independently supervisable</strong> — Chepherd (the meta-shepherd) watches them too, flags issues</li>
+      <li><strong style="color:#ffa500;">Replaceable</strong> — if a peer gets stuck, pause it, transfer its role, swap a different agent in</li>
+      <li><strong style="color:#ffa500;">Multi-agent conversation</strong> — peers can talk to each other, not just to Adam</li>
+      <li><strong style="color:#ffa500;">Token economics</strong> — chepherd can rate-limit + audit collectively</li>
+    </ul>
+
+    <h2 style="margin-top: 2.5rem;">When to use which</h2>
+    <p style="color: #aaa;">
+      Claude Code's internal sub-agents are great for short, contained tasks — a 30-second fork to count files, search a codebase, or run a single tool call. <code>chepherd.spawn_session</code> is the right call for long-running peers that should be:
+    </p>
+    <ul style="color: #aaa; line-height: 1.8; margin-top: 0.5rem;">
+      <li>Watched by the operator</li>
+      <li>Coordinated with other peers</li>
+      <li>Hand-offable to the human if needed</li>
+      <li>Tracked in the audit log</li>
+    </ul>
+
+    <p style="margin-top: 2rem;">
+      Adam's system prompt encourages the chepherd-spawn path for substantive work. Quick file-search sub-agents stay internal to Claude.
+    </p>
+
+    <p style="margin-top: 2rem; padding: 1.5rem; background: #111; border-left: 3px solid #ffa500;">
+      <strong>Bottom line:</strong> we don't disable Claude's features. We give Adam a better tool for the multi-agent case + a system prompt that tells it when to reach for ours.
+    </p>
+  </main>
+</Layout>
