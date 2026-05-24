@@ -252,8 +252,15 @@ func widthBreakpoint(w int) int {
 }
 
 // renderList rebuilds the session table.
+//
+// Preserves the user's current row selection across the periodic
+// re-render. Without this, every tickerLoop tick (1s) would
+// Clear() + Select(1, 0) the table — wiping out any Down/Up navigation
+// the user did in the prior second. Founder reported this as "controls
+// freeze" because the highlight snapped back to row 1 every second.
 func (d *Dashboard) renderList() {
 	sessions := d.app.Sessions()
+	prevRow, _ := d.list.GetSelection()
 	d.list.Clear()
 
 	// Section title row (k9s convention: bold title + dim underline below)
@@ -307,17 +314,20 @@ func (d *Dashboard) renderList() {
 		d.list.SetCell(row, 4, tview.NewTableCell("  "+nextCell))
 	}
 
-	// Auto-select the first row only when the dashboard page is visible.
-	// Calling d.list.Select() steals focus back to the list, which freezes
-	// any overlay (detail, login, attach-modal, log-mode) that's currently
-	// on top — the user's Esc/t/Ctrl-C events end up at the obscured list
-	// where there's no handler for them. So: only nudge selection when
-	// the user is actually looking at the list.
+	// Restore the user's row selection after the rebuild. Founder
+	// reported "controls freeze" because we previously Select(1, 0)'d
+	// every render tick — wiping out their Down/Up arrow within 1
+	// second. Now we capture prevRow before Clear() and restore it,
+	// clamped to the valid range.
 	if d.app.currentPageIsDashboard() && d.list.GetRowCount() > 1 {
-		current, _ := d.list.GetSelection()
-		if current < 1 {
-			d.list.Select(1, 0)
+		target := prevRow
+		if target < 1 {
+			target = 1 // first render: land on first data row
 		}
+		if target >= d.list.GetRowCount() {
+			target = d.list.GetRowCount() - 1
+		}
+		d.list.Select(target, 0)
 	}
 }
 
