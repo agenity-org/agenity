@@ -64,7 +64,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	if cfg.SystemPromptPath == "" {
 		return fmt.Errorf("could not locate judge.md — set ~/.config/chepherd/judge.md")
 	}
-	stateDir := liveStateDir()
+	stateDir := daemonStateDir()
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
@@ -91,9 +91,9 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}
 }
 
-// liveStateDir is the canonical state directory for the LIVE daemon
+// daemonStateDir is the canonical state directory for the LIVE daemon
 // (~/.local/state/chepherd-go/). Distinct from shadow + Python paths.
-func liveStateDir() string {
+func daemonStateDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".local", "state", "chepherd-go")
 }
@@ -226,7 +226,7 @@ func tmuxPaste(tmuxName, message string) error {
 }
 
 func appendLiveLog(tmux string, v *daemon.Verdict, band daemon.TrustBand, intervalMin int, injected bool) {
-	path := filepath.Join(liveStateDir(), "chepherd.log")
+	path := filepath.Join(daemonStateDir(), "chepherd.log")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
