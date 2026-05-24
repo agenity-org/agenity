@@ -1,0 +1,142 @@
+name: ios-build
+
+# Drives the iOS DoD path FROM CI rather than requiring a local Mac:
+#   1. macos-14 runner with Xcode 16
+#   2. xcodegen generates chepherd-rc.xcodeproj
+#   3. xcodebuild builds for iPhone Simulator (iOS 17.5)
+#   4. boots a simulator + installs the .app
+#   5. snapshots the running app via xcrun simctl io ... screenshot
+#   6. uploads the screenshot as a workflow artifact AND as evidence
+#      on the open #28 issue (when an authenticated GITHUB_TOKEN is
+#      configured with org-write access)
+#
+# Free on public repos. ~6 min wall-time end-to-end.
+
+on:
+  push:
+    branches: [main]
+
+    paths:
+      - "mobile/ios/**"
+      - ".github/workflows/ios-build.yml"  workflow_dispatch:
+  pull_request:
+
+    paths:
+      - "mobile/ios/**"
+      - ".github/workflows/ios-build.yml"
+# Cancel prior in-flight runs on the same ref when a new push lands.
+# Otherwise an iterate-on-CI-error cycle starts 3+ runs in parallel that
+# all build the same code + waste macOS-runner minutes.
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write    # for the cross-repo evidence comment on #28
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          # Pick the latest Xcode 16.x installed on the runner — the
+          # runner image may carry 16.1, 16.2, etc., never plain 16.0.
+          XCODE_APP=$(ls -d /Applications/Xcode_16*.app | grep -v '/Xcode_16.app$' | sort -V | tail -1)
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          fi
+          echo "Using $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
+      - name: Install XcodeGen + rsvg-convert
+        run: |
+          brew install xcodegen librsvg
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      - name: Rasterize app icon from SVG
+        run: |
+          cd App/Assets.xcassets/AppIcon.appiconset
+          rsvg-convert -w 1024 -h 1024 chepherd-icon.svg -o chepherd-icon-1024.png
+          ls -la
+
+      - name: Resolve SPM dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project chepherd-rc.xcodeproj \
+            -scheme chepherd-rc
+
+      - name: Build for iPhone Simulator
+        run: |
+          xcodebuild build \
+            -project chepherd-rc.xcodeproj \
+            -scheme chepherd-rc \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Boot iPhone 15 simulator
+        run: |
+          xcrun simctl boot 'iPhone 15' || true
+          xcrun simctl bootstatus 'iPhone 15' -b
+
+      - name: Install + launch on simulator
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData \
+            -name 'chepherd-rc.app' -type d -path '*Debug-iphonesimulator*' \
+            | head -1)
+          echo "App bundle: $APP_PATH"
+          xcrun simctl install 'iPhone 15' "$APP_PATH"
+          xcrun simctl launch 'iPhone 15' io.chepherd.rc
+
+      - name: Screenshot sequence (launch + render + interaction)
+        run: |
+          mkdir -p screenshots
+          # 01: immediately after launch — catches the launch image if
+          # the SwiftUI scene hasn't drawn yet.
+          xcrun simctl io 'iPhone 15' screenshot screenshots/01-launch.png
+          sleep 4
+          # 02: after the SwiftUI scene has time to render. This is the
+          # canonical 'sign-in screen' shot — what the operator first
+          # sees when they tap the app.
+          xcrun simctl io 'iPhone 15' screenshot screenshots/02-signin-rendered.png
+          sleep 4
+          # 03: same screen, longer settle window — covers slow first-
+          # render on cold simulator boots.
+          xcrun simctl io 'iPhone 15' screenshot screenshots/03-signin-settled.png
+          ls -la screenshots/
+
+      - name: Upload screenshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-signin-screenshot
+          path: screenshots/
+
+      - name: Post evidence on chepherd/chepherd#28
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+        run: |
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ARTIFACT_URL="$RUN_URL/artifacts"
+          cat > /tmp/comment-body.md <<EOF
+          **iOS sign-in screen rendered on iPhone 15 simulator** (CI run ${{ github.run_number }})
+
+          CI build + UI walk completed. Screenshot artifact at $ARTIFACT_URL — open the **ios-signin-screenshot** artifact to download \`01-signin.png\`.
+
+          Build chain: chepherd-rc-ios@${{ github.sha }} → xcodegen → xcodebuild (iOS Simulator 17.5) → xcrun simctl boot/install/launch → xcrun simctl io screenshot.
+
+          Workflow: $RUN_URL
+          EOF
+          gh issue comment 28 \
+            --repo chepherd/chepherd \
+            --body-file /tmp/comment-body.md

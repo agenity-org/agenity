@@ -1,0 +1,119 @@
+name: android-build
+
+# Drives the Android DoD path from CI rather than requiring a local
+# Android SDK + emulator. Per CLAUDE.md P23 mechanism-3 (alternative
+# service path) — Ubuntu runners on GitHub Actions are free on public
+# repos and ship with Android SDK + KVM-accelerated emulators.
+
+on:
+  push:
+    branches: [main]
+
+    paths:
+      - "mobile/android/**"
+      - ".github/workflows/android-build.yml"  workflow_dispatch:
+  pull_request:
+
+    paths:
+      - "mobile/android/**"
+      - ".github/workflows/android-build.yml"
+# Cancel prior in-flight runs on the same ref. Avoids the multi-run
+# parallel pile-up seen in iterate-on-CI cycles where 3 emulator-boot
+# jobs all run the same code.
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install gradle-wrapper.jar (direct fetch)
+        run: |
+          # Download the canonical gradle-wrapper.jar directly from
+          # gradle's git repo. Avoids `gradle wrapper` which evaluates
+          # the project's plugins block + pulls AGP transitive deps
+          # from Maven Central — that path tripped on intermittent
+          # 403 Forbidden in CI run 26347845751.
+          mkdir -p gradle/wrapper
+          curl -fL --retry 5 --retry-delay 5 \
+            -o gradle/wrapper/gradle-wrapper.jar \
+            https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradle/wrapper/gradle-wrapper.jar
+          ls -la gradle/wrapper/
+
+      - name: Cache gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/libs.versions.toml') }}
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Boot Android emulator + take screenshot
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          profile: pixel_7
+          script: |
+            ./gradlew :app:installDebug --no-daemon
+            adb shell am start -n io.chepherd.rc/.ChepherdActivity
+            sleep 8
+            mkdir -p screenshots
+            adb exec-out screencap -p > screenshots/01-signin.png
+            ls -la screenshots/
+
+      - name: Upload screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-signin-screenshot
+          path: screenshots/
+          if-no-files-found: warn
+
+      - name: Post evidence on chepherd/chepherd#29
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
+        run: |
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ARTIFACT_URL="$RUN_URL/artifacts"
+          cat > /tmp/comment-body.md <<EOF
+          **Android sign-in screen rendered on Pixel 7 (API 34) emulator** (CI run ${{ github.run_number }})
+
+          CI build + UI walk completed. Screenshot artifact at $ARTIFACT_URL — open the **android-signin-screenshot** artifact to download \`01-signin.png\`.
+
+          Build chain: chepherd-rc-android@${{ github.sha }} → gradle 8.10.2 wrapper → ./gradlew :app:assembleDebug → emulator boot (Pixel 7, API 34, x86_64) → adb install + am start → adb exec-out screencap.
+
+          Workflow: $RUN_URL
+          EOF
+          gh issue comment 29 \
+            --repo chepherd/chepherd \
+            --body-file /tmp/comment-body.md

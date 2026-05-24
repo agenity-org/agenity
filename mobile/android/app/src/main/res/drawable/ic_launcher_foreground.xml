@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  chepherd app-icon foreground (vector).
+
+  Mirrors chepherd-rc-ios/App/Assets.xcassets/AppIcon.appiconset/chepherd-icon.svg:
+    - lowercase 'c' glyph stroked in chepherd-orange (#FFA500)
+    - small lime-green ● indicator top-right (#ADFF2F)
+
+  The background layer is provided by the adaptive-icon XML which uses
+  @color/chepherd_background (solid black). Together the two layers
+  produce the canonical chepherd icon — same as the iOS rendition.
+
+  Adaptive-icon spec: 108dp × 108dp viewport, central 72dp safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Lowercase 'c' glyph in chepherd-orange -->
+    <path
+        android:pathData="M 74 37
+                          Q 74 23 54 23
+                          Q 30 23 30 54
+                          Q 30 85 54 85
+                          Q 74 85 74 71"
+        android:strokeColor="#FFA500"
+        android:strokeWidth="13"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Healthy-session ● indicator (lime-green) -->
+    <path
+        android:pathData="M 89 21 m -8 0 a 8 8 0 1 0 16 0 a 8 8 0 1 0 -16 0"
+        android:fillColor="#ADFF2F" />
+</vector>

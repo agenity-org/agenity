@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  chepherd brand colours — referenced by the adaptive-icon and the
+  app theme. Mirror the design system §2 token palette EXACTLY (see
+  chepherd/docs/DESIGN-SYSTEM.md).
+-->
+<resources>
+    <color name="chepherd_background">#FF000000</color>
+    <color name="chepherd_logo">#FFFFA500</color>
+    <color name="chepherd_band_trusted">#FFADFF2F</color>
+    <color name="chepherd_title">#FF00FFFF</color>
+    <color name="chepherd_border">#FF1E90FF</color>
+</resources>

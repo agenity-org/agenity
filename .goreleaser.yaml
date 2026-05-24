@@ -96,7 +96,7 @@ brews:
   - name: chepherd
     repository:
       owner: chepherd
-      name: homebrew-tap
+      name: homebrew-chepherd
     homepage: https://chepherd.io
     description: "Agent runtime + supervisor + multi-agent dashboard for AI engineering"
     license: Apache-2.0

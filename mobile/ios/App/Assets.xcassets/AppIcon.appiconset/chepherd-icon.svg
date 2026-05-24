@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  chepherd app icon — vector source.
+
+  Compose:
+    - black square background (#000)
+    - lowercase 'c' wordmark glyph in chepherd-orange (#FFA500),
+      monospaced (SF Mono fallback) — sits left-of-centre with the
+      curvature mirroring the k9s brand palette
+    - small lime-green dot top-right (#ADFF2F) — the band-trusted
+      indicator, signalling "healthy session"
+
+  Rasterize per-device:
+    rsvg-convert -w 1024 -h 1024 chepherd-icon.svg -o chepherd-icon-1024.png
+
+  Or with Inkscape:
+    inkscape -w 1024 -h 1024 chepherd-icon.svg -o chepherd-icon-1024.png
+
+  iOS 17+ accepts a single 1024×1024 PNG in the iconset; the OS
+  generates the smaller variants automatically.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Background — solid black per design system §2.1 -->
+  <rect width="1024" height="1024" fill="#000000"/>
+
+  <!-- Lowercase 'c' glyph — drawn as a path so it's font-independent -->
+  <path
+    d="M 700 350
+       Q 700 220 500 220
+       Q 280 220 280 512
+       Q 280 804 500 804
+       Q 700 804 700 674"
+    fill="none"
+    stroke="#FFA500"
+    stroke-width="120"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Healthy-session indicator dot top-right -->
+  <circle cx="850" cy="200" r="80" fill="#ADFF2F"/>
+</svg>
