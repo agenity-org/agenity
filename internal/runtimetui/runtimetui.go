@@ -323,7 +323,7 @@ func (a *App) showSpawnPrompt() {
 		_, _, err := a.rt.Spawn(runtime.SpawnSpec{
 			Name:      name,
 			AgentSlug: "claude-code",
-			Tribe:     "default",
+			Team:      "default",
 			Role:      runtime.RoleWorker,
 		})
 		if err != nil {
@@ -352,29 +352,29 @@ func (a *App) refreshList() {
 		a.list.Clear()
 		a.list.SetCell(0, 0, tview.NewTableCell("[::b]Session[-:-:-]").SetSelectable(false).SetExpansion(2))
 		a.list.SetCell(0, 1, tview.NewTableCell("[::b]Role[-:-:-]").SetSelectable(false))
-		a.list.SetCell(0, 2, tview.NewTableCell("[::b]Tribe[-:-:-]").SetSelectable(false))
+		a.list.SetCell(0, 2, tview.NewTableCell("[::b]Team[-:-:-]").SetSelectable(false))
 
-		// Group by tribe, then sort within tribe (shepherd first, then alpha)
+		// Group by team, then sort within team (shepherd first, then alpha)
 		infos := a.rt.List()
-		byTribe := map[string][]*runtime.SessionInfo{}
-		var tribes []string
+		byTeam := map[string][]*runtime.SessionInfo{}
+		var teams []string
 		for _, info := range infos {
-			if _, seen := byTribe[info.Tribe]; !seen {
-				tribes = append(tribes, info.Tribe)
+			if _, seen := byTeam[info.Team]; !seen {
+				teams = append(teams, info.Team)
 			}
-			byTribe[info.Tribe] = append(byTribe[info.Tribe], info)
+			byTeam[info.Team] = append(byTeam[info.Team], info)
 		}
-		sort.Strings(tribes)
+		sort.Strings(teams)
 		row := 0
-		for ti, tribe := range tribes {
-			members := byTribe[tribe]
+		for ti, team := range teams {
+			members := byTeam[team]
 			sort.Slice(members, func(i, j int) bool {
 				if (members[i].Role == runtime.RoleShepherd) != (members[j].Role == runtime.RoleShepherd) {
 					return members[i].Role == runtime.RoleShepherd
 				}
 				return members[i].Name < members[j].Name
 			})
-			if ti > 0 && len(tribes) > 1 {
+			if ti > 0 && len(teams) > 1 {
 				row++
 				a.list.SetCell(row, 0, tview.NewTableCell(" ").SetSelectable(false))
 			}
@@ -396,7 +396,7 @@ func (a *App) refreshList() {
 				a.list.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf(" %s %s", icon, info.Name)).
 					SetReference(info.Name).SetExpansion(2))
 				a.list.SetCell(row, 1, tview.NewTableCell(roleTag))
-				a.list.SetCell(row, 2, tview.NewTableCell(info.Tribe))
+				a.list.SetCell(row, 2, tview.NewTableCell(info.Team))
 			}
 		}
 		// Restore selection
@@ -414,11 +414,11 @@ func (a *App) refreshList() {
 func (a *App) refreshHeader() {
 	a.tv.QueueUpdateDraw(func() {
 		infos := a.rt.List()
-		tribes := map[string]bool{}
+		teams := map[string]bool{}
 		paused := 0
 		shepherds := 0
 		for _, info := range infos {
-			tribes[info.Tribe] = true
+			teams[info.Team] = true
 			if info.Paused {
 				paused++
 			}
@@ -427,8 +427,8 @@ func (a *App) refreshHeader() {
 			}
 		}
 		now := time.Now().UTC().Format("15:04:05 UTC")
-		a.header.SetText(fmt.Sprintf("[orange::b]✻ chepherd 0.5[-:-:-]  ·  %d sessions (%d shepherd%s, %d paused)  ·  %d tribe%s  ·  %s",
-			len(infos), shepherds, plural(shepherds), paused, len(tribes), plural(len(tribes)), now))
+		a.header.SetText(fmt.Sprintf("[orange::b]✻ chepherd 0.5[-:-:-]  ·  %d sessions (%d shepherd%s, %d paused)  ·  %d team%s  ·  %s",
+			len(infos), shepherds, plural(shepherds), paused, len(teams), plural(len(teams)), now))
 	})
 }
 

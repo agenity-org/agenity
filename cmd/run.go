@@ -137,7 +137,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		_, shepSess, err := rt.Spawn(runtime.SpawnSpec{
 			Name:         "shepherd",
 			AgentSlug:    runFlagAgent,
-			Tribe:        "default",
+			Team:         "default",
 			Role:         runtime.RoleShepherd,
 			Cwd:          cwd,
 			SystemPrompt: prompts.Shepherd,

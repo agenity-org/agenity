@@ -135,39 +135,61 @@ func (s *Server) dispatch(req *rpcReq) rpcResp {
 // toolList returns the JSON-Schema descriptors for every tool.
 func (s *Server) toolList() []map[string]any {
 	return []map[string]any{
-		{"name": "chepherd.spawn", "description": "Spawn a new peer session. Args: name (string), agent (string), tribe (string, optional), role (string, optional 'worker'|'shepherd'), cwd (string, optional).", "inputSchema": map[string]any{
+		{"name": "chepherd.spawn", "description": "Spawn a new peer session. Args: name (string), agent (string), team (string, optional), role (string, optional 'worker'|'shepherd'), cwd (string, optional).", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"name", "agent"},
 			"properties": map[string]any{
 				"name":  map[string]any{"type": "string"},
 				"agent": map[string]any{"type": "string"},
-				"tribe": map[string]any{"type": "string"},
+				"team":  map[string]any{"type": "string"},
 				"role":  map[string]any{"type": "string", "enum": []string{"worker", "shepherd"}},
 				"cwd":   map[string]any{"type": "string"},
 			},
 		}},
-		{"name": "chepherd.assign", "description": "Change a session's tribe and role. Args: name, tribe, role.", "inputSchema": map[string]any{
+		{"name": "chepherd.assign", "description": "Change a session's team and role. Args: name, team, role.", "inputSchema": map[string]any{
 			"type":     "object",
-			"required": []string{"name", "tribe", "role"},
+			"required": []string{"name", "team", "role"},
 			"properties": map[string]any{
-				"name":  map[string]any{"type": "string"},
-				"tribe": map[string]any{"type": "string"},
-				"role":  map[string]any{"type": "string", "enum": []string{"worker", "shepherd"}},
+				"name": map[string]any{"type": "string"},
+				"team": map[string]any{"type": "string"},
+				"role": map[string]any{"type": "string", "enum": []string{"worker", "shepherd"}},
 			},
 		}},
-		{"name": "chepherd.grant_channel", "description": "Authorize a cross-tribe channel. Args: from_tribe, to_tribe, scope ('read'|'write'|'both').", "inputSchema": map[string]any{
+		{"name": "chepherd.grant_channel", "description": "Authorize a cross-team channel. Args: from_team, to_team, scope ('read'|'write'|'both').", "inputSchema": map[string]any{
 			"type":     "object",
-			"required": []string{"from_tribe", "to_tribe", "scope"},
+			"required": []string{"from_team", "to_team", "scope"},
 			"properties": map[string]any{
-				"from_tribe": map[string]any{"type": "string"},
-				"to_tribe":   map[string]any{"type": "string"},
-				"scope":      map[string]any{"type": "string", "enum": []string{"read", "write", "both"}},
+				"from_team": map[string]any{"type": "string"},
+				"to_team":   map[string]any{"type": "string"},
+				"scope":     map[string]any{"type": "string", "enum": []string{"read", "write", "both"}},
 			},
 		}},
-		{"name": "chepherd.list", "description": "Enumerate sessions. Args: tribe (string, optional filter).", "inputSchema": map[string]any{
+		{"name": "chepherd.list", "description": "Enumerate sessions. Args: team (string, optional filter).", "inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"tribe": map[string]any{"type": "string"},
+				"team": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.set_scorecard", "description": "Shepherd-only: record a 0..10 score for each axis of a worker. Args: name, G, V, F, E, D, note (optional). G=Goal clarity, V=Velocity, F=Focus, E=End-state proximity, D=Discipline (CLAUDE.md compliance).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name", "G", "V", "F", "E", "D"},
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+				"G":    map[string]any{"type": "number"},
+				"V":    map[string]any{"type": "number"},
+				"F":    map[string]any{"type": "number"},
+				"E":    map[string]any{"type": "number"},
+				"D":    map[string]any{"type": "number"},
+				"note": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.record_verdict", "description": "Shepherd-only: record a per-tick verdict for a worker. Args: name, verdict ('silent'|'praise'|'coach'|'intervene'), message (optional). Increments intervention count on coach/intervene.", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name", "verdict"},
+			"properties": map[string]any{
+				"name":    map[string]any{"type": "string"},
+				"verdict": map[string]any{"type": "string", "enum": []string{"silent", "praise", "coach", "intervene"}},
+				"message": map[string]any{"type": "string"},
 			},
 		}},
 		{"name": "chepherd.read_pane", "description": "Read the recent output (ring buffer snapshot) of a session. Args: name (string), lines (int, optional, default 50).", "inputSchema": map[string]any{
@@ -245,7 +267,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 	switch name {
 	case "spawn":
 		var a struct {
-			Name, Agent, Tribe, Role, Cwd string
+			Name, Agent, Team, Role, Cwd string
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
@@ -258,7 +280,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		info, _, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:      a.Name,
 			AgentSlug: a.Agent,
-			Tribe:     a.Tribe,
+			Team:      a.Team,
 			Role:      role,
 			Cwd:       a.Cwd,
 		})
@@ -268,29 +290,56 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		}
 		resp.Result = map[string]any{"id": info.ID, "name": info.Name}
 	case "assign":
-		var a struct{ Name, Tribe, Role string }
+		var a struct{ Name, Team, Role string }
 		_ = json.Unmarshal(args, &a)
-		if err := s.rt.Assign(a.Name, a.Tribe, runtime.Role(a.Role)); err != nil {
+		if err := s.rt.Assign(a.Name, a.Team, runtime.Role(a.Role)); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
 		}
 		resp.Result = map[string]any{"ok": true}
 	case "grant_channel":
-		var a struct{ FromTribe, ToTribe, Scope string }
+		var a struct{ FromTeam, ToTeam, Scope string }
 		_ = json.Unmarshal(args, &a)
-		s.rt.GrantChannel(a.FromTribe, a.ToTribe, a.Scope)
+		s.rt.GrantChannel(a.FromTeam, a.ToTeam, a.Scope)
 		resp.Result = map[string]any{"ok": true}
 	case "list":
 		infos := s.rt.List()
 		var out []map[string]any
 		for _, info := range infos {
 			out = append(out, map[string]any{
-				"name": info.Name, "agent": info.AgentSlug, "tribe": info.Tribe,
+				"name": info.Name, "agent": info.AgentSlug, "team": info.Team,
 				"role": info.Role, "paused": info.Paused,
 				"shepherding": info.Shepherding, "created_at": info.CreatedAt,
 			})
 		}
 		resp.Result = map[string]any{"sessions": out}
+	case "set_scorecard":
+		var a struct {
+			Name           string
+			G, V, F, E, D  float64
+			Note           string
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
+			return resp
+		}
+		if err := s.rt.SetScorecard(a.Name, runtime.Scorecard{
+			Goal: a.G, Velocity: a.V, Focus: a.F, EndState: a.E, Discipline: a.D, Note: a.Note,
+		}); err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"ok": true}
+	case "record_verdict":
+		var a struct {
+			Name, Verdict, Message string
+		}
+		_ = json.Unmarshal(args, &a)
+		if err := s.rt.RecordVerdict(a.Name, a.Verdict, a.Message); err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"ok": true}
 	case "read_pane":
 		var a struct {
 			Name  string

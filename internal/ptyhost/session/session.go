@@ -291,6 +291,17 @@ func (s *Session) Resize(rows, cols uint16) error {
 	return pty.Setsize(f, &pty.Winsize{Rows: rows, Cols: cols})
 }
 
+// PID returns the spawned child process's PID, or 0 if the session
+// has closed or never started.
+func (s *Session) PID() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
+
 // Signal delivers a UNIX signal to the child process group. The
 // pty-server API accepts named INT / QUIT / TERM / KILL (the canonical
 // "user-driven abort" set from architecture.md §2).
@@ -341,6 +352,18 @@ func (s *Session) ExitError() error {
 		return nil
 	}
 	return s.exitErr
+}
+
+// ExitCode returns the spawned child's exit code, or -1 if the session
+// is still running. Returns 0 for clean exits and the actual code (or
+// 128+signal) for failures.
+func (s *Session) ExitCode() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed || s.cmd == nil || s.cmd.ProcessState == nil {
+		return -1
+	}
+	return s.cmd.ProcessState.ExitCode()
 }
 
 // Compile-time assertion that *Session implements io.Writer for any

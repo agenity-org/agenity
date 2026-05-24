@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,26 +32,70 @@ const (
 
 // SessionInfo is the metadata chepherd tracks for each live session.
 // session.Session is the live process; SessionInfo is the framework
-// context (name, tribe, role, etc.).
+// context (name, team, role, etc.).
 type SessionInfo struct {
 	ID        string    `json:"id"`        // ptyhost session ID (stable across restart attempts)
-	Name      string    `json:"name"`      // canonical @-address (e.g. "adam", "iogrid-1")
+	Name      string    `json:"name"`      // canonical @-address (e.g. "iogrid-1")
 	AgentSlug string    `json:"agent"`     // claude-code, qwen-code, etc.
-	Tribe     string    `json:"tribe"`     // membership (one tribe for now; multi later)
+	Team      string    `json:"team"`      // team membership — workers in same team @-reach freely
 	Role      Role      `json:"role"`      // worker | shepherd
 	Cwd       string    `json:"cwd"`       // working directory the agent was spawned in
 	CreatedAt time.Time `json:"created_at"`
 	Paused    bool      `json:"paused"`
 
-	// Set non-empty only when Role == RoleShepherd. Tribes this shepherd oversees.
+	// Set non-empty only when Role == RoleShepherd. Teams this shepherd oversees.
 	Shepherding []string `json:"shepherding,omitempty"`
+
+	// PID of the spawned child process (the actual agent CLI — claude,
+	// qwen-code, etc). Surfaces in the dashboard right pane "Process" card.
+	PID int `json:"pid,omitempty"`
+
+	// Git context — populated at spawn from `git config --get remote.origin.url`
+	// and `git branch --show-current` when cwd is a git repo. Static for
+	// the GitHubURL (origin doesn't change mid-session); Branch is refreshed
+	// on every List() call.
+	GitHubURL string `json:"github_url,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+
+	// Exit detection — flipped by the activity sniffer when the PTY EOFs.
+	// Failed exits (non-zero code) stay in List() so the operator can see
+	// what went wrong; clean exits are dismissed quickly.
+	Exited   bool `json:"exited,omitempty"`
+	ExitCode int  `json:"exit_code,omitempty"`
 
 	// Activity counters (populated by the runtime's per-session sniffer).
 	// Reported on every Get/List; values are wall-clock snapshots.
 	TotalBytes  int64   `json:"total_bytes"`
 	Bytes5m     int64   `json:"bytes_5m"`
-	Chunks5m    int     `json:"chunks_5m"` // distinct PTY writes in last 5 min — engagement / burst rate
+	Chunks5m    int     `json:"chunks_5m"` // distinct PTY writes in last 5 min
 	IdleSeconds float64 `json:"idle_seconds"`
+
+	// Latest scorecard produced by shepherd. Fields are 0..10 (Goal,
+	// Velocity, Focus, EndState, Discipline). Nil until shepherd's first
+	// tick assesses this session; UI shows "—" + "shepherd assessing..."
+	// when absent.
+	Scorecard *Scorecard `json:"scorecard,omitempty"`
+
+	// Shepherd verdict history — count of coach/intervene verdicts AND
+	// the most recent one (with timestamp + message). Empty until first
+	// non-silent verdict.
+	InterventionCount int       `json:"intervention_count,omitempty"`
+	LastVerdict       string    `json:"last_verdict,omitempty"`       // silent|praise|coach|intervene
+	LastVerdictAt     time.Time `json:"last_verdict_at,omitempty"`
+	LastVerdictMsg    string    `json:"last_verdict_msg,omitempty"`
+}
+
+// Scorecard is shepherd's latest 5-axis assessment of a session.
+// Goal/Velocity/Focus/End-state from the legacy supervisor; Discipline
+// (CLAUDE.md/canon compliance) added as the 5th. Each axis is 0..10.
+type Scorecard struct {
+	Goal       float64   `json:"G"`
+	Velocity   float64   `json:"V"`
+	Focus      float64   `json:"F"`
+	EndState   float64   `json:"E"`
+	Discipline float64   `json:"D"`
+	Note       string    `json:"note,omitempty"`
+	At         time.Time `json:"at"`
 }
 
 // sessionActivity holds the running tally for one session — used by the
@@ -91,12 +137,12 @@ func (a *sessionActivity) snapshot() (total int64, bytes5m int64, chunks5m int, 
 	return
 }
 
-// Grant is a cross-tribe permission edge: agents in fromTribe may
-// @<member> agents in toTribe.
+// Grant is a cross-team permission edge: agents in fromTeam may
+// @<member> agents in toTeam.
 type Grant struct {
-	FromTribe string `json:"from_tribe"`
-	ToTribe   string `json:"to_tribe"`
-	Scope     string `json:"scope"` // "read" | "write" | "both"
+	FromTeam string `json:"from_team"`
+	ToTeam   string `json:"to_team"`
+	Scope    string `json:"scope"` // "read" | "write" | "both"
 }
 
 // Runtime is the chepherd state authority.
@@ -172,7 +218,7 @@ func New(stateDir string) (*Runtime, error) {
 type SpawnSpec struct {
 	Name      string // canonical @-address; must be unique
 	AgentSlug string // claude-code | qwen-code | aider | ...
-	Tribe     string // default "default"
+	Team      string // default "default"
 	Role      Role   // default worker
 	Cwd       string // optional working dir
 	SystemPrompt string // optional override for the agent's system prompt
@@ -194,8 +240,8 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	if spec.Name == "" {
 		return nil, nil, errors.New("runtime.Spawn: Name required")
 	}
-	if spec.Tribe == "" {
-		spec.Tribe = "default"
+	if spec.Team == "" {
+		spec.Team = "default"
 	}
 	if spec.Role == "" {
 		spec.Role = RoleWorker
@@ -267,13 +313,18 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		ID:        id,
 		Name:      spec.Name,
 		AgentSlug: spec.AgentSlug,
-		Tribe:     spec.Tribe,
+		Team:      spec.Team,
 		Role:      spec.Role,
 		Cwd:       spec.Cwd,
 		CreatedAt: time.Now().UTC(),
+		PID:       s.PID(),
 	}
+	// Extract GitHub URL once at spawn — cheap (single git config read),
+	// makes the right-pane "GitHub" link populate immediately. Branch is
+	// refreshed in List() since it can change mid-session.
+	info.GitHubURL, info.Branch = readGitContext(spec.Cwd)
 	if spec.Role == RoleShepherd {
-		info.Shepherding = []string{spec.Tribe}
+		info.Shepherding = []string{spec.Team}
 	}
 
 	act := &sessionActivity{created: time.Now()}
@@ -292,7 +343,7 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// Spawn a sniffer goroutine on the PTY output stream. It writes to
 	// the activity tracker without ever touching r.mu so it can't deadlock
 	// any caller of List/Get.
-	go r.runActivitySniffer(s, act)
+	go r.runActivitySniffer(s, act, id)
 	for _, h := range hooks {
 		h(s, spec.Name)
 	}
@@ -301,13 +352,16 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 }
 
 // runActivitySniffer subscribes to a session's PTY output stream and
-// tallies bytes per chunk. Stops when the session closes.
-func (r *Runtime) runActivitySniffer(s *session.Session, act *sessionActivity) {
+// tallies bytes per chunk. Stops when the session closes — and uses
+// that close signal to flip SessionInfo.Exited so the dashboard sees
+// the agent exit immediately (Ctrl-C / clean exit / killed child).
+func (r *Runtime) runActivitySniffer(s *session.Session, act *sessionActivity, id string) {
 	sub, _, err := s.Subscribe(256)
 	if err != nil {
 		return
 	}
 	defer s.Unsubscribe(sub)
+	defer r.markExited(id) // PTY EOF → flip Exited immediately, no GC delay
 	for {
 		select {
 		case <-sub.Done:
@@ -320,7 +374,6 @@ func (r *Runtime) runActivitySniffer(s *session.Session, act *sessionActivity) {
 			act.total += int64(len(chunk))
 			act.last = time.Now()
 			act.recent = append(act.recent, recentChunk{at: act.last, size: len(chunk)})
-			// Trim windows older than 5 min so this slice doesn't grow unbounded.
 			cutoff := time.Now().Add(-5 * time.Minute)
 			for len(act.recent) > 0 && act.recent[0].at.Before(cutoff) {
 				act.recent = act.recent[1:]
@@ -330,9 +383,53 @@ func (r *Runtime) runActivitySniffer(s *session.Session, act *sessionActivity) {
 	}
 }
 
-// Assign updates an existing session's tribe + role. Used for transfer_adam,
-// move-between-tribes, promotion/demotion.
-func (r *Runtime) Assign(name string, tribe string, role Role) error {
+// markExited flips the session's Exited flag + records its exit code.
+// Called by the activity sniffer when the PTY EOFs. Clean exits
+// (code == 0) get garbage-collected after 30 s by a separate goroutine;
+// failed exits stay visible so the operator can see what went wrong.
+func (r *Runtime) markExited(id string) {
+	r.mu.Lock()
+	info, ok := r.info[id]
+	if !ok {
+		r.mu.Unlock()
+		return
+	}
+	if info.Exited {
+		// Idempotent — sniffer can fire multiple "Done" paths.
+		r.mu.Unlock()
+		return
+	}
+	info.Exited = true
+	sess := r.sessions[id]
+	if sess != nil {
+		info.ExitCode = sess.ExitCode()
+	}
+	name := info.Name
+	code := info.ExitCode
+	r.mu.Unlock()
+	r.HumanInbox("runtime", fmt.Sprintf("session '%s' exited (code %d)", name, code))
+	r.broadcast()
+
+	// Schedule GC of clean exits. Failed exits stay visible.
+	if code == 0 {
+		go func() {
+			time.Sleep(30 * time.Second)
+			r.mu.Lock()
+			cur, ok := r.info[id]
+			if ok && cur.Exited && cur.ExitCode == 0 {
+				delete(r.info, id)
+				delete(r.sessions, id)
+				delete(r.activity, id)
+				delete(r.byName, cur.Name)
+			}
+			r.mu.Unlock()
+			r.broadcast()
+		}()
+	}
+}
+
+// Assign updates an existing session's team + role.
+func (r *Runtime) Assign(name string, team string, role Role) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	id, ok := r.byName[name]
@@ -340,19 +437,18 @@ func (r *Runtime) Assign(name string, tribe string, role Role) error {
 		return fmt.Errorf("runtime.Assign: unknown session %q", name)
 	}
 	info := r.info[id]
-	info.Tribe = tribe
+	info.Team = team
 	info.Role = role
 	if role == RoleShepherd {
-		// Append tribe to Shepherding if not already
 		has := false
 		for _, t := range info.Shepherding {
-			if t == tribe {
+			if t == team {
 				has = true
 				break
 			}
 		}
 		if !has {
-			info.Shepherding = append(info.Shepherding, tribe)
+			info.Shepherding = append(info.Shepherding, team)
 		}
 	}
 	_ = r.persistInfoLocked(info)
@@ -360,21 +456,22 @@ func (r *Runtime) Assign(name string, tribe string, role Role) error {
 	return nil
 }
 
-// GrantChannel adds a cross-tribe edge. Same edge added twice is idempotent.
-func (r *Runtime) GrantChannel(fromTribe, toTribe, scope string) {
+// GrantChannel adds a cross-team edge. Same edge added twice is idempotent.
+func (r *Runtime) GrantChannel(fromTeam, toTeam, scope string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.grants {
-		if r.grants[i].FromTribe == fromTribe && r.grants[i].ToTribe == toTribe {
+		if r.grants[i].FromTeam == fromTeam && r.grants[i].ToTeam == toTeam {
 			r.grants[i].Scope = scope
 			return
 		}
 	}
-	r.grants = append(r.grants, Grant{FromTribe: fromTribe, ToTribe: toTribe, Scope: scope})
+	r.grants = append(r.grants, Grant{FromTeam: fromTeam, ToTeam: toTeam, Scope: scope})
 	r.cond.Broadcast()
 }
 
-// SessionByName implements messagebus.SessionRegistry.
+// SessionByName implements messagebus.SessionRegistry — returns the
+// session pointer + its team name.
 func (r *Runtime) SessionByName(name string) (*session.Session, string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -382,16 +479,17 @@ func (r *Runtime) SessionByName(name string) (*session.Session, string, bool) {
 	if !ok {
 		return nil, "", false
 	}
-	return r.sessions[id], r.info[id].Tribe, true
+	return r.sessions[id], r.info[id].Team, true
 }
 
-// SessionsByTribe implements messagebus.SessionRegistry.
-func (r *Runtime) SessionsByTribe(tribe string) []*session.Session {
+// SessionsByTribe implements messagebus.SessionRegistry — name kept for
+// interface compat; semantically returns sessions in the given team.
+func (r *Runtime) SessionsByTribe(team string) []*session.Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []*session.Session
 	for id, info := range r.info {
-		if info.Tribe == tribe {
+		if info.Team == team {
 			out = append(out, r.sessions[id])
 		}
 	}
@@ -438,12 +536,13 @@ func (r *Runtime) MarkAllInboxRead() int {
 	return n
 }
 
-// IsCrossTribeGranted implements messagebus.SessionRegistry.
-func (r *Runtime) IsCrossTribeGranted(fromTribe, toTribe string) bool {
+// IsCrossTribeGranted implements messagebus.SessionRegistry — name
+// kept for interface compat; semantically checks cross-team grants.
+func (r *Runtime) IsCrossTribeGranted(fromTeam, toTeam string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, g := range r.grants {
-		if g.FromTribe == fromTribe && g.ToTribe == toTribe {
+		if g.FromTeam == fromTeam && g.ToTeam == toTeam {
 			return true
 		}
 	}
@@ -467,8 +566,6 @@ func (r *Runtime) IsSessionPaused(s *session.Session) bool {
 // activity counters from each session's sniffer.
 func (r *Runtime) List() []*SessionInfo {
 	r.mu.Lock()
-	// Copy out under the lock; compute snapshot() outside it (sniffer
-	// has its own mu).
 	type pair struct {
 		info *SessionInfo
 		act  *sessionActivity
@@ -484,9 +581,49 @@ func (r *Runtime) List() []*SessionInfo {
 		if p.act != nil {
 			c.TotalBytes, c.Bytes5m, c.Chunks5m, c.IdleSeconds = p.act.snapshot()
 		}
+		// Refresh branch on every read — cheap and changes mid-session.
+		if c.Cwd != "" {
+			c.Branch = readGitBranch(c.Cwd)
+		}
 		out = append(out, &c)
 	}
 	return out
+}
+
+// SetScorecard stores shepherd's latest assessment of a worker. Idempotent:
+// each call overwrites the previous scorecard for that name.
+func (r *Runtime) SetScorecard(name string, sc Scorecard) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byName[name]
+	if !ok {
+		return fmt.Errorf("runtime.SetScorecard: unknown session %q", name)
+	}
+	sc.At = time.Now().UTC()
+	r.info[id].Scorecard = &sc
+	r.cond.Broadcast()
+	return nil
+}
+
+// RecordVerdict appends to a session's intervention history. Only
+// coach/intervene verdicts increment the count; silent/praise are
+// surfaced for "last_verdict" but don't bump InterventionCount.
+func (r *Runtime) RecordVerdict(name, verdict, msg string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byName[name]
+	if !ok {
+		return fmt.Errorf("runtime.RecordVerdict: unknown session %q", name)
+	}
+	info := r.info[id]
+	info.LastVerdict = verdict
+	info.LastVerdictAt = time.Now().UTC()
+	info.LastVerdictMsg = msg
+	if verdict == "coach" || verdict == "intervene" {
+		info.InterventionCount++
+	}
+	r.cond.Broadcast()
+	return nil
 }
 
 // Inbox returns the recent human-inbox entries.
@@ -648,6 +785,68 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		"CHEPHERD_MCP_SOCK=" + sockPath,
 		"CHEPHERD_MCP_CONFIG=" + cfgPath,
 	}, cfgPath, nil
+}
+
+// readGitContext runs `git -C <cwd>` twice to extract the remote-origin
+// HTTPS URL and the current branch. Returns ("", "") if cwd isn't a git
+// repo or git is unavailable. Called once at spawn; the URL is stored.
+func readGitContext(cwd string) (githubURL, branch string) {
+	if cwd == "" {
+		return "", ""
+	}
+	url := readGitOriginURL(cwd)
+	return githubFromGitURL(url), readGitBranch(cwd)
+}
+
+func readGitOriginURL(cwd string) string {
+	out, err := execCommand("git", "-C", cwd, "config", "--get", "remote.origin.url")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+func readGitBranch(cwd string) string {
+	out, err := execCommand("git", "-C", cwd, "branch", "--show-current")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// githubFromGitURL normalizes a git remote URL (ssh or https) to the
+// canonical https://github.com/org/repo form. Returns "" for non-github
+// remotes (gitea, gitlab) — those still work in the dashboard via the
+// raw URL but no special-casing.
+func githubFromGitURL(url string) string {
+	url = strings.TrimSpace(url)
+	url = strings.TrimSuffix(url, ".git")
+	// git@github.com:org/repo
+	if strings.HasPrefix(url, "git@github.com:") {
+		return "https://github.com/" + strings.TrimPrefix(url, "git@github.com:")
+	}
+	// ssh://git@github.com/org/repo
+	if strings.HasPrefix(url, "ssh://git@github.com/") {
+		return "https://github.com/" + strings.TrimPrefix(url, "ssh://git@github.com/")
+	}
+	// https://github.com/org/repo — return as is (already canonical).
+	if strings.HasPrefix(url, "https://github.com/") {
+		return url
+	}
+	// Non-github remote (gitea, etc) — return raw URL so the dashboard
+	// link still works.
+	if url != "" {
+		return url
+	}
+	return ""
+}
+
+// execCommand is a thin wrapper so test code can stub git/etc. The
+// runtime production path uses os/exec directly.
+var execCommand = func(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.Output()
+	return string(out), err
 }
 
 // --- utilities ---

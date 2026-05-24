@@ -106,7 +106,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"sessions": s.rt.List()})
 	case http.MethodPost:
 		var req struct {
-			Name, Agent, Tribe, Role, Cwd, SystemPrompt string
+			Name, Agent, Team, Role, Cwd, SystemPrompt string
 			AgentArgs                                   []string `json:"agent_args"`
 			ResumeUUID                                  string   `json:"resume_uuid"`
 			UseDefaultPrompt                            bool     `json:"use_default_prompt"`
@@ -134,7 +134,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		info, _, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:         req.Name,
 			AgentSlug:    req.Agent,
-			Tribe:        req.Tribe,
+			Team:         req.Team,
 			Role:         role,
 			Cwd:          req.Cwd,
 			SystemPrompt: systemPrompt,
