@@ -531,16 +531,14 @@ func formatAgo(ts string) string {
 }
 
 // appendLog pushes a new log line into the bottom pane + the rolling buffer.
+//
+// v0.3 spec: the right-bottom pane is the GLOBAL daemon stdout feed
+// (not per-session filtered). Per-session log filtering remains
+// available via the full-screen LogMode ('l' key).
 func (d *Dashboard) appendLog(line string) {
 	d.logBuffer = append(d.logBuffer, line)
 	if len(d.logBuffer) > 2000 {
 		d.logBuffer = d.logBuffer[len(d.logBuffer)-2000:]
-	}
-	// Only render in the small dashboard log pane if line matches selected session.
-	sel := d.app.Selected()
-	if sel != nil && !containsSession(line, sel.TmuxName) {
-		// Keep buffered but don't display — keeps the small pane focused.
-		return
 	}
 	colored := colorizeLogLine(line)
 	fmt.Fprintf(d.logView, "%s\n", colored)
@@ -549,10 +547,6 @@ func (d *Dashboard) appendLog(line string) {
 	if d.app.logMode != nil {
 		d.app.logMode.appendLog(line)
 	}
-}
-
-func containsSession(line, session string) bool {
-	return session == "" || strings.Contains(line, session+":")
 }
 
 // colorizeLogLine applies semantic colors to a supervisor log line.
