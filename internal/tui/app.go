@@ -519,13 +519,15 @@ func (a *App) Select(idx int) {
 	a.selectedIdx = idx
 }
 
-// FormatHeader returns the LEFT side of the 3-row header — the word
-// "chepherd" rendered in bold block-character ASCII art (3 rows × 31
-// cols, fits the 32-col fixed-width header column).
+// FormatHeader returns the LEFT side of the 3-row header — "chepherd"
+// in bold block-character ASCII art, widened ~+26% from the original
+// 31-col design (8 letters × 4 cols + 7 × 1-col gaps = 39 cols).
+// Founder asked for a more emphasized / pressed-stamp feel; wider
+// letterforms achieve that without changing the row count.
 func (a *App) FormatHeader() string {
-	logo1 := style.TagBold(style.Logo, "█▀▀ █ █ █▀▀ █▀█ █ █ █▀▀ █▀▄ █▀▄")
-	logo2 := style.TagBold(style.Logo, "█   █▀█ █▀▀ █▀▀ █▀█ █▀▀ █▀▄ █ █")
-	logo3 := style.TagBold(style.Logo, "▀▀▀ ▀ ▀ ▀▀▀ ▀   ▀ ▀ ▀▀▀ ▀ ▀ ▀▀ ")
+	logo1 := style.TagBold(style.Logo, "█▀▀▀ █  █ █▀▀▀ █▀▀█ █  █ █▀▀▀ █▀▀▄ █▀▀▄")
+	logo2 := style.TagBold(style.Logo, "█    █▀▀█ █▀▀  █▀▀▘ █▀▀█ █▀▀  █▀▀  █  █")
+	logo3 := style.TagBold(style.Logo, "▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀    ▀  ▀ ▀▀▀▀ ▀  ▀ ▀▀▀ ")
 	return logo1 + "\n" + logo2 + "\n" + logo3
 }
 
