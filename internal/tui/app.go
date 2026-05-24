@@ -240,6 +240,11 @@ func (a *App) performTmuxAttach(target string) {
 // LoginSelected handles 'L' — drops the user into the selected session's
 // tmux pane and sends the literal text "/login" + Enter so they can
 // re-auth Claude. Used when the daemon flagged AuthLapsed=true.
+//
+// Routes through the attach modal (same as 't') so first-time users see
+// the 'Ctrl-B D to return' hint. Without that, founder reported pressing
+// L and thinking the dashboard was frozen because they were actually
+// inside a raw tmux attach with no obvious escape route.
 func (a *App) LoginSelected() {
 	s := a.Selected()
 	if s == nil {
@@ -252,20 +257,19 @@ func (a *App) LoginSelected() {
 			s.UUID))
 		return
 	}
-	// Send '/login\n' to the session's input. Same pattern as tmuxPaste
-	// in cmd/daemon.go but for a literal short string we can use send-keys.
-	if err := execCmd("tmux", "send-keys", "-t", s.TmuxName, "/login", "Enter"); err != nil {
-		a.dashboard.appendLog(fmt.Sprintf("[login] send-keys %s failed: %v", s.TmuxName, err))
-		return
-	}
-	// Then attach / switch so the operator sees the OAuth prompt.
-	if os.Getenv("TMUX") != "" {
-		_ = execCmd("tmux", "switch-client", "-t", s.TmuxName)
-	} else {
-		a.tv.Suspend(func() {
-			_ = execCmd("tmux", "attach", "-t", s.TmuxName)
-		})
-	}
+	target := s.TmuxName
+	a.attachModal.ShowOrAttach(target, func(attach bool, _ bool) {
+		if !attach {
+			return
+		}
+		// Send '/login\n' to the session's input BEFORE attaching so the
+		// operator lands in the OAuth prompt.
+		if err := execCmd("tmux", "send-keys", "-t", target, "/login", "Enter"); err != nil {
+			a.dashboard.appendLog(fmt.Sprintf("[login] send-keys %s failed: %v", target, err))
+			return
+		}
+		a.performTmuxAttach(target)
+	})
 }
 
 func execCmd(name string, args ...string) error {
@@ -333,6 +337,15 @@ func (a *App) Run() error {
 	})
 
 	return a.tv.Run()
+}
+
+// currentPageIsDashboard reports whether the dashboard page is the one
+// currently on top of the pages stack. Used by dashboard.render() to
+// avoid stealing focus from any open overlay (detail, attach-modal,
+// login, log-mode) during the periodic refresh.
+func (a *App) currentPageIsDashboard() bool {
+	name, _ := a.pages.GetFrontPage()
+	return name == "dashboard"
 }
 
 // Quit terminates the TUI cleanly + cancels background goroutines.

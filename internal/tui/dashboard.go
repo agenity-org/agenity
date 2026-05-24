@@ -231,9 +231,13 @@ func (d *Dashboard) applyNarrowMode() {
 		AddItem(d.daemonBar, 1, 0, false).
 		AddItem(body, 0, 1, true).
 		AddItem(d.footer, 1, 0, false)
-	// Restore focus to the list after the rebuild — tview's focus
-	// reference would otherwise dangle on the orphaned old body.
-	d.app.tv.SetFocus(d.list)
+	// Restore focus to the list after the rebuild — but only if the
+	// dashboard page is the visible one. Stealing focus while an overlay
+	// is up (detail, attach-modal, login, log-mode) would freeze the
+	// overlay's input.
+	if d.app.currentPageIsDashboard() {
+		d.app.tv.SetFocus(d.list)
+	}
 }
 
 const (
@@ -308,8 +312,13 @@ func (d *Dashboard) renderList() {
 		d.list.SetCell(row, 4, tview.NewTableCell("  "+nextCell))
 	}
 
-	// Select first row by default
-	if d.list.GetRowCount() > 1 {
+	// Auto-select the first row only when the dashboard page is visible.
+	// Calling d.list.Select() steals focus back to the list, which freezes
+	// any overlay (detail, login, attach-modal, log-mode) that's currently
+	// on top — the user's Esc/t/Ctrl-C events end up at the obscured list
+	// where there's no handler for them. So: only nudge selection when
+	// the user is actually looking at the list.
+	if d.app.currentPageIsDashboard() && d.list.GetRowCount() > 1 {
 		current, _ := d.list.GetSelection()
 		if current < 1 {
 			d.list.Select(1, 0)
