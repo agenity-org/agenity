@@ -24,3 +24,5 @@ vendor/
 # CI artifacts
 coverage.txt
 coverage.html
+.playwright-mcp/
+.mcp.json
