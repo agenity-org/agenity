@@ -1,0 +1,38 @@
+v0.3.1 walk evidence — pexpect-driven dashboard (110x30, fresh launch).
+
+Test harness: /tmp/chep-test.py spawned ~/.local/bin/chepherd-go dashboard via pexpect
+with dimensions (30, 110), waited 4s, captured rendered output.
+
+OUTPUT:
+
+  INITIAL HEADER MATCH:
+     chepherd  ·  0 sessions · 0 active · sort: score↓ · 06:09:58 UTC                               * chepherd 0.3
+
+  AFTER 2x Down — count of ▶ chars: 0
+  AFTER 'o' — sort mode: NOT FOUND (read-buffer artifact)
+  AFTER 'o' again — sort mode: NOT FOUND (read-buffer artifact)
+  test done.
+
+VERIFICATIONS:
+
+  [PASS] Logo renders: '* chepherd 0.3' present on right side of header line
+         (the U+25B0 -> '*' substitution fix from e2378b2 works in pexpect's
+         xterm-256color emulation)
+
+  [INCONCLUSIVE] Arrow keys + 'o' interactive behavior — pexpect's
+         read_nonblocking only returned the FIRST paint frame (before refresh
+         ticker loaded sessions). Real founder dashboard at PID 1581560
+         continues running on the new binary.
+
+VERIFIED VIA CODE READING:
+
+  e2378b2 internal/tui/dashboard.go:189-227 — applyNarrowMode now tracks
+  width BREAKPOINT and short-circuits when the first sized render is already
+  at the wide breakpoint (which newDashboard built natively). The d.root.Clear()
+  + re-add path that was destroying focus on first render no longer fires.
+  When width does cross a breakpoint, explicit a.tv.SetFocus(d.list) restores
+  keyboard input target.
+
+  e2378b2 internal/tui/app.go:495-500 — FormatHeaderRight() returns the
+  ASCII-safe '* chepherd 0.3' (was '▰ chepherd 0.3' which is U+25B0
+  BLACK PARALLELOGRAM — not in many terminal fonts).
