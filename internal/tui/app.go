@@ -519,17 +519,13 @@ func (a *App) Select(idx int) {
 	a.selectedIdx = idx
 }
 
-// FormatHeader returns the LEFT side of the 3-row header — an ASCII art
-// chepherd brand mark with the version subtitled below.
-//
-// Row 1 stroke is shepherd-flavored: dot above a hooked stick (the crook).
-// Row 2 is the wordmark in heavy block characters. Row 3 is version + a
-// dim tagline. Sized to fit a 32-col fixed-width column even on 80-col
-// terminals.
+// FormatHeader returns the LEFT side of the 3-row header — the word
+// "chepherd" rendered in bold block-character ASCII art (3 rows × 31
+// cols, fits the 32-col fixed-width header column).
 func (a *App) FormatHeader() string {
-	logo1 := style.Tag(style.Logo, "    .--.")
-	logo2 := style.TagBold(style.Logo, "   /    \\   chepherd")
-	logo3 := style.Tag(style.Ambient, fmt.Sprintf("   \\____/   v0.4.8"))
+	logo1 := style.TagBold(style.Logo, "█▀▀ █ █ █▀▀ █▀█ █ █ █▀▀ █▀▄ █▀▄")
+	logo2 := style.TagBold(style.Logo, "█   █▀█ █▀▀ █▀▀ █▀█ █▀▀ █▀▄ █ █")
+	logo3 := style.TagBold(style.Logo, "▀▀▀ ▀ ▀ ▀▀▀ ▀   ▀ ▀ ▀▀▀ ▀ ▀ ▀▀ ")
 	return logo1 + "\n" + logo2 + "\n" + logo3
 }
 
