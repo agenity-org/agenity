@@ -181,11 +181,19 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// Write per-session MCP config so the agent discovers chepherd's MCP
 	// server. Writes a project-scoped .mcp.json next to the agent's cwd
 	// AND a per-session env var pointing to it. Idempotent.
-	mcpEnv, err := r.writeMCPConfig(spec.Name, spec.Cwd)
+	mcpEnv, mcpCfgPath, err := r.writeMCPConfig(spec.Name, spec.Cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runtime: warning: mcp config write failed for %s: %v\n", spec.Name, err)
 	}
 	envWithMCP := append(append([]string(nil), spec.Env...), mcpEnv...)
+
+	// For Claude Code, pass the absolute mcp-config path explicitly.
+	// Without --mcp-config, Claude only loads .mcp.json after the
+	// operator approves it in the workspace-trust dialog — which our
+	// auto-bootstrapped shepherd will never see.
+	if spec.AgentSlug == "claude-code" && mcpCfgPath != "" {
+		extraArgs = append(extraArgs, "--mcp-config", mcpCfgPath)
+	}
 
 	argv, env := agent.Resolve(extraArgs, envSliceToMap(envWithMCP))
 
@@ -445,16 +453,23 @@ func (r *Runtime) persistInfoLocked(info *SessionInfo) error {
 // (or a chepherd-managed dir if cwd is empty) so the spawned agent
 // discovers chepherd's MCP server. Returns env vars to forward to the
 // child process for tools that prefer env-pointing over file discovery.
-func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, error) {
+func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, error) {
 	cfgDir := filepath.Join(r.stateDir, "sessions", sessionName)
 	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	sockPath := filepath.Join(r.stateDir, "runtime.sock")
+	// Use the absolute path of the currently-running chepherd binary so
+	// the MCP-bridge subprocess matches the running runtime regardless
+	// of PATH or install name (chepherd vs chepherd-v05).
+	chepBin, _ := os.Executable()
+	if chepBin == "" {
+		chepBin = "chepherd"
+	}
 	cfg := map[string]any{
 		"mcpServers": map[string]any{
 			"chepherd": map[string]any{
-				"command": "chepherd",
+				"command": chepBin,
 				"args":    []string{"mcp", "--sock", sockPath},
 				"env":     map[string]string{},
 			},
@@ -462,25 +477,44 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, error) {
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	cfgPath := filepath.Join(cfgDir, ".mcp.json")
 	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	// Symlink into cwd as ./.mcp.json if cwd is set + writable + doesn't have one.
+	// Symlink into cwd as ./.mcp.json so Claude Code's per-project lookup
+	// finds our config. If a symlink already exists, repair it if it
+	// points at a missing target (e.g. an old per-session config that
+	// has been cleaned up); never clobber a real non-symlink file the
+	// user may have authored themselves.
 	if cwd != "" {
 		target := filepath.Join(cwd, ".mcp.json")
-		if _, statErr := os.Stat(target); os.IsNotExist(statErr) {
+		fi, lerr := os.Lstat(target)
+		switch {
+		case lerr != nil && os.IsNotExist(lerr):
 			_ = os.Symlink(cfgPath, target)
+		case lerr == nil && fi.Mode()&os.ModeSymlink != 0:
+			// Existing symlink — repair if its target is missing or stale.
+			if _, srcErr := os.Stat(target); srcErr != nil {
+				_ = os.Remove(target)
+				_ = os.Symlink(cfgPath, target)
+			} else {
+				// Symlink resolves OK — repoint it at the freshly-written
+				// config for this session so the operator gets the
+				// most-recent .mcp.json semantics.
+				_ = os.Remove(target)
+				_ = os.Symlink(cfgPath, target)
+			}
 		}
+		// If target is a real file the user wrote, leave it alone.
 	}
 	// Env hint for agents that read MCP server URL directly (e.g. some
 	// experimental SDK paths). Harmless if unused.
 	return []string{
 		"CHEPHERD_MCP_SOCK=" + sockPath,
 		"CHEPHERD_MCP_CONFIG=" + cfgPath,
-	}, nil
+	}, cfgPath, nil
 }
 
 // --- utilities ---

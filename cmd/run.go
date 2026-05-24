@@ -134,7 +134,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// --no-shepherd to opt out (or stop it from the dashboard).
 	_ = prompts.Worker // exposed via runtimehttp for explicit worker spawns w/ default prompt
 	if !runFlagNoShepherd {
-		_, _, err := rt.Spawn(runtime.SpawnSpec{
+		_, shepSess, err := rt.Spawn(runtime.SpawnSpec{
 			Name:         "shepherd",
 			AgentSlug:    runFlagAgent,
 			Tribe:        "default",
@@ -146,6 +146,11 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "warn: default shepherd failed (continuing): %v\n", err)
 		} else {
 			fmt.Println("✓ Default shepherd spawned (4-eyes on; --no-shepherd to opt out)")
+			// Boot the shepherd: accept the trust prompt + kick off its
+			// watch loop with an initial mission prompt. Without this the
+			// shepherd just sits at "Yes, I trust this folder" forever
+			// because Claude TUI is reactive — no operator means no input.
+			go bootstrapShepherd(rt, shepSess)
 		}
 	}
 	fmt.Println("\nRuntime up. Open http://" + runFlagListen + " (dashboard) to spawn workers.")
@@ -194,4 +199,40 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	err = app.Run()
 	shutdown()
 	return err
+}
+
+// bootstrapShepherd brings a freshly-spawned shepherd session into its
+// watch cycle: accept the Claude-Code trust prompt + send a mission
+// prompt + then keep poking it on a 5-minute tick so it actually runs
+// list_sessions/read_pane periodically rather than going idle forever.
+//
+// Claude's TUI is reactive — without these pokes the shepherd would sit
+// at the trust prompt and then at an empty input line indefinitely,
+// which is exactly the symptom the operator reported on #79.
+func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
+	// Wait for the Claude TUI to render the trust prompt + welcome.
+	time.Sleep(6 * time.Second)
+	// Accept trust ("Yes, I trust this folder" — Enter).
+	_, _ = sess.Write([]byte("\r"))
+	time.Sleep(5 * time.Second)
+	// Kick off the watch cycle. send_to_session adds Enter so this lands
+	// as a real prompt submission (per the #76 kitty-kbd fix in mcpserver).
+	kickoff := "Begin your shepherd duties. Use chepherd.list to see active sessions, then chepherd.read_pane(name, 40) on each non-paused session to assess what they're doing. Report a one-line status per session to the dashboard's human inbox via chepherd.alert_human if you spot anything noteworthy. Stay silent otherwise. After your first sweep, wait for the next tick I'll send you."
+	_, _ = sess.Write([]byte(kickoff))
+	time.Sleep(120 * time.Millisecond)
+	_, _ = sess.Write([]byte("\r"))
+
+	// Periodic ticks. Every 5 min, ask shepherd to do another sweep.
+	tick := time.NewTicker(5 * time.Minute)
+	defer tick.Stop()
+	for range tick.C {
+		// Re-check session is still alive; rt.Get returns nil if it was stopped.
+		live, _ := rt.Get("shepherd")
+		if live == nil || live != sess {
+			return
+		}
+		_, _ = sess.Write([]byte("Tick: do another sweep of active sessions and report anything that drifted since last tick."))
+		time.Sleep(120 * time.Millisecond)
+		_, _ = sess.Write([]byte("\r"))
+	}
 }
