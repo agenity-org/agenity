@@ -269,6 +269,9 @@ func (a *App) Run() error {
 	// Start the log consumer (forwards lines into the dashboard's log view)
 	go a.logConsumer()
 
+	// v0.3 — start the center pane's capture-pane refresh loop
+	a.dashboard.center.Start()
+
 	a.tv.SetRoot(a.pages, true).EnableMouse(true)
 
 	// Global key bindings — pages can intercept first.

@@ -12,14 +12,23 @@ import (
 	"github.com/chepherd/chepherd/internal/style"
 )
 
-// Dashboard is the W1 view: header + daemon-banner + (session-list | detail) + log + footer.
+// Dashboard is the v0.3 4-pane view:
+//
+//	header (1) │
+//	daemonBar (1) │ (visible only when daemon down/stale)
+//	body: list (left 18) │ center tmux mirror (48) │ right column (30)
+//	right column: detail/scorecard (60%) over logView (40%)
+//	footer (1)
 type Dashboard struct {
 	app *App
 
 	root      *tview.Flex
-	header    *tview.TextView
+	header    *tview.Flex // holds left+right text views
+	headerL   *tview.TextView
+	headerR   *tview.TextView
 	daemonBar *tview.TextView // W10 — daemon-down/stale banner; empty when healthy
 	list      *tview.Table
+	center    *Center // v0.3 — read-only tmux mirror
 	detail    *tview.TextView
 	logView   *tview.TextView
 	footer    *tview.TextView
@@ -31,11 +40,20 @@ type Dashboard struct {
 func newDashboard(a *App) *Dashboard {
 	d := &Dashboard{app: a}
 
-	// Header — top status bar (1 row, dynamic colors)
-	d.header = tview.NewTextView().
+	// Header — top status bar (1 row). Two text views in a Flex so the
+	// tiny brand mark on the right (`▰ chepherd 0.3`) stays right-anchored
+	// regardless of terminal width. Left side carries the wordmark + stats.
+	d.headerL = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	d.header.SetBackgroundColor(tcell.ColorBlack)
+	d.headerL.SetBackgroundColor(tcell.ColorBlack)
+	d.headerR = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignRight)
+	d.headerR.SetBackgroundColor(tcell.ColorBlack)
+	d.header = tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(d.headerL, 0, 1, false).
+		AddItem(d.headerR, 16, 0, false) // 14 cols for "▰ chepherd 0.3" + padding
 
 	// Daemon health banner — empty unless daemon down/stale (W10)
 	d.daemonBar = tview.NewTextView().
@@ -68,7 +86,7 @@ func newDashboard(a *App) *Dashboard {
 		d.renderDetail()
 	})
 
-	// Detail pane — right side, bordered box
+	// Detail pane — top-right, scorecard for the selected session
 	d.detail = tview.NewTextView().
 		SetDynamicColors(true).
 		SetWordWrap(true).
@@ -77,9 +95,12 @@ func newDashboard(a *App) *Dashboard {
 	d.detail.SetBorderPadding(0, 0, 1, 1).
 		SetBorder(true).
 		SetBorderColor(style.Border).
-		SetTitle(" Detail ").
+		SetTitle(" Scorecard ").
 		SetTitleColor(style.Title).
 		SetTitleAlign(tview.AlignLeft)
+
+	// Center pane — v0.3 read-only tmux mirror of the selected session
+	d.center = newCenter(a)
 
 	// Log pane — bottom, bordered box
 	d.logView = tview.NewTextView().
@@ -101,18 +122,28 @@ func newDashboard(a *App) *Dashboard {
 		SetTextAlign(tview.AlignLeft)
 	d.footer.SetBackgroundColor(tcell.ColorBlack)
 
-	// Layout assembly — tight k9s-style: header (1) → daemon-bar (1) →
-	// body=list|detail (flex) → log (10) → footer (1). NO blank-row
-	// spacers — bordered panes provide their own visual separation.
+	// v0.3 4-pane layout assembly:
+	//
+	//   header (1) → daemonBar (1) → body → footer (1)
+	//
+	// Body horizontal split: list (left ≈18) | center mirror (≈48) | right (≈30)
+	// Right vertical split: detail/scorecard (60%) over log (40%)
+	//
+	// Proportions expressed as flex weights so they scale with terminal
+	// width. Center pane is the visual anchor and the largest weight.
+	rightCol := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(d.detail, 0, 3, false). // 60% of right column
+		AddItem(d.logView, 0, 2, false) // 40% of right column
+
 	body := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(d.list, 0, 2, true).
-		AddItem(d.detail, 0, 3, false)
+		AddItem(d.list, 0, 18, true).
+		AddItem(d.center.view, 0, 48, false).
+		AddItem(rightCol, 0, 30, false)
 
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(d.header, 1, 0, false).
 		AddItem(d.daemonBar, 1, 0, false). // W10 — shown only when daemon down/stale
 		AddItem(body, 0, 1, true).
-		AddItem(d.logView, 10, 0, false).
 		AddItem(d.footer, 1, 0, false)
 	d.root.SetBackgroundColor(tcell.ColorBlack)
 
@@ -130,7 +161,8 @@ func newBlankRow() *tview.TextView {
 
 // render redraws everything from current state.
 func (d *Dashboard) render() {
-	d.header.SetText(d.app.FormatHeader())
+	d.headerL.SetText(d.app.FormatHeader())
+	d.headerR.SetText(d.app.FormatHeaderRight())
 	d.footer.SetText(d.app.FormatFooter())
 
 	// W10 — daemon health banner (visible only on issues).
@@ -139,6 +171,13 @@ func (d *Dashboard) render() {
 
 	d.renderList()
 	d.renderDetail()
+
+	// v0.3 — keep the center pane locked on the currently-selected session.
+	if s := d.app.Selected(); s != nil {
+		d.center.SetTarget(s.TmuxName)
+	} else {
+		d.center.SetTarget("")
+	}
 }
 
 // renderList rebuilds the session table.
