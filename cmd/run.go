@@ -203,8 +203,8 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 
 // bootstrapShepherd brings a freshly-spawned shepherd session into its
 // watch cycle: accept the Claude-Code trust prompt + send a mission
-// prompt + then keep poking it on a 5-minute tick so it actually runs
-// list_sessions/read_pane periodically rather than going idle forever.
+// prompt + then poke it on every spawn event AND on a regular tick so
+// it actually runs list/read_pane periodically rather than going idle.
 //
 // Claude's TUI is reactive — without these pokes the shepherd would sit
 // at the trust prompt and then at an empty input line indefinitely,
@@ -215,24 +215,47 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 	// Accept trust ("Yes, I trust this folder" — Enter).
 	_, _ = sess.Write([]byte("\r"))
 	time.Sleep(5 * time.Second)
-	// Kick off the watch cycle. send_to_session adds Enter so this lands
-	// as a real prompt submission (per the #76 kitty-kbd fix in mcpserver).
-	kickoff := "Begin your shepherd duties. Use chepherd.list to see active sessions, then chepherd.read_pane(name, 40) on each non-paused session to assess what they're doing. Report a one-line status per session to the dashboard's human inbox via chepherd.alert_human if you spot anything noteworthy. Stay silent otherwise. After your first sweep, wait for the next tick I'll send you."
-	_, _ = sess.Write([]byte(kickoff))
-	time.Sleep(120 * time.Millisecond)
-	_, _ = sess.Write([]byte("\r"))
+	// Kick off the watch cycle.
+	const kickoff = "Begin your shepherd duties. Use chepherd.list to see active sessions, then chepherd.read_pane(name, 40) on each non-paused worker to assess what they're doing. If something looks stuck or drifting, use chepherd.alert_human. Stay quiet otherwise. I'll poke you whenever a new session spawns AND on a 60-second tick — each poke means do a fresh sweep."
+	pokeShepherd(sess, kickoff)
 
-	// Periodic ticks. Every 5 min, ask shepherd to do another sweep.
-	tick := time.NewTicker(5 * time.Minute)
+	// Event-driven: every new spawn (other than shepherd itself) triggers
+	// an immediate sweep so the operator sees shepherd react in real time.
+	rt.AddSpawnHook(func(_ *session.Session, name string) {
+		if name == "shepherd" {
+			return
+		}
+		// Give the new agent ~3s to print its initial pane content so
+		// shepherd's read_pane has something to actually observe.
+		go func(n string) {
+			time.Sleep(3 * time.Second)
+			live, _ := rt.Get("shepherd")
+			if live == nil || live != sess {
+				return
+			}
+			pokeShepherd(sess, "A new session was just spawned: '"+n+"'. Do an immediate chepherd.list + chepherd.read_pane('"+n+"', 40) to see what it's doing, then report one short status line via chepherd.alert_human.")
+		}(name)
+	})
+
+	// Periodic baseline tick — 60s. Catches drift between explicit spawn
+	// events (e.g. an existing agent that's been silent or stuck).
+	tick := time.NewTicker(60 * time.Second)
 	defer tick.Stop()
 	for range tick.C {
-		// Re-check session is still alive; rt.Get returns nil if it was stopped.
 		live, _ := rt.Get("shepherd")
 		if live == nil || live != sess {
 			return
 		}
-		_, _ = sess.Write([]byte("Tick: do another sweep of active sessions and report anything that drifted since last tick."))
-		time.Sleep(120 * time.Millisecond)
-		_, _ = sess.Write([]byte("\r"))
+		pokeShepherd(sess, "Tick: chepherd.list + read_pane each non-paused worker. If anything drifted since last tick, alert_human. Otherwise stay silent.")
 	}
+}
+
+// pokeShepherd writes a body to the shepherd's PTY then a separate \r.
+// Two writes are necessary so kitty-keyboard-aware Claude treats the
+// Enter as a distinct keypress event (the same #76 fix as the MCP
+// send_to_session path).
+func pokeShepherd(sess *session.Session, body string) {
+	_, _ = sess.Write([]byte(body))
+	time.Sleep(120 * time.Millisecond)
+	_, _ = sess.Write([]byte("\r"))
 }

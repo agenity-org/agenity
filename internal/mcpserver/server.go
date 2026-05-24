@@ -205,7 +205,11 @@ func (s *Server) toolList() []map[string]any {
 	}
 }
 
-// toolCall handles MCP-style tools/call requests.
+// toolCall handles MCP-style tools/call requests. Per the MCP spec the
+// result must be `{ content: [{type:"text", text:"..."}], isError: bool }`,
+// not the raw tool-output JSON — Claude's MCP client silently drops
+// non-conformant responses, which is why shepherd reported "no sessions"
+// even though the backend list was correct (issue: tools/call shape).
 func (s *Server) toolCall(req *rpcReq) rpcResp {
 	var p struct {
 		Name      string          `json:"name"`
@@ -217,7 +221,23 @@ func (s *Server) toolCall(req *rpcReq) rpcResp {
 	if !strings.HasPrefix(p.Name, "chepherd.") {
 		return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: -32601, Message: "unknown tool: " + p.Name}}
 	}
-	return s.toolCallDirect(req.ID, strings.TrimPrefix(p.Name, "chepherd."), p.Arguments)
+	inner := s.toolCallDirect(req.ID, strings.TrimPrefix(p.Name, "chepherd."), p.Arguments)
+	// Wrap the raw result in the MCP content envelope.
+	if inner.Error != nil {
+		txt, _ := json.Marshal(map[string]any{"error": inner.Error.Message})
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+			"content": []map[string]any{{"type": "text", "text": string(txt)}},
+			"isError": true,
+		}}
+	}
+	body, err := json.Marshal(inner.Result)
+	if err != nil {
+		body = []byte(`{"error":"marshal failed"}`)
+	}
+	return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+		"content": []map[string]any{{"type": "text", "text": string(body)}},
+		"isError": false,
+	}}
 }
 
 func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcResp {
