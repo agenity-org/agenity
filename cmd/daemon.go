@@ -112,6 +112,16 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 
 	now := time.Now().UTC()
 	for _, s := range sessions {
+		// Pause sentinel — TUI's 'p' hotkey writes <uuid>.paused into the
+		// state dir. The daemon must honor it; previously the daemon kept
+		// injecting coach messages into "paused" sessions because
+		// DiscoverSessions reads tmux/ps (not state files) and never
+		// checked the sentinel. Founder reported: 'shepherd is paused for
+		// this session, but it is still sending you messages'.
+		if _, err := os.Stat(filepath.Join(stateDir, s.UUID+".paused")); err == nil {
+			fmt.Printf("  %s paused (sentinel %s.paused); skipping\n", s.TmuxName, s.UUID)
+			continue
+		}
 		state, err := daemon.LoadState(stateDir, s.UUID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "load state %s: %v\n", s.UUID, err)
