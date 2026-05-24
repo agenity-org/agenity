@@ -169,6 +169,19 @@
       if (ev.data instanceof ArrayBuffer) term.write(new Uint8Array(ev.data));
       else term.write(ev.data);
     };
+    // Push dimension changes to the backend so the PTY child gets SIGWINCH
+    // matching xterm's actual rows/cols. Without this, Claude TUI's
+    // initial render stays at 80×24 even when our pane is 120×40, and
+    // mid-render content wraps badly to the smaller dimensions.
+    const sendResize = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
+      try {
+        ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols }));
+      } catch {}
+    };
+    term.onResize(sendResize);
+    // Initial sync once the WS is open + fit() has settled.
+    ws.addEventListener('open', () => setTimeout(sendResize, 200));
     term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
   }
 

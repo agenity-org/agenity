@@ -232,7 +232,11 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request, sess *sess
 		}
 	}()
 
-	// Inbound: WebSocket → PTY stdin
+	// Inbound: WebSocket → PTY stdin (+ resize control frames).
+	// Binary frames are raw stdin bytes. Text frames carry a tiny JSON
+	// control protocol; today only {"type":"resize","rows":N,"cols":N}
+	// is honored — the client sends one on fit() so the PTY child gets
+	// a SIGWINCH that matches xterm's actual dimensions.
 	go func() {
 		defer wg.Done()
 		for {
@@ -241,9 +245,21 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request, sess *sess
 				return
 			default:
 			}
-			_, msg, err := conn.ReadMessage()
+			mt, msg, err := conn.ReadMessage()
 			if err != nil {
 				return
+			}
+			if mt == websocket.TextMessage {
+				var ctrl struct {
+					Type       string `json:"type"`
+					Rows, Cols uint16
+				}
+				if json.Unmarshal(msg, &ctrl) == nil && ctrl.Type == "resize" && ctrl.Rows > 0 && ctrl.Cols > 0 {
+					_ = sess.Resize(ctrl.Rows, ctrl.Cols)
+					continue
+				}
+				// Unknown text frame — fall through to PTY stdin so legacy
+				// clients sending plain text still work.
 			}
 			if _, err := sess.Write(msg); err != nil {
 				return
