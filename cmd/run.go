@@ -129,46 +129,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
 	}
 
-	// Spawn Adam
-	adamInfo, adamSession, err := rt.Spawn(runtime.SpawnSpec{
-		Name:         "adam",
-		AgentSlug:    runFlagAgent,
-		Tribe:        "default",
-		Role:         runtime.RoleWorker,
-		Cwd:          cwd,
-		SystemPrompt: prompts.Adam,
-	})
-	if err != nil {
-		return fmt.Errorf("spawn adam: %w", err)
-	}
-	fmt.Printf("✓ Spawned Adam (%s) — id=%s tribe=%s role=%s\n",
-		runFlagAgent, adamInfo.ID, adamInfo.Tribe, adamInfo.Role)
-	_ = adamSession
-
-	// Spawn Chepherd if monitored
-	if !runFlagUnmonitored {
-		chepInfo, chepSession, err := rt.Spawn(runtime.SpawnSpec{
-			Name:         "chepherd",
-			AgentSlug:    runFlagAgent,
-			Tribe:        "default",
-			Role:         runtime.RoleShepherd,
-			Cwd:          cwd,
-			SystemPrompt: prompts.Shepherd,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warn: spawn chepherd: %v (continuing unmonitored)\n", err)
-		} else {
-			fmt.Printf("✓ Spawned Chepherd (%s) — id=%s tribe=%s role=%s shepherding=%v\n",
-				runFlagAgent, chepInfo.ID, chepInfo.Tribe, chepInfo.Role, chepInfo.Shepherding)
-			_ = chepSession
-		}
-	}
-
-	fmt.Println()
-	fmt.Println("Runtime up. Sessions in registry:")
-	for _, info := range rt.List() {
-		fmt.Printf("  - %s (%s, %s) in tribe %s\n", info.Name, info.Role, info.AgentSlug, info.Tribe)
-	}
+	// No auto-spawn. The operator opens the dashboard, sees zero sessions,
+	// and clicks "+ spawn agent" to create what they want. A shepherd is
+	// opt-in via the web UI (or the chepherd.spawn MCP tool with
+	// role=shepherd) — never default.
+	_ = prompts.Worker   // exposed via runtimehttp for "spawn worker w/ default prompt"
+	_ = prompts.Shepherd // exposed via runtimehttp for "spawn shepherd w/ default prompt"
+	fmt.Println("\nRuntime up. Open http://" + runFlagListen + " (dashboard) to spawn sessions.")
 	fmt.Println()
 
 	// Graceful shutdown plumbing — fires whether TUI exits naturally or

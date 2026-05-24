@@ -1,0 +1,313 @@
+- generic [ref=e1]:
+  - navigation [ref=e2]:
+    - link "✻ chepherd" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e4]:
+      - link "Docs" [ref=e5] [cursor=pointer]:
+        - /url: /docs
+      - link "Download" [ref=e6] [cursor=pointer]:
+        - /url: /download
+      - link "GitHub" [ref=e7] [cursor=pointer]:
+        - /url: https://github.com/chepherd/chepherd
+  - main [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - generic [ref=e11]:
+          - heading "✻ chepherd" [level=1] [ref=e12]
+          - generic [ref=e13]: 4 sessions · 2 tribes
+          - button "+ spawn agent" [ref=e15] [cursor=pointer]
+        - generic [ref=e16]:
+          - complementary [ref=e17]:
+            - heading "Sessions" [level=2] [ref=e18]
+            - list [ref=e19]:
+              - listitem [ref=e20] [cursor=pointer]:
+                - generic [ref=e21]:
+                  - generic [ref=e22]: ●
+                  - generic [ref=e23]: adam
+                - generic [ref=e24]: claude-code · default · 8m
+              - listitem [ref=e25] [cursor=pointer]:
+                - generic [ref=e26]:
+                  - generic [ref=e27]: ●
+                  - generic [ref=e28]: ping
+                - generic [ref=e29]: claude-code · default · 6m
+              - listitem [ref=e30] [cursor=pointer]:
+                - generic [ref=e31]:
+                  - generic [ref=e32]: ●
+                  - generic [ref=e33]: kyc
+                - generic [ref=e34]: claude-code · default · 5m
+              - listitem [ref=e35] [cursor=pointer]:
+                - generic [ref=e36]:
+                  - generic [ref=e37]: ●
+                  - generic [ref=e38]: talentmesh
+                - generic [ref=e39]: claude-code · tribe2 · 2m
+          - generic [ref=e40]:
+            - generic [ref=e41]: ● adam — live attach via WebSocket
+            - generic [ref=e73]:
+              - generic [ref=e74]:
+                - textbox "Terminal input" [ref=e75]
+                - generic [ref=e76]: ································vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+              - generic [ref=e77]:
+                - generic [ref=e80]: ────────────────────────────────────────────────────────────────────────────────
+                - generic [ref=e81]:
+                  - generic [ref=e83]: Accessing
+                  - generic [ref=e85]: "workspace:"
+                - generic [ref=e89]: /home/openova
+                - generic [ref=e92]: "Quick safety check: Is this a project you created or one you trust? (Like your"
+                - generic [ref=e94]: own code, a well-known open source project, or work from your team). If not,
+                - generic [ref=e96]: take a moment to review what's in this folder first.
+                - generic [ref=e99]: Claude Code'll be able to read, edit, and execute files here.
+                - generic [ref=e101]:
+                  - generic [ref=e103]: Security
+                  - generic [ref=e105]: guide
+                - generic [ref=e107]:
+                  - generic [ref=e109]: ❯
+                  - generic [ref=e111]: "1."
+                  - generic [ref=e113]: Yes,
+                  - generic [ref=e115]: I
+                  - generic [ref=e117]: trust
+                  - generic [ref=e119]: this
+                  - generic [ref=e121]: folder
+                - generic [ref=e122]:
+                  - generic [ref=e124]: "2."
+                  - generic [ref=e125]: No, exit
+                - generic [ref=e127]:
+                  - generic [ref=e129]: Enter
+                  - generic [ref=e131]: to
+                  - generic [ref=e133]: confirm
+                  - generic [ref=e135]: ·
+                  - generic [ref=e137]: Esc
+                  - generic [ref=e139]: to
+                  - generic [ref=e141]: cancel
+          - complementary [ref=e43]:
+            - heading "Session details" [level=2] [ref=e184]
+            - generic [ref=e185]:
+              - term [ref=e186]: Name
+              - definition [ref=e187]:
+                - code [ref=e188]: adam
+              - term [ref=e189]: ID
+              - definition [ref=e190]:
+                - code [ref=e191]: adam-1779638396066785416
+              - term [ref=e192]: Agent
+              - definition [ref=e193]: claude-code
+              - term [ref=e194]: Role
+              - definition [ref=e195]: worker
+              - term [ref=e196]: Tribe
+              - definition [ref=e197]: default
+              - term [ref=e198]: Cwd
+              - definition [ref=e199]:
+                - code [ref=e200]: /home/openova
+              - term [ref=e201]: Started
+              - definition [ref=e202]: 8m ago
+              - term [ref=e203]: Status
+              - definition [ref=e204]: live
+            - heading "Actions" [level=2] [ref=e205]
+            - generic [ref=e206]:
+              - button "⏸ pause" [ref=e207] [cursor=pointer]
+              - button "⨯ stop" [ref=e208] [cursor=pointer]
+      - generic [ref=e210]:
+        - generic [ref=e211]:
+          - heading "+ spawn agent" [level=2] [ref=e212]
+          - button "×" [ref=e213] [cursor=pointer]
+        - generic [ref=e214]:
+          - generic [ref=e215]:
+            - button "Fresh agent" [ref=e216] [cursor=pointer]
+            - button "Resume previous" [active] [ref=e217] [cursor=pointer]
+          - generic [ref=e218]:
+            - generic [ref=e219]:
+              - text: Session name
+              - emphasis [ref=e220]: (unique @-address)
+            - textbox "Session name (unique @-address)" [ref=e221]:
+              - /placeholder: e.g. iogrid-1, eva, review-bot
+          - generic [ref=e222]:
+            - generic [ref=e223]:
+              - generic [ref=e224]: Agent
+              - combobox "Agent" [ref=e225]:
+                - option "claude-code" [selected]
+                - option "qwen-code"
+                - option "aider"
+                - option "opencode"
+                - option "cursor-agent"
+                - option "little-coder"
+                - option "sovereign-shell"
+            - generic [ref=e226]:
+              - generic [ref=e227]: Tribe
+              - textbox "Tribe" [ref=e228]:
+                - /placeholder: default
+                - text: default
+            - generic [ref=e229]:
+              - generic [ref=e230]: Role
+              - combobox "Role" [ref=e231]:
+                - option "worker" [selected]
+                - option "shepherd"
+          - generic [ref=e232]:
+            - generic [ref=e233]: Working directory
+            - textbox "Working directory" [ref=e234]:
+              - /placeholder: /home/openova/repos/yourproject
+          - generic [ref=e235]:
+            - generic [ref=e236]:
+              - text: Recent project folders
+              - emphasis [ref=e237]: (click to use)
+            - generic [ref=e238]:
+              - button "/home/openova/repos/chepherd 51 sessions" [ref=e239] [cursor=pointer]:
+                - code [ref=e240]: /home/openova/repos/chepherd
+                - generic [ref=e241]: 51 sessions
+              - button "/home/openova 358 sessions" [ref=e242] [cursor=pointer]:
+                - code [ref=e243]: /home/openova
+                - generic [ref=e244]: 358 sessions
+              - button "/home/openova/repos/talentmesh 3 sessions" [ref=e245] [cursor=pointer]:
+                - code [ref=e246]: /home/openova/repos/talentmesh
+                - generic [ref=e247]: 3 sessions
+              - button "/home/openova/repos/kyc 2 sessions" [ref=e248] [cursor=pointer]:
+                - code [ref=e249]: /home/openova/repos/kyc
+                - generic [ref=e250]: 2 sessions
+              - button "/home/openova/repos/ping 3 sessions" [ref=e251] [cursor=pointer]:
+                - code [ref=e252]: /home/openova/repos/ping
+                - generic [ref=e253]: 3 sessions
+              - button "/home/openova/repos/openova 2 sessions" [ref=e254] [cursor=pointer]:
+                - code [ref=e255]: /home/openova/repos/openova
+                - generic [ref=e256]: 2 sessions
+              - button "/home/openova/repos/iogrid 1 session" [ref=e257] [cursor=pointer]:
+                - code [ref=e258]: /home/openova/repos/iogrid
+                - generic [ref=e259]: 1 session
+              - button "/home/openova/repos/workflow 567 sessions" [ref=e260] [cursor=pointer]:
+                - code [ref=e261]: /home/openova/repos/workflow
+                - generic [ref=e262]: 567 sessions
+              - button "/home/openova/repos/vcard 3 sessions" [ref=e263] [cursor=pointer]:
+                - code [ref=e264]: /home/openova/repos/vcard
+                - generic [ref=e265]: 3 sessions
+              - button "/home/openova/repos/cinova 1 session" [ref=e266] [cursor=pointer]:
+                - code [ref=e267]: /home/openova/repos/cinova
+                - generic [ref=e268]: 1 session
+          - generic [ref=e272]:
+            - generic [ref=e273]: Resume which Claude session?
+            - list [ref=e274]:
+              - listitem [ref=e275] [cursor=pointer]:
+                - generic [ref=e276]:
+                  - code [ref=e277]: 52a38e09
+                  - generic [ref=e278]: /home/openova/repos/chepherd
+                  - generic [ref=e279]: 5/25/2026, 12:08:00 AM
+                - generic [ref=e280]: "\"I created this project to optmize the claude code sessions accross the board. Depite we went to millions of iterations t…\""
+              - listitem [ref=e281] [cursor=pointer]:
+                - generic [ref=e282]:
+                  - code [ref=e283]: 22ef42cf
+                  - generic [ref=e284]: /home/openova
+                  - generic [ref=e285]: 5/25/2026, 12:07:14 AM
+              - listitem [ref=e286] [cursor=pointer]:
+                - generic [ref=e287]:
+                  - code [ref=e288]: 0e69dd6d
+                  - generic [ref=e289]: /home/openova
+                  - generic [ref=e290]: 5/25/2026, 12:06:07 AM
+              - listitem [ref=e291] [cursor=pointer]:
+                - generic [ref=e292]:
+                  - code [ref=e293]: d83994ac
+                  - generic [ref=e294]: /home/openova/repos/talentmesh
+                  - generic [ref=e295]: 5/25/2026, 12:06:05 AM
+                - generic [ref=e296]: "\"what it the status of the project, have we met all the definition of doens, is there anything missing? The open items in…\""
+              - listitem [ref=e297] [cursor=pointer]:
+                - generic [ref=e298]:
+                  - code [ref=e299]: eec0eb62
+                  - generic [ref=e300]: /home/openova/repos/kyc
+                  - generic [ref=e301]: 5/25/2026, 12:03:08 AM
+                - generic [ref=e302]: "\"<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond…\""
+              - listitem [ref=e303] [cursor=pointer]:
+                - generic [ref=e304]:
+                  - code [ref=e305]: acd32084
+                  - generic [ref=e306]: /home/openova/repos/ping
+                  - generic [ref=e307]: 5/25/2026, 12:01:50 AM
+                - generic [ref=e308]: "\"we want to start implementing this project but since the sociable..cash domain has already been purchased by someone els…\""
+              - listitem [ref=e309] [cursor=pointer]:
+                - generic [ref=e310]:
+                  - code [ref=e311]: bb094218
+                  - generic [ref=e312]: /home/openova
+                  - generic [ref=e313]: 5/25/2026, 12:00:13 AM
+              - listitem [ref=e314] [cursor=pointer]:
+                - generic [ref=e315]:
+                  - code [ref=e316]: 76db53bc
+                  - generic [ref=e317]: /home/openova
+                  - generic [ref=e318]: 5/24/2026, 11:59:29 PM
+              - listitem [ref=e319] [cursor=pointer]:
+                - generic [ref=e320]:
+                  - code [ref=e321]: 3832d2f7
+                  - generic [ref=e322]: /home/openova
+                  - generic [ref=e323]: 5/24/2026, 11:55:25 PM
+              - listitem [ref=e324] [cursor=pointer]:
+                - generic [ref=e325]:
+                  - code [ref=e326]: 2579c972
+                  - generic [ref=e327]: /home/openova
+                  - generic [ref=e328]: 5/24/2026, 11:54:27 PM
+              - listitem [ref=e329] [cursor=pointer]:
+                - generic [ref=e330]:
+                  - code [ref=e331]: 2d8f473c
+                  - generic [ref=e332]: /home/openova
+                  - generic [ref=e333]: 5/24/2026, 11:50:11 PM
+              - listitem [ref=e334] [cursor=pointer]:
+                - generic [ref=e335]:
+                  - code [ref=e336]: 7ecfde17
+                  - generic [ref=e337]: /home/openova
+                  - generic [ref=e338]: 5/24/2026, 11:49:14 PM
+              - listitem [ref=e339] [cursor=pointer]:
+                - generic [ref=e340]:
+                  - code [ref=e341]: 6d99010f
+                  - generic [ref=e342]: /home/openova
+                  - generic [ref=e343]: 5/24/2026, 11:46:40 PM
+                - generic [ref=e344]: "\"hi\""
+              - listitem [ref=e345] [cursor=pointer]:
+                - generic [ref=e346]:
+                  - code [ref=e347]: 2d08f566
+                  - generic [ref=e348]: /home/openova
+                  - generic [ref=e349]: 5/24/2026, 11:44:36 PM
+              - listitem [ref=e350] [cursor=pointer]:
+                - generic [ref=e351]:
+                  - code [ref=e352]: 51eae605
+                  - generic [ref=e353]: /home/openova
+                  - generic [ref=e354]: 5/24/2026, 11:43:39 PM
+              - listitem [ref=e355] [cursor=pointer]:
+                - generic [ref=e356]:
+                  - code [ref=e357]: 7eddbf7c
+                  - generic [ref=e358]: /home/openova
+                  - generic [ref=e359]: 5/24/2026, 11:38:52 PM
+              - listitem [ref=e360] [cursor=pointer]:
+                - generic [ref=e361]:
+                  - code [ref=e362]: 0bf71cd9
+                  - generic [ref=e363]: /home/openova
+                  - generic [ref=e364]: 5/24/2026, 11:38:04 PM
+                - generic [ref=e365]: "\"What is 5+7? Reply only the number.\""
+              - listitem [ref=e366] [cursor=pointer]:
+                - generic [ref=e367]:
+                  - code [ref=e368]: 99ba341c
+                  - generic [ref=e369]: /home/openova
+                  - generic [ref=e370]: 5/24/2026, 11:38:04 PM
+                - generic [ref=e371]: "\"What is 17 * 23? Reply only the number.\""
+              - listitem [ref=e372] [cursor=pointer]:
+                - generic [ref=e373]:
+                  - code [ref=e374]: 8ff778de
+                  - generic [ref=e375]: /home/openova
+                  - generic [ref=e376]: 5/24/2026, 11:37:38 PM
+              - listitem [ref=e377] [cursor=pointer]:
+                - generic [ref=e378]:
+                  - code [ref=e379]: 7166d1e5
+                  - generic [ref=e380]: /home/openova
+                  - generic [ref=e381]: 5/24/2026, 11:34:58 PM
+                - generic [ref=e382]: "\"What is 17 * 23? Reply ONLY the number, nothing else.\""
+        - generic [ref=e269]:
+          - button "Cancel" [ref=e270] [cursor=pointer]
+          - button "Resume session" [ref=e383] [cursor=pointer]
+  - contentinfo [ref=e46]:
+    - generic [ref=e47]:
+      - text: chepherd — agent runtime + supervisor + multi-agent dashboard ·
+      - link "powered by OpenOva" [ref=e48] [cursor=pointer]:
+        - /url: https://openova-io.github.io
+      - text: · Apache 2.0
+  - generic [ref=e51]:
+    - button "Menu" [ref=e52]:
+      - img [ref=e54]
+      - generic: Menu
+    - button "Inspect" [ref=e58]:
+      - img [ref=e60]
+      - generic: Inspect
+    - button "Audit" [ref=e62]:
+      - img [ref=e64]
+      - generic: Audit
+    - button "Settings" [ref=e67]:
+      - img [ref=e69]
+      - generic: Settings

@@ -1,5 +1,5 @@
-// Package prompts embeds chepherd's default system prompts for Adam
-// (the worker default) and Chepherd (the meta-shepherd watcher).
+// Package prompts embeds chepherd's default system prompts for worker
+// agents and shepherd (the meta-supervisor watcher) agents.
 //
 // These are baked into the binary so chepherd ships with a usable
 // out-of-box configuration. Operators can override per-session via
@@ -8,8 +8,8 @@ package prompts
 
 import _ "embed"
 
-//go:embed adam.md
-var Adam string
+//go:embed worker.md
+var Worker string
 
 //go:embed shepherd.md
 var Shepherd string

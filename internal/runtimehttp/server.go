@@ -30,6 +30,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
 )
@@ -105,6 +106,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			Name, Agent, Tribe, Role, Cwd, SystemPrompt string
 			AgentArgs                                   []string `json:"agent_args"`
 			ResumeUUID                                  string   `json:"resume_uuid"`
+			UseDefaultPrompt                            bool     `json:"use_default_prompt"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -118,13 +120,21 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		if req.ResumeUUID != "" {
 			args = append(args, "--resume", req.ResumeUUID)
 		}
+		systemPrompt := req.SystemPrompt
+		if req.UseDefaultPrompt && systemPrompt == "" {
+			if role == runtime.RoleShepherd {
+				systemPrompt = prompts.Shepherd
+			} else {
+				systemPrompt = prompts.Worker
+			}
+		}
 		info, _, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:         req.Name,
 			AgentSlug:    req.Agent,
 			Tribe:        req.Tribe,
 			Role:         role,
 			Cwd:          req.Cwd,
-			SystemPrompt: req.SystemPrompt,
+			SystemPrompt: systemPrompt,
 			AgentArgs:    args,
 		})
 		if err != nil {
@@ -252,8 +262,11 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request, sess *sess
 // Query: ?cwd=<absolute-path> filters to one project; omit to list all.
 // Response: {sessions: [{uuid, cwd, modified, size_bytes, first_message}]}
 //
-// The encoded-cwd convention is Claude's: replace '/' with '-' (e.g.
-// /home/openova → -home-openova). We decode by reversing.
+// We read the cwd from each JSONL's first record carrying a top-level
+// `cwd` field (typically the first `type:user` record). The legacy
+// approach of decoding the directory name with "-"→"/" was broken for
+// hyphenated repos (talent-mesh → talent/mesh) — fixed per reviewer
+// finding on #78.
 func (s *Server) claudeSessions(w http.ResponseWriter, r *http.Request) {
 	filterCwd := r.URL.Query().Get("cwd")
 	home, _ := os.UserHomeDir()
@@ -275,11 +288,6 @@ func (s *Server) claudeSessions(w http.ResponseWriter, r *http.Request) {
 		if !projDir.IsDir() {
 			continue
 		}
-		// Decode Claude's "-home-openova-repos-x" → "/home/openova/repos/x"
-		decoded := "/" + strings.ReplaceAll(strings.TrimPrefix(projDir.Name(), "-"), "-", "/")
-		if filterCwd != "" && decoded != filterCwd {
-			continue
-		}
 		projPath := filepath.Join(root, projDir.Name())
 		files, err := os.ReadDir(projPath)
 		if err != nil {
@@ -294,24 +302,26 @@ func (s *Server) claudeSessions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			uuid := strings.TrimSuffix(f.Name(), ".jsonl")
-			// First message: read first 1KB, parse first non-summary line.
-			first := readFirstUserMessage(filepath.Join(projPath, f.Name()))
+			cwd, first := readSessionMeta(filepath.Join(projPath, f.Name()))
+			if filterCwd != "" && cwd != filterCwd {
+				continue
+			}
 			out = append(out, cs{
 				UUID:         uuid,
-				Cwd:          decoded,
+				Cwd:          cwd,
 				Modified:     info.ModTime().UTC().Format(time.RFC3339),
 				SizeBytes:    info.Size(),
 				FirstMessage: first,
 			})
 		}
 	}
-	// Sort newest first by Modified
 	sort.Slice(out, func(i, j int) bool { return out[i].Modified > out[j].Modified })
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
 
 // recentFolders lists folders that have at least one Claude session,
-// for the Spawn modal's folder picker. Most-recently-active first.
+// for the Spawn modal's folder autocomplete. Most-recently-active first.
+// Reads cwd from JSONL records (same fix as claudeSessions above).
 func (s *Server) recentFolders(w http.ResponseWriter, _ *http.Request) {
 	home, _ := os.UserHomeDir()
 	root := filepath.Join(home, ".claude", "projects")
@@ -325,54 +335,68 @@ func (s *Server) recentFolders(w http.ResponseWriter, _ *http.Request) {
 		Modified string `json:"modified"`
 		Sessions int    `json:"sessions"`
 	}
-	out := []fe{}
+	byPath := map[string]*fe{}
 	for _, d := range entries {
 		if !d.IsDir() {
 			continue
 		}
-		decoded := "/" + strings.ReplaceAll(strings.TrimPrefix(d.Name(), "-"), "-", "/")
 		files, err := os.ReadDir(filepath.Join(root, d.Name()))
 		if err != nil {
 			continue
 		}
-		count := 0
-		var newest time.Time
 		for _, f := range files {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
 				continue
 			}
-			count++
+			fp := filepath.Join(root, d.Name(), f.Name())
+			cwd, _ := readSessionMeta(fp)
+			if cwd == "" {
+				continue
+			}
 			info, err := f.Info()
-			if err == nil && info.ModTime().After(newest) {
-				newest = info.ModTime()
+			if err != nil {
+				continue
+			}
+			modTime := info.ModTime().UTC().Format(time.RFC3339)
+			if cur, ok := byPath[cwd]; ok {
+				cur.Sessions++
+				if modTime > cur.Modified {
+					cur.Modified = modTime
+				}
+			} else {
+				byPath[cwd] = &fe{Path: cwd, Modified: modTime, Sessions: 1}
 			}
 		}
-		if count == 0 {
-			continue
-		}
-		out = append(out, fe{Path: decoded, Modified: newest.UTC().Format(time.RFC3339), Sessions: count})
+	}
+	out := make([]fe, 0, len(byPath))
+	for _, v := range byPath {
+		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Modified > out[j].Modified })
 	writeJSON(w, http.StatusOK, map[string]any{"folders": out})
 }
 
-// readFirstUserMessage scans the first ~4KB of a Claude session JSONL
-// for the first message of type "user" (or "human") and returns a short
-// snippet of its content. Best-effort; returns "" on any parse failure.
-func readFirstUserMessage(path string) string {
+// readSessionMeta scans the first ~16KB of a Claude session JSONL and
+// returns (cwd, first_user_message). Either field may be "" if not
+// found. The cwd comes from the first record carrying a top-level cwd
+// field (typically the first user record). first_user_message is the
+// first user role message content (string or text-content array).
+func readSessionMeta(path string) (string, string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer f.Close()
-	buf := make([]byte, 8192)
+	buf := make([]byte, 16384)
 	n, _ := f.Read(buf)
+	var cwd, first string
 	for _, line := range strings.Split(string(buf[:n]), "\n") {
 		if line == "" {
 			continue
 		}
 		var rec struct {
 			Type    string `json:"type"`
+			Cwd     string `json:"cwd"`
 			Message struct {
 				Role    string `json:"role"`
 				Content any    `json:"content"`
@@ -381,24 +405,29 @@ func readFirstUserMessage(path string) string {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			continue
 		}
-		if rec.Type != "user" && rec.Message.Role != "user" {
-			continue
+		if cwd == "" && rec.Cwd != "" {
+			cwd = rec.Cwd
 		}
-		// Content can be string or [{type:"text",text:"..."}]
-		switch c := rec.Message.Content.(type) {
-		case string:
-			return truncate(c, 120)
-		case []any:
-			for _, item := range c {
-				if m, ok := item.(map[string]any); ok {
-					if t, _ := m["text"].(string); t != "" {
-						return truncate(t, 120)
+		if first == "" && (rec.Type == "user" || rec.Message.Role == "user") {
+			switch c := rec.Message.Content.(type) {
+			case string:
+				first = truncate(c, 120)
+			case []any:
+				for _, item := range c {
+					if m, ok := item.(map[string]any); ok {
+						if t, _ := m["text"].(string); t != "" {
+							first = truncate(t, 120)
+							break
+						}
 					}
 				}
 			}
 		}
+		if cwd != "" && first != "" {
+			break
+		}
 	}
-	return ""
+	return cwd, first
 }
 
 func truncate(s string, n int) string {

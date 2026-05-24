@@ -1,0 +1,50 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - link "✻ chepherd" [ref=e5] [cursor=pointer]:
+        - /url: /
+      - generic [ref=e6]: 2 sessions · 2 workers · 0 shepherds
+      - navigation [ref=e7]:
+        - link "Docs" [ref=e8] [cursor=pointer]:
+          - /url: /docs
+        - link "Download" [ref=e9] [cursor=pointer]:
+          - /url: /download
+        - link "GitHub" [ref=e10] [cursor=pointer]:
+          - /url: https://github.com/chepherd/chepherd
+      - button "+ spawn agent" [ref=e11] [cursor=pointer]
+    - generic [ref=e12]:
+      - complementary [ref=e13]:
+        - generic [ref=e14]:
+          - heading "Workers (2)" [level=2] [ref=e122]
+          - list [ref=e16]:
+            - listitem [ref=e117] [cursor=pointer]:
+              - generic [ref=e118]:
+                - generic [ref=e119]: ●
+                - generic [ref=e120]: talentmesh
+              - generic [ref=e121]: claude-code · default · 34s
+            - listitem [ref=e123] [cursor=pointer]:
+              - generic [ref=e124]:
+                - generic [ref=e125]: ●
+                - generic [ref=e126]: vcard
+              - generic [ref=e127]: claude-code · default · 18s
+        - generic [ref=e18]:
+          - heading "Shepherds (0)" [level=2] [ref=e19]
+          - list [ref=e20]:
+            - listitem [ref=e21]: No shepherds. Spawn a shepherd to watch your workers (opt-in).
+      - generic [ref=e23]: Pick a session ← or click "+ spawn agent" to create one
+      - complementary [ref=e25]:
+        - heading "Details" [level=2] [ref=e26]
+        - paragraph [ref=e27]: Pick a session on the left to see details + actions.
+  - generic [ref=e30]:
+    - button "Menu" [ref=e31]:
+      - img [ref=e33]
+      - generic: Menu
+    - button "Inspect" [ref=e37]:
+      - img [ref=e39]
+      - generic: Inspect
+    - button "Audit" [ref=e41]:
+      - img [ref=e43]
+      - generic: Audit
+    - button "Settings" [ref=e46]:
+      - img [ref=e48]
+      - generic: Settings

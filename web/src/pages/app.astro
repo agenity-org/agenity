@@ -1,9 +1,22 @@
 ---
-import Layout from '../layouts/Layout.astro';
+// Dashboard route — bypasses the marketing Layout so we get full viewport.
+// Header + footer get inlined into the Dashboard component header bar.
 import Dashboard from '../components/Dashboard.svelte';
+import '../styles/global.css';
 ---
-<Layout title="chepherd — dashboard">
-  <main style="padding: 1rem 2rem; min-height: 100vh;">
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chepherd — dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #0a0a0a; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; color: #f5f5f5; }
+    </style>
+  </head>
+  <body>
     <Dashboard client:load />
-  </main>
-</Layout>
+  </body>
+</html>
