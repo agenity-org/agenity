@@ -35,12 +35,12 @@
   let spawnForm = $state({
     name: '',
     agent: 'claude-code',
-    tribe: 'default',
+    team: 'default',
     role: 'worker',
     cwd: '',
     mode: 'fresh',
     resume_uuid: '',
-    use_default_prompt: false,
+    use_default_prompt: true, // "solo" mode ON by default per founder
   });
   let folderQuery = $state('');
   let folderFocused = $state(false);
@@ -105,18 +105,18 @@
     } catch { claudeSessions = []; }
   }
 
-  // Auto-derive a unique session name from cwd basename if blank.
+  // Auto-derive a unique session name from cwd's LEAF folder name.
+  // First spawn into ~/repos/talentmesh => "talentmesh".
+  // Second spawn into the same folder => "talentmesh-1".
+  // Third => "talentmesh-2". Etc. Per founder spec.
   function autoName(cwd) {
     const base = (cwd || '').split('/').filter(Boolean).pop() || 'agent';
     const slug = base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const existing = new Set(sessions.map(s => s.name));
-    let candidate = slug;
+    if (!existing.has(slug)) return slug;
     let n = 1;
-    while (existing.has(candidate)) {
-      n++;
-      candidate = `${slug}-${n}`;
-    }
-    return candidate;
+    while (existing.has(`${slug}-${n}`)) n++;
+    return `${slug}-${n}`;
   }
 
   let term = null;
@@ -200,15 +200,13 @@
   }
 
   async function openSpawn() {
-    spawnForm = { name: '', agent: 'claude-code', tribe: 'default', role: 'worker', cwd: '', mode: 'fresh', resume_uuid: '', use_default_prompt: false };
+    spawnForm = { name: '', agent: 'claude-code', team: 'default', role: 'worker', cwd: '', mode: 'fresh', resume_uuid: '', use_default_prompt: true };
     folderQuery = '';
     folderFocused = false;
+    folderSuppressed = false;
     claudeQuery = '';
     spawnError = '';
     showSpawn = true;
-    // Await both so the autocomplete dropdown is populated by the time
-    // the user starts typing — eliminates a class of race conditions in
-    // tests + slow networks.
     await Promise.all([loadAllFolders(), refreshClaudeSessions(null)]);
   }
 
@@ -251,7 +249,7 @@
     const body = {
       name: spawnForm.name,
       agent: spawnForm.agent,
-      tribe: spawnForm.tribe || 'default',
+      team: spawnForm.team || 'default',
       role: spawnForm.role,
       cwd: spawnForm.cwd,
       use_default_prompt: spawnForm.use_default_prompt,
@@ -298,37 +296,18 @@
     if (seconds < 3600) return Math.floor(seconds/60) + 'm';
     return Math.floor(seconds/3600) + 'h ' + Math.floor((seconds%3600)/60) + 'm';
   }
-  // Normalize raw session counters into 5 axes for the spider chart.
-  // Each axis returns 0..10. The set was tuned to give a meaningful
-  // pentagon instead of a degenerate square — Engagement (burst rate)
-  // is the 5th axis the founder requested.
-  function spiderAxesFor(info) {
-    if (!info) return [];
-    const total = info.total_bytes || 0;
-    const recent = info.bytes_5m || 0;
-    const idle = info.idle_seconds || 0;
-    const ageSec = (Date.now() - new Date(info.created_at).getTime()) / 1000;
-    const chunks5m = info.chunks_5m || 0;
-
-    // ACTIVITY — bytes in last 5min (more = more active). Log-scaled.
-    // 100B = 1, 1KiB = 3, 10KiB = 5, 100KiB = 7, 1MiB+ = 10.
-    const activity = recent === 0 ? 0 : Math.min(10, Math.log10(recent / 10 + 1) * 2.2);
-    // LIVENESS — recency of last output. Idle <2s = 10, idle >5min = 0.
-    const liveness = Math.max(0, Math.min(10, 10 * (1 - idle / 300)));
-    // VOLUME — total bytes streamed since spawn. Log-scaled.
-    const volume = total === 0 ? 0 : Math.min(10, Math.log10(total + 1) * 1.5);
-    // UPTIME — how long alive. <1min = 1, 1hr = 5, 24h = 10.
-    const uptime = ageSec === 0 ? 0 : Math.min(10, Math.log10(ageSec / 60 + 1) * 2.8);
-    // ENGAGEMENT — output bursts per minute in last 5min.
-    // 0 bursts = 0, 5/min = 5, 20+/min = 10.
-    const engagement = chunks5m === 0 ? 0 : Math.min(10, (chunks5m / 5) * 2);
-
+  // Convert shepherd's 5-axis scorecard into spider-chart input.
+  // Shepherd writes real scores via chepherd.set_scorecard MCP (not
+  // synthetic activity proxies). G=Goal clarity, V=Velocity, F=Focus,
+  // E=End-state proximity, D=Discipline (CLAUDE.md compliance).
+  function scorecardAxesFor(sc) {
+    if (!sc) return [];
     return [
-      { label: 'Activity',   value: activity },
-      { label: 'Liveness',   value: liveness },
-      { label: 'Engagement', value: engagement },
-      { label: 'Uptime',     value: uptime },
-      { label: 'Volume',     value: volume },
+      { label: 'Goal',       value: sc.G || 0 },
+      { label: 'Velocity',   value: sc.V || 0 },
+      { label: 'Focus',      value: sc.F || 0 },
+      { label: 'End-state',  value: sc.E || 0 },
+      { label: 'Discipline', value: sc.D || 0 },
     ];
   }
 
@@ -444,7 +423,7 @@
                 <span class="name">{s.name}</span>
                 {#if s.paused}<span class="badge">paused</span>{/if}
               </div>
-              <div class="row2">{s.agent} · {s.tribe} · {ageString(s.created_at)}</div>
+              <div class="row2">{s.agent} · {s.team} · {ageString(s.created_at)}</div>
             </li>
           {/each}
           {#if workers.length === 0}
@@ -526,45 +505,90 @@
       <div class="term" bind:this={termContainer}></div>
     </section>
 
-    <!-- Right: identity / location / scores — grouped in cards -->
+    <!-- Right: 4 cards (Identity / Location / Process / Shepherd) — dense inline rows -->
     <aside class="right">
       {#if selectedInfo}
-        <!-- Card 1: Identity (who) -->
+        <!-- Card 1: Identity -->
         <section class="card">
           <h3>Identity</h3>
-          <dl>
-            <dt>Name</dt><dd><code>{selectedInfo.name}</code></dd>
-            <dt>Agent</dt><dd>{selectedInfo.agent}</dd>
-            <dt>Role</dt><dd>
-              <span class="role-pill" class:shepherd={selectedInfo.role==='shepherd'}>{selectedInfo.role}</span>
-            </dd>
-            <dt>Tribe</dt><dd>{selectedInfo.tribe}</dd>
+          <div class="kv">
+            <span class="k">name</span><span class="v"><code>{selectedInfo.name}</code></span>
+            <span class="k">agent</span><span class="v">{selectedInfo.agent}</span>
+            <span class="k">role</span><span class="v"><span class="role-pill" class:shepherd={selectedInfo.role==='shepherd'}>{selectedInfo.role}</span></span>
+            <span class="k">team</span><span class="v">{selectedInfo.team}</span>
             {#if selectedInfo.shepherding && selectedInfo.shepherding.length}
-              <dt>Watching</dt><dd>{selectedInfo.shepherding.join(', ')}</dd>
+              <span class="k">watching</span><span class="v">{selectedInfo.shepherding.join(', ')}</span>
             {/if}
-          </dl>
+          </div>
         </section>
 
-        <!-- Card 2: Location & lifecycle (where + when) -->
+        <!-- Card 2: Location (cwd + git context) -->
         <section class="card">
           <h3>Location</h3>
-          <dl>
-            <dt>Cwd</dt><dd><code class="cwd">{selectedInfo.cwd || '—'}</code></dd>
-            <dt>Started</dt><dd>{ageString(selectedInfo.created_at)} ago</dd>
-            <dt>Status</dt><dd>{selectedInfo.paused ? '⏸ paused' : (selectedInfo.bytes_5m > 0 ? '● live' : '○ idle')}</dd>
-          </dl>
+          <div class="kv">
+            <span class="k">cwd</span><span class="v wrap"><code class="cwd">{selectedInfo.cwd || '—'}</code></span>
+            {#if selectedInfo.github_url}
+              <span class="k">repo</span><span class="v wrap"><a href={selectedInfo.github_url} target="_blank" rel="noopener">{selectedInfo.github_url.replace('https://github.com/','')} ↗</a></span>
+            {/if}
+            {#if selectedInfo.branch}
+              <span class="k">branch</span><span class="v"><code>{selectedInfo.branch}</code></span>
+            {/if}
+            <span class="k">started</span><span class="v">{ageString(selectedInfo.created_at)} ago</span>
+            <span class="k">status</span><span class="v">
+              {#if selectedInfo.exited}
+                <span class="status-exited">⨯ exited (code {selectedInfo.exit_code})</span>
+              {:else if selectedInfo.paused}
+                <span>⏸ paused</span>
+              {:else if selectedInfo.bytes_5m > 0}
+                <span>● live</span>
+              {:else}
+                <span>○ idle</span>
+              {/if}
+            </span>
+          </div>
         </section>
 
-        <!-- Card 3: Scorecard (spider chart) -->
+        <!-- Card 3: Process telemetry (pid + uuid + bytes) -->
         <section class="card">
-          <h3>Scorecard</h3>
-          <SpiderChart axes={spiderAxesFor(selectedInfo)} />
-          <p class="score-note">5-min rolling window. Activity = inverse-idle.</p>
+          <h3>Process</h3>
+          <div class="kv">
+            <span class="k">pid</span><span class="v"><code>{selectedInfo.pid || '—'}</code></span>
+            <span class="k">uuid</span><span class="v wrap"><code class="uuid">{selectedInfo.id}</code></span>
+            <span class="k">bytes 5m</span><span class="v">{formatBytes(selectedInfo.bytes_5m)}</span>
+            <span class="k">total</span><span class="v">{formatBytes(selectedInfo.total_bytes)}</span>
+            <span class="k">idle</span><span class="v">{relTimeShort(selectedInfo.idle_seconds)}</span>
+          </div>
+        </section>
+
+        <!-- Card 4: Shepherd assessment (scorecard + verdicts) -->
+        <section class="card">
+          <h3>Shepherd assessment</h3>
+          {#if selectedInfo.scorecard}
+            <SpiderChart axes={scorecardAxesFor(selectedInfo.scorecard)} />
+            <div class="kv" style="margin-top:0.6rem;">
+              <span class="k">scored</span><span class="v">{relTime(selectedInfo.scorecard.at)}</span>
+              {#if selectedInfo.last_verdict}
+                <span class="k">verdict</span><span class="v"><span class="verdict verdict-{selectedInfo.last_verdict}">{selectedInfo.last_verdict}</span></span>
+                <span class="k">when</span><span class="v">{relTime(selectedInfo.last_verdict_at)}</span>
+              {/if}
+              {#if selectedInfo.intervention_count > 0}
+                <span class="k">interventions</span><span class="v">{selectedInfo.intervention_count}</span>
+              {/if}
+            </div>
+            {#if selectedInfo.last_verdict_msg}
+              <p class="last-msg">"{selectedInfo.last_verdict_msg}"</p>
+            {/if}
+            {#if selectedInfo.scorecard.note}
+              <p class="score-note">{selectedInfo.scorecard.note}</p>
+            {/if}
+          {:else}
+            <p class="hint">Shepherd is assessing — first scorecard arrives on the next tick (≤60s).</p>
+          {/if}
         </section>
       {:else}
         <section class="card">
           <h3>Details</h3>
-          <p class="hint">Pick a session on the left to see identity, location, and scorecard.</p>
+          <p class="hint">Pick a session on the left to see identity, location, process telemetry, and shepherd assessment.</p>
         </section>
       {/if}
     </aside>
@@ -645,8 +669,8 @@
 
         <div class="row">
           <label>
-            <span>Tribe</span>
-            <input type="text" bind:value={spawnForm.tribe} placeholder="default" />
+            <span>Team</span>
+            <input type="text" bind:value={spawnForm.team} placeholder="default" />
           </label>
           <label>
             <span>Role</span>
@@ -655,11 +679,11 @@
               <option value="shepherd">shepherd (opt-in 4-eyes)</option>
             </select>
           </label>
-          <label class="check" title="Inject chepherd's built-in {spawnForm.role} brief as the agent's system prompt — it teaches the agent how to use chepherd MCP tools (spawn peers, @target relay, alert_human). Off = vanilla agent with no chepherd awareness.">
+          <label class="check" title="When ON (default): the agent is told it's running inside chepherd and given the chepherd MCP tools so it can spawn peers, talk to other agents via @target, and alert you. When OFF: vanilla agent, no chepherd awareness — pure single-session usage.">
             <input type="checkbox" bind:checked={spawnForm.use_default_prompt} />
             <span>
-              Use chepherd's {spawnForm.role} brief
-              <em class="check-hint">— teaches the agent how to talk to peers and the operator via chepherd MCP tools</em>
+              Make the agent chepherd-aware
+              <em class="check-hint">— knows about peers, can use MCP tools, observed by shepherd (recommended)</em>
             </span>
           </label>
         </div>
@@ -840,6 +864,27 @@
   .right dd code.cwd { font-size: 0.78rem; word-break: break-all; color: var(--accent-2); }
   .role-pill { display: inline-block; padding: 0.05rem 0.5rem; border-radius: 9px; font-size: 0.74rem; background: var(--accent-2); color: #000; font-weight: 600; }
   .role-pill.shepherd { background: var(--accent); color: #000; }
+
+  /* Dense key:value grid — replaces flat <dl> with inline label-value rows.
+     Each row is 2 columns: label (auto, capped) | value (1fr).
+     Wrap multi-line cwd/uuid into the v cell only. */
+  .kv { display: grid; grid-template-columns: minmax(60px, auto) 1fr; column-gap: 0.6rem; row-gap: 0.32rem; align-items: baseline; }
+  .kv .k { color: var(--fg-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .kv .v { color: var(--fg); font-size: 0.88rem; word-break: break-word; min-width: 0; }
+  .kv .v code { font-size: 0.82rem; color: var(--accent-2); }
+  .kv .v code.cwd, .kv .v code.uuid { font-size: 0.78rem; word-break: break-all; }
+  .kv .v.wrap { word-break: break-all; }
+  .kv .v a { color: var(--accent); text-decoration: none; }
+  .kv .v a:hover { text-decoration: underline; }
+
+  .verdict { display: inline-block; padding: 0.04rem 0.45rem; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
+  .verdict-silent { background: rgba(150,150,150,0.18); color: var(--fg-muted); }
+  .verdict-praise { background: rgba(52,211,153,0.18); color: #34d399; }
+  .verdict-coach  { background: rgba(255,165,0,0.18); color: var(--accent); }
+  .verdict-intervene { background: rgba(255,107,107,0.18); color: var(--danger); }
+
+  .status-exited { color: var(--fg-faint); }
+  .last-msg { color: var(--fg-muted); font-size: 0.82rem; font-style: italic; margin: 0.5rem 0 0 0; line-height: 1.35; padding-left: 0.4rem; border-left: 2px solid var(--border-strong); }
 
   .score-note { font-size: 0.72rem; color: var(--fg-faint); margin: 0.55rem 0 0 0; font-style: italic; text-align: center; }
 
