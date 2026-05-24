@@ -519,31 +519,27 @@ func (a *App) Select(idx int) {
 	a.selectedIdx = idx
 }
 
-// FormatHeader returns the LEFT side of the 3-row header — "chepherd"
+// FormatHeader returns the LEFT side of the 4-row header — "chepherd"
 // in bold block-character ASCII art.
 //
-// Design: 8 letters × 4 cols + 7 × 2-col gaps = 46 cols. Color is
-// light-grey (style.Logo = #E0E0E0) for a pressed-stamp feel — the
-// orange brand-pop was too playful.
+// Design: 8 letters × 5 cols + 7 × 1-col tight gaps = 47 cols.
+// Letters are wider (5-col instead of 4) for a heavier/fatter feel
+// while keeping tight inter-letter spacing. Plus a 2-col left margin
+// and a 1-row top margin so the logo doesn't crowd the pane corner.
 //
-// Letter forms:
-//   c: 4-col open-bowl with top + bottom bars
-//   h: vertical bars + middle crossbar
-//   e: top + middle + bottom bars
-//   p: closed bowl on top + left descender
-//   r: vertical bar + small top-right hook (clean, no spurious dots)
-//   d: closed bowl on right + bottom bar
+// Color: light-grey (style.Logo = #E0E0E0) — pressed-stamp feel.
 func (a *App) FormatHeader() string {
-	logo1 := style.TagBold(style.Logo, "█▀▀▀  █  █  █▀▀▀  █▀▀█  █  █  █▀▀▀  █▀▀▄  █▀▀▄")
-	logo2 := style.TagBold(style.Logo, "█     █▀▀█  █▀▀   █▀▀   █▀▀█  █▀▀   █▀▀▘  █  █")
-	logo3 := style.TagBold(style.Logo, "▀▀▀▀  ▀  ▀  ▀▀▀▀  ▀     ▀  ▀  ▀▀▀▀  ▀     ▀▀▀ ")
-	return logo1 + "\n" + logo2 + "\n" + logo3
+	margin := "  " // 2-col left padding
+	top := ""      // 1-row top padding (blank line above logo)
+	logo1 := style.TagBold(style.Logo, margin+"█▀▀▀▀ █   █ █▀▀▀▀ █▀▀▀█ █   █ █▀▀▀▀ █▀▀▀▄ █▀▀▀▄")
+	logo2 := style.TagBold(style.Logo, margin+"█     █▀▀▀█ █▀▀▀  █▀▀▀▘ █▀▀▀█ █▀▀▀  █▀▀▀  █   █")
+	logo3 := style.TagBold(style.Logo, margin+"█▄▄▄▄ ▀   ▀ ▀▀▀▀▀ ▀     ▀   ▀ ▀▀▀▀▀ ▀     ▀▀▀▀ ")
+	return top + "\n" + logo1 + "\n" + logo2 + "\n" + logo3
 }
 
-// FormatHeaderRight returns the RIGHT side of the 3-row header — stats
-// + sort mode + control hints, occupying all 3 rows of the header.
-// Founder #75/#3: move control hints into the header. Footer becomes
-// minimal (just essential keys).
+// FormatHeaderRight returns the RIGHT side of the 4-row header — top
+// row blank (matches logo's top margin), then stats + sort, then two
+// rows of control hints. Footer is minimal (just essential keys).
 func (a *App) FormatHeaderRight() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -556,6 +552,7 @@ func (a *App) FormatHeaderRight() string {
 	}
 	now := time.Now().UTC().Format("15:04:05 UTC")
 
+	row0 := ""
 	row1 := style.Tag(style.Body, fmt.Sprintf("%d sessions · %d active · sort: %s · %s    ",
 		total, active, a.sortMode, now))
 	row2 := style.Tag(style.KeyDesc, "↑↓ select  ") +
@@ -567,7 +564,7 @@ func (a *App) FormatHeaderRight() string {
 		style.TagBold(style.KeyLetter, "L ") + style.Tag(style.KeyDesc, "login  ") +
 		style.TagBold(style.KeyLetter, "? ") + style.Tag(style.KeyDesc, "help  ") +
 		style.TagBold(style.KeyLetter, "q ") + style.Tag(style.KeyDesc, "quit    ")
-	return row1 + "\n" + row2 + "\n" + row3
+	return row0 + "\n" + row1 + "\n" + row2 + "\n" + row3
 }
 
 // FormatFooter builds the bottom shortcut bar.

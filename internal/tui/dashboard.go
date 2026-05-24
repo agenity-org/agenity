@@ -57,7 +57,7 @@ func newDashboard(a *App) *Dashboard {
 		SetTextAlign(tview.AlignRight)
 	d.headerR.SetBackgroundColor(tcell.ColorBlack)
 	d.header = tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(d.headerL, 48, 0, false). // fixed-width logo column (3 rows × 46 cols + 2-pad)
+		AddItem(d.headerL, 52, 0, false). // fixed-width logo column (4 rows × 47 cols + 2-col left margin + pad)
 		AddItem(d.headerR, 0, 1, false)   // stats + hotkeys flow right side
 
 	// Daemon health banner — empty unless daemon down/stale (W10)
@@ -152,7 +152,7 @@ func newDashboard(a *App) *Dashboard {
 		SetTitleAlign(tview.AlignLeft)
 
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(d.header, 3, 0, false).
+		AddItem(d.header, 4, 0, false).
 		AddItem(d.daemonBar, 1, 0, false). // W10 — shown only when daemon down/stale
 		AddItem(body, 0, 1, true).
 		AddItem(d.logView, 5, 0, false). // log strip — 5 rows incl. border
@@ -231,7 +231,7 @@ func (d *Dashboard) applyNarrowMode() {
 		body.AddItem(d.detail, 0, 28, false) // scorecard pane
 	}
 	d.root.Clear()
-	d.root.AddItem(d.header, 3, 0, false).
+	d.root.AddItem(d.header, 4, 0, false).
 		AddItem(d.daemonBar, 1, 0, false).
 		AddItem(body, 0, 1, true).
 		AddItem(d.logView, 5, 0, false). // log strip — visible at all widths
