@@ -19,6 +19,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/chepherd/chepherd/internal/runtimehttp"
 	"github.com/chepherd/chepherd/internal/runtimetui"
 )
 
@@ -40,6 +42,7 @@ var (
 	runFlagUnmonitored bool
 	runFlagStateDir    string
 	runFlagHeadless    bool
+	runFlagListen      string
 )
 
 var runCmd = &cobra.Command{
@@ -69,6 +72,7 @@ func init() {
 	runCmd.Flags().BoolVar(&runFlagUnmonitored, "unmonitored", false, "spawn Adam only; no Chepherd (4-eyes off)")
 	runCmd.Flags().StringVar(&runFlagStateDir, "state-dir", "", "runtime state dir (default: ~/.local/state/chepherd-v05)")
 	runCmd.Flags().BoolVar(&runFlagHeadless, "headless", false, "skip TUI; print runtime status + sleep (for testing / systemd)")
+	runCmd.Flags().StringVar(&runFlagListen, "listen", "127.0.0.1:8080", "HTTP/WS listen addr (set to '' to disable; for web/mobile clients)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -102,6 +106,19 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("mcp server: %w", err)
 	}
 	fmt.Printf("✓ MCP server listening on %s\n", mcpserver.DefaultSockPath(stateDir))
+
+	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),
+	// and remote-TUI clients. Disabled when --listen "".
+	var httpSrv *http.Server
+	if runFlagListen != "" {
+		rs := runtimehttp.New(rt)
+		hs, err := rs.ServeOn(runFlagListen)
+		if err != nil {
+			return fmt.Errorf("http server: %w", err)
+		}
+		httpSrv = hs
+		fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
+	}
 
 	// Spawn Adam
 	adamInfo, adamSession, err := rt.Spawn(runtime.SpawnSpec{
@@ -153,6 +170,9 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// SIGINT/SIGTERM arrives.
 	shutdown := func() {
 		fmt.Println("\nShutting down...")
+		if httpSrv != nil {
+			_ = httpSrv.Close()
+		}
 		mcpSrv.Stop()
 		relay.Stop()
 		for _, info := range rt.List() {
