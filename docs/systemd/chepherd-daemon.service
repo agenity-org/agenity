@@ -1,0 +1,53 @@
+# systemd user unit for the chepherd Go daemon.
+#
+# Installs to ~/.config/systemd/user/chepherd-daemon.service so the
+# daemon survives terminal exits + restarts on crash + auto-starts on
+# login. Replaces the legacy `nohup python supervisor.py &` pattern.
+#
+# Install (one-time):
+#   mkdir -p ~/.config/systemd/user
+#   cp docs/systemd/chepherd-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now chepherd-daemon
+#
+# Verify:
+#   systemctl --user status chepherd-daemon
+#   journalctl --user -u chepherd-daemon -f      # live log tail
+#
+# Cutover runbook reference: docs/RUNBOOK-cutover-py-to-go.md step 4.
+
+[Unit]
+Description=chepherd Go supervisor daemon — coaches parallel Claude Code sessions
+Documentation=https://github.com/chepherd/chepherd/blob/main/docs/RUNBOOK-cutover-py-to-go.md
+# Don't start until the tmux server socket is reachable. The daemon
+# discovers sessions via `tmux ls`; without tmux running there's
+# nothing to watch.
+After=network-online.target
+
+[Service]
+# Replace with the absolute path chosen at cutover time. The runbook
+# installs to /usr/local/bin/chepherd-go; adjust per-host.
+ExecStart=%h/.local/bin/chepherd-go daemon --interval 60s
+WorkingDirectory=%h
+# Restart on crash but back off if the daemon keeps failing.
+Restart=on-failure
+RestartSec=10s
+StartLimitInterval=10min
+StartLimitBurst=5
+# Inherit a minimal shell env. The daemon reads ~/.config/chepherd/
+# for runtime config + writes state to ~/.local/state/chepherd-go/.
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Resource limits — chepherd is a light coordinator + judge caller;
+# memory cap protects the host from runaway state-file growth.
+MemoryMax=512M
+CPUQuota=50%
+# stdout/stderr → journal (queryable via `journalctl --user -u chepherd-daemon`).
+StandardOutput=journal
+StandardError=journal
+# 30s graceful drain before SIGKILL — lets in-flight judge calls finish
+# and state flush to disk.
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target
