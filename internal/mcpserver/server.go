@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/chepherd/chepherd/internal/runtime"
 )
@@ -300,20 +301,38 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			"lines": lines, "total_lines": len(lines),
 		}
 	case "send_to_session":
-		var a struct{ Name, Body string }
+		var a struct {
+			Name, Body string
+			NoSubmit   bool `json:"no_submit"`
+		}
 		_ = json.Unmarshal(args, &a)
 		sess, _ := s.rt.Get(a.Name)
 		if sess == nil {
 			resp.Error = &rpcErr{Code: -32000, Message: "no such session: " + a.Name}
 			return resp
 		}
-		body := a.Body
-		if !strings.HasSuffix(body, "\n") {
-			body += "\n"
-		}
+		// Write the body bytes as the first PTY chunk — this is what the
+		// remote agent reads as the typed content. Trim any trailing \n
+		// the caller provided since we'll dispatch Enter as a separate
+		// chunk for kitty / modifyOtherKeys-aware TUIs (see issue #76).
+		body := strings.TrimRight(a.Body, "\r\n")
 		if _, err := sess.Write([]byte(body)); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
+		}
+		// Submit by default — send Enter as a SEPARATE PTY write so kitty /
+		// modifyOtherKeys-mode TUIs (Claude Code 2.1.148+) treat it as a
+		// distinct keypress event rather than part of the input buffer.
+		// Tested against claude-code, qwen-code, sovereign-shell. Use
+		// no_submit:true if you only want to deposit text into the input.
+		if !a.NoSubmit {
+			// Brief pause lets the receiver's input editor process the
+			// body before the Enter event arrives.
+			time.Sleep(120 * time.Millisecond)
+			if _, err := sess.Write([]byte("\r")); err != nil {
+				resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+				return resp
+			}
 		}
 		resp.Result = map[string]any{"ok": true}
 	case "pause":

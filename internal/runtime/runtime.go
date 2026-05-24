@@ -73,6 +73,20 @@ type Runtime struct {
 
 	// for waking up subscribers when state changes (used by TUI ticker, etc.)
 	cond *sync.Cond
+
+	// spawnHooks are invoked after every successful Spawn with the new
+	// session + its canonical name. The messagebus relay registers a
+	// hook here so dynamically-spawned agents (via chepherd.spawn MCP
+	// tool) get their output watched for @target relay routing.
+	spawnHooks []func(*session.Session, string)
+}
+
+// AddSpawnHook registers a callback invoked after every successful Spawn.
+// Called synchronously in Spawn after persistence, before broadcast.
+func (r *Runtime) AddSpawnHook(hook func(*session.Session, string)) {
+	r.mu.Lock()
+	r.spawnHooks = append(r.spawnHooks, hook)
+	r.mu.Unlock()
 }
 
 // HumanInboxEntry is a routed @human message in the dashboard's "Messages → Human" view.
@@ -204,11 +218,15 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	r.sessions[id] = s
 	r.byName[spec.Name] = id
 	r.info[id] = info
+	hooks := append([]func(*session.Session, string){}, r.spawnHooks...)
 	r.mu.Unlock()
 
 	if err := r.persistInfo(info); err != nil {
 		// Non-fatal: session is live, just won't survive restart.
 		fmt.Fprintf(os.Stderr, "runtime: persist %s failed: %v\n", id, err)
+	}
+	for _, h := range hooks {
+		h(s, spec.Name)
 	}
 	r.broadcast()
 	return info, s, nil

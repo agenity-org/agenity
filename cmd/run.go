@@ -31,6 +31,7 @@ import (
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
+	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/runtimehttp"
 	"github.com/chepherd/chepherd/internal/runtimetui"
@@ -98,6 +99,14 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("runtime: %w", err)
 	}
 	relay := messagebus.New(rt)
+	// Auto-watch every session spawned by the runtime — including dynamic
+	// MCP `chepherd.spawn` invocations. Without this, only the initial
+	// Adam/Chepherd would have their output scanned for @target lines.
+	rt.AddSpawnHook(func(s *session.Session, name string) {
+		if err := relay.Watch(s, name); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: relay.Watch %s: %v\n", name, err)
+		}
+	})
 
 	// MCP server on Unix socket — `chepherd mcp` subprocess (used by agents)
 	// dials this socket and proxies JSON-RPC. One server per runtime.
@@ -134,9 +143,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("✓ Spawned Adam (%s) — id=%s tribe=%s role=%s\n",
 		runFlagAgent, adamInfo.ID, adamInfo.Tribe, adamInfo.Role)
-	if err := relay.Watch(adamSession, "adam"); err != nil {
-		return fmt.Errorf("watch adam: %w", err)
-	}
+	_ = adamSession
 
 	// Spawn Chepherd if monitored
 	if !runFlagUnmonitored {
@@ -153,9 +160,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("✓ Spawned Chepherd (%s) — id=%s tribe=%s role=%s shepherding=%v\n",
 				runFlagAgent, chepInfo.ID, chepInfo.Tribe, chepInfo.Role, chepInfo.Shepherding)
-			if err := relay.Watch(chepSession, "chepherd"); err != nil {
-				fmt.Fprintf(os.Stderr, "warn: watch chepherd: %v\n", err)
-			}
+			_ = chepSession
 		}
 	}
 
