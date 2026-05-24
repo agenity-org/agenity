@@ -216,7 +216,7 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 	_, _ = sess.Write([]byte("\r"))
 	time.Sleep(5 * time.Second)
 	// Kick off the watch cycle.
-	const kickoff = "Begin your shepherd duties. Use chepherd.list to see active sessions, then chepherd.read_pane(name, 40) on each non-paused worker to assess what they're doing. If something looks stuck or drifting, use chepherd.alert_human. Stay quiet otherwise. I'll poke you whenever a new session spawns AND on a 60-second tick — each poke means do a fresh sweep."
+	const kickoff = "Begin the tick loop from your system brief. For every non-paused worker, call chepherd.list then chepherd.read_pane(name, 60), then chepherd.set_scorecard(name, G, V, F, E, D, note) with the 5-axis evaluation AND chepherd.record_verdict(name, verdict, message). Use baseline scores of 5/5/5/5/5 with note 'first observation; baseline scores' for any worker you haven't observed before. Each tick poke means: re-list, re-read, re-score, re-verdict every worker."
 	pokeShepherd(sess, kickoff)
 
 	// Event-driven: every new spawn (other than shepherd itself) triggers
@@ -246,7 +246,7 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 		if live == nil || live != sess {
 			return
 		}
-		pokeShepherd(sess, "Tick: chepherd.list + read_pane each non-paused worker. If anything drifted since last tick, alert_human. Otherwise stay silent.")
+		pokeShepherd(sess, "Tick: chepherd.list + read_pane each non-paused worker. Then chepherd.set_scorecard + chepherd.record_verdict for each — update scores based on what changed since last tick. Stay quiet unless alert_human is needed.")
 	}
 }
 
