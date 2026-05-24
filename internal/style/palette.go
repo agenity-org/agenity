@@ -22,7 +22,7 @@ var (
 
 // Brand
 var (
-	Logo = mustColor("#FFA500") // orange — chepherd logo + brand pop
+	Logo = mustColor("#E0E0E0") // light-grey/white — pressed-stamp feel
 )
 
 // Frame chrome

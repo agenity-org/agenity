@@ -57,7 +57,7 @@ func newDashboard(a *App) *Dashboard {
 		SetTextAlign(tview.AlignRight)
 	d.headerR.SetBackgroundColor(tcell.ColorBlack)
 	d.header = tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(d.headerL, 41, 0, false). // fixed-width logo column (3 rows × 39 cols + 2-pad)
+		AddItem(d.headerL, 48, 0, false). // fixed-width logo column (3 rows × 46 cols + 2-pad)
 		AddItem(d.headerR, 0, 1, false)   // stats + hotkeys flow right side
 
 	// Daemon health banner — empty unless daemon down/stale (W10)
