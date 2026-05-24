@@ -1,0 +1,49 @@
+# LICENSE-NOTICE — internal/ptyhost/
+
+This directory contains code lifted from the OpenOva platform, specifically the
+Sandbox pty-server runtime. The lift was performed at a stable handoff point
+agreed between the chepherd and openova teams.
+
+## Source
+
+- Repository: https://github.com/openova-io/openova
+- Tag:        pty-server-handoff-1.0
+- Commit:     c65dbdca
+- Path:       products/sandbox/pty-server/internal/{session,server,agentcatalog}
+
+## Scope of the lift
+
+- session/session.go, buffer.go, manager.go     — PTY multiplexer + ring buffer
+- server/routes.go, metrics.go                  — HTTP/WS surface for client attach
+- agentcatalog/agentcatalog.go                  — agent CLI registry (claude-code,
+                                                   qwen-code, aider, cursor-agent,
+                                                   little-coder, opencode,
+                                                   sovereign-shell)
+
+## Modifications applied during the lift
+
+1. Import paths rewritten: `github.com/openova-io/openova/products/sandbox/pty-server/internal/*`
+   → `github.com/chepherd/chepherd/internal/ptyhost/*`
+2. Environment variable rename: `OPENOVA_SANDBOX_AGENTS_PATH` → `CHEPHERD_AGENTS_PATH`
+3. No other modifications. The runtime semantics, wire protocol, ring buffer
+   behavior, and agent-spawn contract are bit-identical to the openova source
+   at the tagged commit.
+
+## License
+
+The openova repository is licensed under Apache-2.0. The lifted code is
+redistributed in this repository under the same license. See ../../LICENSE.
+
+## Coordination
+
+This lift was agreed via chepherd/chepherd EPIC #49 and openova-io/openova
+issue #2316. Both teams committed to keeping the wire protocol stable so
+future bug-fixes can be cross-applied. chepherd's MCP server uses the
+`chepherd.*` namespace; openova-MCP keeps `gitea.*`, `sandbox.db.*`,
+`k8s.*`, `marketplace.*`, `sandbox.deploy.*`, `sandbox.stripe.*` —
+non-colliding by agreement.
+
+Refs:
+- chepherd/chepherd#49 (EPIC), #50 (lift), #51 (this notice)
+- openova-io/openova#2316 (joint EPIC)
+- openova-io/openova tag pty-server-handoff-1.0
