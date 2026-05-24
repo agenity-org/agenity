@@ -241,7 +241,23 @@ func AllSlugs() []string {
 // data-shaping step.
 func (a Agent) Resolve(extraArgs []string, envOverride map[string]string) ([]string, []string) {
 	argv := make([]string, 0, 1+len(a.DefaultArgs)+len(extraArgs))
-	argv = append(argv, a.Binary)
+	// Resolve the binary path. The Builtin table uses /usr/local/bin/<cli>
+	// per openova's StatefulSet convention; chepherd's local installs may
+	// have the agent in /usr/bin or ~/.local/bin instead. Fall back to
+	// exec.LookPath using the binary's basename when the configured path
+	// doesn't exist — keeps openova's Sandbox compat AND lets chepherd
+	// work on any laptop without env-var-tuning.
+	bin := a.Binary
+	if _, err := os.Stat(bin); err != nil {
+		base := bin
+		if idx := lastSlash(bin); idx >= 0 {
+			base = bin[idx+1:]
+		}
+		if found, err := execLookPath(base); err == nil {
+			bin = found
+		}
+	}
+	argv = append(argv, bin)
 	argv = append(argv, a.DefaultArgs...)
 	argv = append(argv, extraArgs...)
 
@@ -276,6 +292,21 @@ func (a Agent) Resolve(extraArgs []string, envOverride map[string]string) ([]str
 		}
 	}
 	return argv, out
+}
+
+// lastSlash returns the index of the last '/' in s, or -1.
+func lastSlash(s string) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '/' {
+			return i
+		}
+	}
+	return -1
+}
+
+// execLookPath wraps exec.LookPath via a var so tests can stub.
+var execLookPath = func(name string) (string, error) {
+	return execLookPathReal(name)
 }
 
 // indexByte is a tiny stdlib-free helper to avoid pulling strings just
