@@ -54,6 +54,12 @@ type Session struct {
 	// show near-real-time issue counts + commit activity even when
 	// the judge is on a 30-min trusted cadence.
 	LiveSignals *LiveSignals `json:"live_signals,omitempty"`
+
+	// AuthLapsed is set true when the tmux pane shows Claude's "Please run
+	// /login" prompt — i.e. the session can't reach the Claude API and the
+	// founder needs to re-OAuth. Dashboard surfaces this with a red 🔒 tag
+	// + a hotkey to drop the user into /login on the affected session.
+	AuthLapsed bool `json:"auth_lapsed,omitempty"`
 }
 
 // LiveSignals — cheap, free-to-compute snapshot of the session's local

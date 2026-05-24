@@ -42,9 +42,11 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # memory cap protects the host from runaway state-file growth.
 MemoryMax=512M
 CPUQuota=50%
-# stdout/stderr → journal (queryable via `journalctl --user -u chepherd-daemon`).
-StandardOutput=journal
-StandardError=journal
+# stdout/stderr → append to a flat file the TUI dashboard can tail.
+# (Journald still mirrors via systemd's logger.) The tailer reads this
+# path in `internal/log/tail.go` → DefaultLogPaths().
+StandardOutput=append:%h/.local/state/chepherd/chepherd.log
+StandardError=append:%h/.local/state/chepherd/chepherd.log
 # 30s graceful drain before SIGKILL — lets in-flight judge calls finish
 # and state flush to disk.
 TimeoutStopSec=30s

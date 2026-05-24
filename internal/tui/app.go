@@ -98,6 +98,12 @@ func (a *App) installGlobalKeys() {
 		case 't':
 			a.TmuxAttachSelected()
 			return nil
+		case 'L':
+			// Capital-L = "login" — drop the user into the selected
+			// session's pane + send '/login' so they can re-auth.
+			// Only useful when the session is AuthLapsed.
+			a.LoginSelected()
+			return nil
 		case 'n':
 			a.newSession.show()
 			return nil
@@ -150,19 +156,69 @@ func (a *App) UnpauseSelected() {
 // TmuxAttachSelected attempts to switch the user to the selected session's
 // tmux pane. If we're inside tmux, uses switch-client; otherwise suspends
 // the TUI and runs attach in the foreground.
+//
+// Errors are appended to the dashboard log pane — the previous version
+// swallowed them with `_ = execCmd(...)` so when 't' silently no-op'd
+// (e.g. when the row's TmuxName was a UUID-prefix fallback that doesn't
+// match any actual tmux session) the user saw nothing.
 func (a *App) TmuxAttachSelected() {
 	s := a.Selected()
-	if s == nil || s.TmuxName == "" {
+	if s == nil {
+		a.dashboard.appendLog("[tmux-attach] no row selected")
+		return
+	}
+	if s.TmuxName == "" || strings.HasSuffix(s.TmuxName, "…") {
+		a.dashboard.appendLog(fmt.Sprintf(
+			"[tmux-attach] session %q has no resolved tmux name "+
+				"(state file missing tmux_name field — daemon needs restart on the new binary)",
+			s.UUID))
 		return
 	}
 	if os.Getenv("TMUX") != "" {
-		_ = execCmd("tmux", "switch-client", "-t", s.TmuxName)
+		if err := execCmd("tmux", "switch-client", "-t", s.TmuxName); err != nil {
+			a.dashboard.appendLog(fmt.Sprintf(
+				"[tmux-attach] switch-client -t %s failed: %v", s.TmuxName, err))
+		}
 		return
 	}
-	// Suspend, attach, return.
+	// Outside tmux: suspend the TUI + run attach in the foreground.
 	a.tv.Suspend(func() {
-		_ = execCmd("tmux", "attach", "-t", s.TmuxName)
+		if err := execCmd("tmux", "attach", "-t", s.TmuxName); err != nil {
+			a.dashboard.appendLog(fmt.Sprintf(
+				"[tmux-attach] attach -t %s failed: %v", s.TmuxName, err))
+		}
 	})
+}
+
+// LoginSelected handles 'L' — drops the user into the selected session's
+// tmux pane and sends the literal text "/login" + Enter so they can
+// re-auth Claude. Used when the daemon flagged AuthLapsed=true.
+func (a *App) LoginSelected() {
+	s := a.Selected()
+	if s == nil {
+		a.dashboard.appendLog("[login] no row selected")
+		return
+	}
+	if s.TmuxName == "" || strings.HasSuffix(s.TmuxName, "…") {
+		a.dashboard.appendLog(fmt.Sprintf(
+			"[login] session %q has no resolved tmux name — restart daemon",
+			s.UUID))
+		return
+	}
+	// Send '/login\n' to the session's input. Same pattern as tmuxPaste
+	// in cmd/daemon.go but for a literal short string we can use send-keys.
+	if err := execCmd("tmux", "send-keys", "-t", s.TmuxName, "/login", "Enter"); err != nil {
+		a.dashboard.appendLog(fmt.Sprintf("[login] send-keys %s failed: %v", s.TmuxName, err))
+		return
+	}
+	// Then attach / switch so the operator sees the OAuth prompt.
+	if os.Getenv("TMUX") != "" {
+		_ = execCmd("tmux", "switch-client", "-t", s.TmuxName)
+	} else {
+		a.tv.Suspend(func() {
+			_ = execCmd("tmux", "attach", "-t", s.TmuxName)
+		})
+	}
 }
 
 func execCmd(name string, args ...string) error {

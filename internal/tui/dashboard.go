@@ -168,7 +168,11 @@ func (d *Dashboard) renderList() {
 			dot = style.Tag(style.BandPaused, "○")
 		}
 		name := style.Tag(style.Title, s.TmuxName)
-		d.list.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("  %s  %s", dot, name)).
+		nameCell := fmt.Sprintf("  %s  %s", dot, name)
+		if s.AuthLapsed {
+			nameCell += "  " + style.TagBold(style.BandCrisis, "🔒 LOGIN")
+		}
+		d.list.SetCell(row, 0, tview.NewTableCell(nameCell).
 			SetExpansion(2))
 
 		// Scorecard

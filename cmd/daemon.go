@@ -91,11 +91,14 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}
 }
 
-// daemonStateDir is the canonical state directory for the LIVE daemon
-// (~/.local/state/chepherd-go/). Distinct from shadow + Python paths.
+// daemonStateDir is the canonical state directory for the LIVE Go
+// daemon. Writes to the SAME path the TUI dashboard reads from
+// (~/.local/state/chepherd/sessions/) so the dashboard sees fresh
+// state without per-deployment configuration. Was chepherd-go/ during
+// the dual-daemon cutover window; consolidated post-cutover.
 func daemonStateDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "chepherd-go")
+	return filepath.Join(home, ".local", "state", "chepherd", "sessions")
 }
 
 // daemonTickOnce is the same shape as shadow.tickOnce but ACTUALLY
@@ -140,6 +143,9 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 		band, intervalMin := daemon.ComputeBand(state, sig, v)
 		state["trust_band"] = string(band)
 		state["next_tick_at"] = now.Add(time.Duration(intervalMin) * time.Minute).Format(time.RFC3339)
+		state["tmux_name"] = s.TmuxName
+		state["repo"] = s.Repo
+		state["auth_lapsed"] = daemon.CheckAuthLapsed(s.TmuxName)
 		daemon.RecordVerdictToState(state, sig, v)
 
 		injected := false
