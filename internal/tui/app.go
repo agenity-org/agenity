@@ -124,11 +124,11 @@ func (a *App) installGlobalKeys() {
 			return nil
 		}
 		if ev.Key() == tcell.KeyEnter {
-			s := a.Selected()
-			if s != nil {
-				a.detail.show(s)
-				return nil
-			}
+			// v0.4: Enter = attach to the selected session (replaces the
+			// detail overlay, which duplicated the right-pane scorecard).
+			// 't' still works as a shortcut.
+			a.TmuxAttachSelected()
+			return nil
 		}
 		return ev
 	})
@@ -516,8 +516,7 @@ func (a *App) FormatHeaderRight() string {
 func (a *App) FormatFooter() string {
 	pairs := []struct{ key, desc string }{
 		{"↑↓", "select"},
-		{"enter", "details"},
-		{"t", "attach"},
+		{"enter", "attach"},
 		{"o", "sort"},
 		{"L", "login"},
 		{"l", "log"},

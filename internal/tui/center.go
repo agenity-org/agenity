@@ -174,20 +174,51 @@ func ansiToTview(b []byte) string {
 	return out.String()
 }
 
-// sgrToTviewTag converts an SGR parameter string like "31" or "1;33" into
-// a tview color tag. Returns "" for resets / unsupported codes.
+// sgrToTviewTag converts an SGR parameter string like "31" or "1;38;5;208"
+// into a tview color tag `[fg:bg:attrs]`. Supports:
+//   - 16 ANSI named colors (30-37, 90-97 fg + 40-47, 100-107 bg)
+//   - 256-color: `38;5;N` (fg) + `48;5;N` (bg)
+//   - truecolor: `38;2;R;G;B` (fg) + `48;2;R;G;B` (bg)
+//   - attributes: 1=bold, 2=dim, 3=italic, 4=underline, 7=reverse, 5=blink
+//
+// Returns "" for plain reset. Empty params or "0" → reset (caller emits [-:-]).
 func sgrToTviewTag(params string) string {
 	if params == "" || params == "0" {
-		return "" // reset — already handled by closing previous tag
+		return "" // reset — caller closes previous tag
 	}
-	fg := ""
-	bold := false
-	for _, p := range strings.Split(params, ";") {
+	var fg, bg, attrs string
+	parts := strings.Split(params, ";")
+	for i := 0; i < len(parts); i++ {
+		p := parts[i]
 		switch p {
 		case "0", "":
-			return "" // reset mid-sequence — close any open tag
+			fg, bg, attrs = "", "", ""
 		case "1":
-			bold = true
+			attrs += "b"
+		case "2":
+			attrs += "d"
+		case "3":
+			attrs += "i"
+		case "4":
+			attrs += "u"
+		case "5":
+			attrs += "l" // blink
+		case "7":
+			attrs += "r"
+		case "22":
+			// normal intensity — strip b + d
+			attrs = stripAttr(attrs, 'b', 'd')
+		case "23":
+			attrs = stripAttr(attrs, 'i')
+		case "24":
+			attrs = stripAttr(attrs, 'u')
+		case "27":
+			attrs = stripAttr(attrs, 'r')
+		case "39":
+			fg = ""
+		case "49":
+			bg = ""
+		// 16-color foreground
 		case "30":
 			fg = "black"
 		case "31":
@@ -199,34 +230,170 @@ func sgrToTviewTag(params string) string {
 		case "34":
 			fg = "blue"
 		case "35":
-			fg = "magenta"
+			fg = "darkmagenta"
 		case "36":
-			fg = "cyan"
+			fg = "darkcyan"
 		case "37":
-			fg = "white"
+			fg = "silver"
 		case "90":
-			fg = "darkgray"
+			fg = "gray"
 		case "91":
-			fg = "lightcoral"
+			fg = "red"
 		case "92":
-			fg = "lightgreen"
+			fg = "lime"
 		case "93":
-			fg = "lightyellow"
+			fg = "yellow"
 		case "94":
-			fg = "lightblue"
+			fg = "blue"
 		case "95":
-			fg = "lightmagenta"
+			fg = "fuchsia"
 		case "96":
-			fg = "lightcyan"
+			fg = "aqua"
 		case "97":
-			fg = "lightwhite"
+			fg = "white"
+		// 16-color background
+		case "40":
+			bg = "black"
+		case "41":
+			bg = "red"
+		case "42":
+			bg = "green"
+		case "43":
+			bg = "yellow"
+		case "44":
+			bg = "blue"
+		case "45":
+			bg = "darkmagenta"
+		case "46":
+			bg = "darkcyan"
+		case "47":
+			bg = "silver"
+		case "100":
+			bg = "gray"
+		case "101":
+			bg = "red"
+		case "102":
+			bg = "lime"
+		case "103":
+			bg = "yellow"
+		case "104":
+			bg = "blue"
+		case "105":
+			bg = "fuchsia"
+		case "106":
+			bg = "aqua"
+		case "107":
+			bg = "white"
+		case "38":
+			// Extended foreground: `38;5;N` (256-color) or `38;2;R;G;B` (truecolor)
+			if i+1 < len(parts) {
+				switch parts[i+1] {
+				case "5":
+					if i+2 < len(parts) {
+						fg = xterm256ToHex(parts[i+2])
+						i += 2
+					}
+				case "2":
+					if i+4 < len(parts) {
+						fg = fmt.Sprintf("#%02s%02s%02s",
+							toHex2(parts[i+2]),
+							toHex2(parts[i+3]),
+							toHex2(parts[i+4]))
+						i += 4
+					}
+				}
+			}
+		case "48":
+			// Extended background: same shape with 48 instead of 38.
+			if i+1 < len(parts) {
+				switch parts[i+1] {
+				case "5":
+					if i+2 < len(parts) {
+						bg = xterm256ToHex(parts[i+2])
+						i += 2
+					}
+				case "2":
+					if i+4 < len(parts) {
+						bg = fmt.Sprintf("#%02s%02s%02s",
+							toHex2(parts[i+2]),
+							toHex2(parts[i+3]),
+							toHex2(parts[i+4]))
+						i += 4
+					}
+				}
+			}
 		}
 	}
-	if fg == "" && !bold {
+	if fg == "" && bg == "" && attrs == "" {
 		return ""
 	}
-	if bold {
-		return fmt.Sprintf("[%s::b]", fg)
+	return fmt.Sprintf("[%s:%s:%s]", fg, bg, attrs)
+}
+
+func stripAttr(s string, drop ...byte) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		skip := false
+		for _, d := range drop {
+			if s[i] == d {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, s[i])
+		}
 	}
-	return fmt.Sprintf("[%s]", fg)
+	return string(out)
+}
+
+func toHex2(dec string) string {
+	var n int
+	fmt.Sscanf(dec, "%d", &n)
+	if n < 0 {
+		n = 0
+	}
+	if n > 255 {
+		n = 255
+	}
+	return fmt.Sprintf("%02x", n)
+}
+
+// xterm256ToHex converts an xterm 256-color index (0-255) to a #RRGGBB
+// hex string. 0-15 are the standard ANSI colors, 16-231 are a 6×6×6 RGB
+// cube, 232-255 are 24 levels of grayscale.
+func xterm256ToHex(s string) string {
+	var n int
+	fmt.Sscanf(s, "%d", &n)
+	if n < 0 || n > 255 {
+		return ""
+	}
+	switch {
+	case n < 16:
+		// Standard 16: map to fixed palette
+		pal := []string{
+			"#000000", "#800000", "#008000", "#808000",
+			"#000080", "#800080", "#008080", "#c0c0c0",
+			"#808080", "#ff0000", "#00ff00", "#ffff00",
+			"#0000ff", "#ff00ff", "#00ffff", "#ffffff",
+		}
+		return pal[n]
+	case n < 232:
+		// 6×6×6 cube
+		i := n - 16
+		r := i / 36
+		g := (i / 6) % 6
+		b := i % 6
+		toLevel := func(v int) int {
+			if v == 0 {
+				return 0
+			}
+			return 55 + v*40
+		}
+		return fmt.Sprintf("#%02x%02x%02x", toLevel(r), toLevel(g), toLevel(b))
+	default:
+		// Grayscale 232-255
+		v := 8 + (n-232)*10
+		return fmt.Sprintf("#%02x%02x%02x", v, v, v)
+	}
 }

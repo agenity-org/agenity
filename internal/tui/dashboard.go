@@ -127,23 +127,21 @@ func newDashboard(a *App) *Dashboard {
 		SetTextAlign(tview.AlignLeft)
 	d.footer.SetBackgroundColor(tcell.ColorBlack)
 
-	// v0.3 4-pane layout assembly:
+	// v0.4 3-pane layout assembly (founder ideation 2026-05-24 #41):
 	//
 	//   header (1) → daemonBar (1) → body → footer (1)
 	//
-	// Body horizontal split: list (left ≈18) | center mirror (≈48) | right (≈30)
-	// Right vertical split: detail/scorecard (60%) over log (40%)
+	// Body horizontal split: list (left, fixed-by-content) | center mirror (grows) | scorecard (right, ~28)
 	//
-	// Proportions expressed as flex weights so they scale with terminal
-	// width. Center pane is the visual anchor and the largest weight.
-	rightCol := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(d.detail, 0, 3, false). // 60% of right column
-		AddItem(d.logView, 0, 2, false) // 40% of right column
-
+	// Log pane DROPPED from the dashboard per founder: 'we already know
+	// how to read all the logs properly why we are showing row?'. The
+	// daemon log is still tailed into d.logBuffer for the full-screen
+	// 'l' LogMode overlay; just not displayed here. Right pane is now
+	// scorecard-only.
 	body := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(d.list, 0, 18, true).
-		AddItem(d.center.view, 0, 48, false).
-		AddItem(rightCol, 0, 30, false)
+		AddItem(d.list, 0, 20, true).
+		AddItem(d.center.view, 0, 52, false).
+		AddItem(d.detail, 0, 28, false)
 
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(d.header, 1, 0, false).
@@ -217,14 +215,11 @@ func (d *Dashboard) applyNarrowMode() {
 	}
 	body := tview.NewFlex().SetDirection(tview.FlexColumn)
 	if w >= 70 {
-		body.AddItem(d.list, 0, 18, true)
+		body.AddItem(d.list, 0, 20, true)
 	}
-	body.AddItem(d.center.view, 0, 48, false)
+	body.AddItem(d.center.view, 0, 52, false)
 	if w >= 100 {
-		rightCol := tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(d.detail, 0, 3, false).
-			AddItem(d.logView, 0, 2, false)
-		body.AddItem(rightCol, 0, 30, false)
+		body.AddItem(d.detail, 0, 28, false) // scorecard pane
 	}
 	d.root.Clear()
 	d.root.AddItem(d.header, 1, 0, false).
