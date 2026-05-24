@@ -35,6 +35,11 @@ type Dashboard struct {
 
 	// Rolling log buffer reused by LogMode (W6) for full-screen view.
 	logBuffer []string
+
+	// lastWidth tracks the most recent terminal width so applyNarrowMode
+	// only re-shuffles the layout when the width actually crosses a
+	// breakpoint, not every render tick.
+	lastWidth int
 }
 
 func newDashboard(a *App) *Dashboard {
@@ -171,6 +176,7 @@ func (d *Dashboard) render() {
 
 	d.renderList()
 	d.renderDetail()
+	d.applyNarrowMode()
 
 	// v0.3 — keep the center pane locked on the currently-selected session.
 	if s := d.app.Selected(); s != nil {
@@ -178,6 +184,39 @@ func (d *Dashboard) render() {
 	} else {
 		d.center.SetTarget("")
 	}
+}
+
+// applyNarrowMode collapses panes when the terminal is too small.
+// Per v0.3 spec: hide right pane <100 cols, hide left <70 cols. Center
+// is never dropped — the live tmux mirror is the dashboard's reason to exist.
+func (d *Dashboard) applyNarrowMode() {
+	_, _, w, _ := d.root.GetRect()
+	if w == 0 {
+		return // not yet sized
+	}
+	// Re-build the body Flex per current width.
+	body := tview.NewFlex().SetDirection(tview.FlexColumn)
+	if w >= 70 {
+		body.AddItem(d.list, 0, 18, true)
+	}
+	body.AddItem(d.center.view, 0, 48, false)
+	if w >= 100 {
+		rightCol := tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(d.detail, 0, 3, false).
+			AddItem(d.logView, 0, 2, false)
+		body.AddItem(rightCol, 0, 30, false)
+	}
+	// Re-assemble root only if the body shape actually changed —
+	// guarded via a tracked width to avoid every-tick layout reshuffles.
+	if d.lastWidth == w {
+		return
+	}
+	d.lastWidth = w
+	d.root.Clear()
+	d.root.AddItem(d.header, 1, 0, false).
+		AddItem(d.daemonBar, 1, 0, false).
+		AddItem(body, 0, 1, true).
+		AddItem(d.footer, 1, 0, false)
 }
 
 // renderList rebuilds the session table.
