@@ -94,8 +94,10 @@ func (a *App) installGlobalKeys() {
 			a.UnpauseSelected()
 			return nil
 		case 'r':
+			// Manual refresh — state reloaded, next tickerLoop tick (≤1s)
+			// re-renders. Don't call QueueUpdateDraw from an input handler
+			// (caused freezes on some setups — see cycleSort).
 			a.refreshState()
-			a.tv.QueueUpdateDraw(a.dashboard.render)
 			return nil
 		case 't':
 			a.TmuxAttachSelected()
@@ -159,58 +161,62 @@ func (a *App) UnpauseSelected() {
 	}
 }
 
-// TmuxAttachSelected attempts to attach the user to the selected session's
-// tmux pane. v0.3 flow:
-//
-//  1. Validate selection has a real tmux_name.
-//  2. Show the pre-attach modal (or skip if user has dismissed it).
-//  3. On confirm: save target's current status-right, set our
-//     'Ctrl-B D → return to chepherd' reminder, register a set-hook to
-//     restore on detach, then suspend + attach (or switch-client if nested).
-//
-// Errors are appended to the dashboard log pane.
+// TmuxAttachSelected handles 't' / Enter: prints the attach command in
+// the dashboard log + footer hint so the operator can run it in a
+// separate terminal. v0.4.2: dropped the tv.Suspend(tmux attach) path
+// because founder reported it freezes the dashboard without ever
+// handing terminal control to tmux — the embedded-attach assumption
+// doesn't hold on every TTY/SSH combo. Printing the command is
+// guaranteed-no-freeze.
 func (a *App) TmuxAttachSelected() {
 	s := a.Selected()
 	if s == nil {
-		a.dashboard.appendLog("[tmux-attach] no row selected")
+		a.dashboard.appendLog("[attach] no row selected")
 		return
 	}
 	if s.TmuxName == "" || strings.HasSuffix(s.TmuxName, "…") {
 		a.dashboard.appendLog(fmt.Sprintf(
-			"[tmux-attach] session %q has no resolved tmux name "+
-				"(state file missing tmux_name field — daemon needs restart on the new binary)",
+			"[attach] session %q has no resolved tmux name "+
+				"(state file missing tmux_name field — restart daemon)",
 			s.UUID))
 		return
 	}
-
 	target := s.TmuxName
-	a.attachModal.ShowOrAttach(target, func(attach bool, _ bool) {
-		if !attach {
-			return
-		}
-		a.performTmuxAttach(target)
-	})
+	a.dashboard.appendLog(fmt.Sprintf(
+		"[attach] In another terminal, run:  tmux attach -t %s    (Ctrl-B D returns)", target))
+	a.dashboard.appendLog(fmt.Sprintf(
+		"[attach] Or copy-paste:  tmux attach -t %s", target))
 }
 
-// performTmuxAttach does the actual attach, wrapping it in the
-// status-right save/restore so the user sees a persistent reminder of
-// the detach key while inside the session.
+// performTmuxAttach does the actual attach, wrapping it with:
+//  1. status-right hint shown at the bottom of the attached session
+//  2. F12 bound to detach-client at the root key table (no prefix needed)
+//     so non-tmux users have a single-key escape route
+//  3. On detach: status-right restored + F12 binding removed via set-hook
+//
+// Founder report 2026-05-24: pressed Enter on the modal, got attached, but
+// didn't know Ctrl-B D so it felt frozen. F12 is unused by claude/vim/etc.
+// and works without the tmux prefix — pressing it returns to chepherd.
 func (a *App) performTmuxAttach(target string) {
-	// Save the user's current status-right so we can restore it on detach.
-	// `tmux show-options -v` prints just the value (or empty if unset).
+	// Save the user's current status-right so we can restore on detach.
 	origStatusRight := ""
 	if out, err := exec.Command("tmux", "show-options", "-t", target,
 		"-v", "status-right").Output(); err == nil {
 		origStatusRight = strings.TrimRight(string(out), "\n")
 	}
 
-	// Set our reminder.
-	reminder := "#[bg=red,fg=white,bold] Ctrl-B D → return to chepherd #[default]"
+	// Set our reminder — bold red, mentions BOTH F12 (easy) and Ctrl-B D (tmux native).
+	reminder := "#[bg=red,fg=white,bold] F12 (or Ctrl-B D) → return to chepherd #[default]"
 	_ = exec.Command("tmux", "set-option", "-t", target, "status-right", reminder).Run()
 
-	// Restore on detach via a tmux client-detached hook. The hook fires
-	// exactly when the user presses Ctrl-B D from inside this session.
-	restoreCmd := fmt.Sprintf("set-option -t %s status-right %q",
+	// Bind F12 at the root key table for the duration of this session.
+	// Root-table bindings don't need the prefix — single F12 press triggers
+	// detach-client immediately. This is the friendly escape for non-tmux users.
+	_ = exec.Command("tmux", "bind-key", "-T", "root", "F12", "detach-client").Run()
+
+	// Restore + unbind on detach via a tmux client-detached hook. Fires when
+	// the user presses F12 or Ctrl-B D from inside the attached session.
+	restoreCmd := fmt.Sprintf("set-option -t %s status-right %q ; unbind-key -T root F12",
 		target, origStatusRight)
 	_ = exec.Command("tmux", "set-hook", "-t", target,
 		"client-detached", restoreCmd).Run()
@@ -245,6 +251,9 @@ func (a *App) performTmuxAttach(target string) {
 // the 'Ctrl-B D to return' hint. Without that, founder reported pressing
 // L and thinking the dashboard was frozen because they were actually
 // inside a raw tmux attach with no obvious escape route.
+// LoginSelected sends '/login' + Enter to the target session's claude
+// pane via tmux send-keys (non-blocking), then prints the attach command
+// so the operator can hop over and complete OAuth. No tv.Suspend.
 func (a *App) LoginSelected() {
 	s := a.Selected()
 	if s == nil {
@@ -258,18 +267,12 @@ func (a *App) LoginSelected() {
 		return
 	}
 	target := s.TmuxName
-	a.attachModal.ShowOrAttach(target, func(attach bool, _ bool) {
-		if !attach {
-			return
-		}
-		// Send '/login\n' to the session's input BEFORE attaching so the
-		// operator lands in the OAuth prompt.
-		if err := execCmd("tmux", "send-keys", "-t", target, "/login", "Enter"); err != nil {
-			a.dashboard.appendLog(fmt.Sprintf("[login] send-keys %s failed: %v", target, err))
-			return
-		}
-		a.performTmuxAttach(target)
-	})
+	if err := execCmd("tmux", "send-keys", "-t", target, "/login", "Enter"); err != nil {
+		a.dashboard.appendLog(fmt.Sprintf("[login] send-keys %s failed: %v", target, err))
+		return
+	}
+	a.dashboard.appendLog(fmt.Sprintf(
+		"[login] /login sent to %s. Attach to complete OAuth:  tmux attach -t %s", target, target))
 }
 
 func execCmd(name string, args ...string) error {
@@ -393,13 +396,16 @@ func (a *App) refreshState() {
 }
 
 // cycleSort advances the sort mode + re-sorts the current session list.
+// Does NOT call QueueUpdateDraw from inside the input handler — that
+// caused a freeze on the founder's setup (tview re-entry from within
+// a SetInputCapture callback). The next tickerLoop tick (≤1s) re-renders
+// with the new sort + header indicator.
 func (a *App) cycleSort() {
 	a.mu.Lock()
 	a.sortMode = a.sortMode.Next()
 	SortSessions(a.allSessions, a.sortMode)
 	a.applyFilterLocked()
 	a.mu.Unlock()
-	a.tv.QueueUpdateDraw(a.dashboard.render)
 }
 
 // SortMode returns the current sort mode for header rendering.
