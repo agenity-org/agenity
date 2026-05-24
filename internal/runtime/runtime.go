@@ -408,24 +408,24 @@ func (r *Runtime) markExited(id string) {
 	code := info.ExitCode
 	r.mu.Unlock()
 	r.HumanInbox("runtime", fmt.Sprintf("session '%s' exited (code %d)", name, code))
-	r.broadcast()
 
-	// Schedule GC of clean exits. Failed exits stay visible.
+	// Clean exits (code 0) disappear from the list immediately — the
+	// inbox message preserves the historical record and the operator's
+	// expectation is instant cleanup.
+	// Failed exits (non-zero) stay visible so the operator can see
+	// what went wrong and inspect the final pane content.
 	if code == 0 {
-		go func() {
-			time.Sleep(30 * time.Second)
-			r.mu.Lock()
-			cur, ok := r.info[id]
-			if ok && cur.Exited && cur.ExitCode == 0 {
-				delete(r.info, id)
-				delete(r.sessions, id)
-				delete(r.activity, id)
-				delete(r.byName, cur.Name)
-			}
-			r.mu.Unlock()
-			r.broadcast()
-		}()
+		r.mu.Lock()
+		cur, ok := r.info[id]
+		if ok && cur.Exited {
+			delete(r.info, id)
+			delete(r.sessions, id)
+			delete(r.activity, id)
+			delete(r.byName, cur.Name)
+		}
+		r.mu.Unlock()
 	}
+	r.broadcast()
 }
 
 // Assign updates an existing session's team + role.
