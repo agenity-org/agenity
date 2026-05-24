@@ -27,6 +27,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/runtime"
@@ -94,6 +95,14 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	}
 	relay := messagebus.New(rt)
 
+	// MCP server on Unix socket — `chepherd mcp` subprocess (used by agents)
+	// dials this socket and proxies JSON-RPC. One server per runtime.
+	mcpSrv := mcpserver.New(rt, mcpserver.DefaultSockPath(stateDir))
+	if err := mcpSrv.Start(); err != nil {
+		return fmt.Errorf("mcp server: %w", err)
+	}
+	fmt.Printf("✓ MCP server listening on %s\n", mcpserver.DefaultSockPath(stateDir))
+
 	// Spawn Adam
 	adamInfo, adamSession, err := rt.Spawn(runtime.SpawnSpec{
 		Name:         "adam",
@@ -144,6 +153,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// SIGINT/SIGTERM arrives.
 	shutdown := func() {
 		fmt.Println("\nShutting down...")
+		mcpSrv.Stop()
 		relay.Stop()
 		for _, info := range rt.List() {
 			_ = rt.Stop(info.Name)
