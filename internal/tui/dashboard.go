@@ -143,10 +143,19 @@ func newDashboard(a *App) *Dashboard {
 		AddItem(d.center.view, 0, 52, false).
 		AddItem(d.detail, 0, 28, false)
 
+	// v0.4.5: small log strip back. 4 rows, full-width, under body. Shows
+	// last ~3 daemon/attach log lines so 'Enter' attach output ('tmux attach
+	// -t openova-38 (copied)') is visible without pressing 'l'. Founder
+	// reported that v0.4's log-pane removal left Enter with no visible feedback.
+	d.logView.SetTitle(" Log ").
+		SetBorderColor(style.Border).
+		SetTitleAlign(tview.AlignLeft)
+
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(d.header, 1, 0, false).
 		AddItem(d.daemonBar, 1, 0, false). // W10 — shown only when daemon down/stale
 		AddItem(body, 0, 1, true).
+		AddItem(d.logView, 5, 0, false). // log strip — 5 rows incl. border
 		AddItem(d.footer, 1, 0, false)
 	d.root.SetBackgroundColor(tcell.ColorBlack)
 
@@ -225,6 +234,7 @@ func (d *Dashboard) applyNarrowMode() {
 	d.root.AddItem(d.header, 1, 0, false).
 		AddItem(d.daemonBar, 1, 0, false).
 		AddItem(body, 0, 1, true).
+		AddItem(d.logView, 5, 0, false). // log strip — visible at all widths
 		AddItem(d.footer, 1, 0, false)
 	// Restore focus to the list after the rebuild — but only if the
 	// dashboard page is the visible one. Stealing focus while an overlay
