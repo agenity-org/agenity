@@ -30,6 +30,7 @@ import (
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/chepherd/chepherd/internal/runtimetui"
 )
 
 var (
@@ -37,6 +38,7 @@ var (
 	runFlagCwd         string
 	runFlagUnmonitored bool
 	runFlagStateDir    string
+	runFlagHeadless    bool
 )
 
 var runCmd = &cobra.Command{
@@ -65,6 +67,7 @@ func init() {
 	runCmd.Flags().StringVar(&runFlagCwd, "cwd", "", "Adam's working directory (default: current)")
 	runCmd.Flags().BoolVar(&runFlagUnmonitored, "unmonitored", false, "spawn Adam only; no Chepherd (4-eyes off)")
 	runCmd.Flags().StringVar(&runFlagStateDir, "state-dir", "", "runtime state dir (default: ~/.local/state/chepherd-v05)")
+	runCmd.Flags().BoolVar(&runFlagHeadless, "headless", false, "skip TUI; print runtime status + sleep (for testing / systemd)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -136,33 +139,44 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  - %s (%s, %s) in tribe %s\n", info.Name, info.Role, info.AgentSlug, info.Tribe)
 	}
 	fmt.Println()
-	fmt.Println("(TUI client refactor pending — chepherd/chepherd#55. This entrypoint")
-	fmt.Println(" currently runs headless; tail the session output channels via the")
-	fmt.Println(" runtime's WS endpoint when the server is wired in v0.5.x.)")
-	fmt.Println()
-	fmt.Println("Press Ctrl-C to stop.")
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	heartbeat := time.NewTicker(30 * time.Second)
-	defer heartbeat.Stop()
-	for {
-		select {
-		case <-sig:
-			fmt.Println("\nShutting down...")
-			relay.Stop()
-			for _, info := range rt.List() {
-				_ = rt.Stop(info.Name)
-			}
-			return nil
-		case <-heartbeat.C:
-			alive := 0
-			for _, info := range rt.List() {
-				_ = info
-				alive++
-			}
-			fmt.Printf("[%s] alive sessions: %d\n", time.Now().UTC().Format("15:04:05"), alive)
+	// Graceful shutdown plumbing — fires whether TUI exits naturally or
+	// SIGINT/SIGTERM arrives.
+	shutdown := func() {
+		fmt.Println("\nShutting down...")
+		relay.Stop()
+		for _, info := range rt.List() {
+			_ = rt.Stop(info.Name)
 		}
 	}
+
+	if runFlagHeadless {
+		fmt.Println("Headless mode. Press Ctrl-C to stop.")
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		heartbeat := time.NewTicker(30 * time.Second)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case <-sig:
+				shutdown()
+				return nil
+			case <-heartbeat.C:
+				fmt.Printf("[%s] alive sessions: %d\n", time.Now().UTC().Format("15:04:05"), len(rt.List()))
+			}
+		}
+	}
+
+	// Launch the v0.5 TUI (separate package from the legacy internal/tui).
+	app := runtimetui.New(rt)
+	// Background SIGINT/SIGTERM handler — calls Stop() to break out of TUI.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		app.Stop()
+	}()
+	err = app.Run()
+	shutdown()
+	return err
 }
