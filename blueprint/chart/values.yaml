@@ -1,0 +1,90 @@
+# bp-chepherd default values
+#
+# This chart deploys chepherd as an OpenOva Blueprint into a Sovereign.
+# All knobs are env-vars per the InviolablePrinciple #4 (no hardcoded
+# defaults in code; configuration flows through env into the binary).
+#
+# Operator override examples — see openova-io/openova#2316 contract.
+
+image:
+  repository: ghcr.io/openova-io/bp-chepherd
+  tag: ""  # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# Chepherd's runtime: how many sessions, default agent, monitored mode.
+runtime:
+  defaultAgent: claude-code     # claude-code, qwen-code, aider, ...
+  monitored: true               # spawn Chepherd-the-shepherd alongside Adam
+  ringBufferBytes: 1048576      # 1 MiB per session (override via SANDBOX_RING_BUFFER_BYTES)
+  agentsCatalogPath: ""         # CHEPHERD_AGENTS_PATH override; empty = builtin
+
+# WebSocket + TUI surfaces.
+service:
+  type: ClusterIP
+  port: 8080            # chepherd web UI + dashboard WS
+  metricsPort: 9090     # Prometheus scrape
+
+# HTTPRoute (Cilium Gateway) — operator-visible at console.<fqdn>/apps/bp-chepherd
+httpRoute:
+  enabled: true
+  hostnames: []         # default: discovered from Sovereign FQDN
+  parentRef:
+    name: catalyst-gateway
+    namespace: catalyst-system
+
+# Per-session PVCs (matches openova Sandbox Scene-6 multi-device handoff
+# semantics — "close laptop, open phone" requires persistent /repo,
+# /.claude-memory, /.cache).
+persistence:
+  repo:
+    size: 10Gi
+    storageClass: ""    # default cluster SC
+  claudeMemory:
+    size: 1Gi
+    storageClass: ""
+  cache:
+    size: 5Gi
+    storageClass: ""
+
+# openova-MCP sidecar bundle — see openova-io/openova INTEGRATION-OPENOVA-MCP.md
+# (Wave 5.69). When enabled, the pty-server image bundles openova-sandbox-mcp
+# binary at /usr/local/bin/ + this chart mounts MCP config via ConfigMap.
+openovaMCP:
+  enabled: true
+  image:
+    repository: ghcr.io/openova-io/openova-sandbox-mcp
+    tag: latest
+  # JWT signing key — sourced from newapi-bp-newapi-token-signing-key Secret
+  # via emberstack/reflector annotation. SANDBOX_JWT_SECRET + SANDBOX_TOKEN
+  # injected as env into the chepherd container.
+  jwtSecretRef:
+    name: newapi-bp-newapi-token-signing-key
+    namespace: catalyst-system
+
+# Auth: Sovereign session cookie → Cilium Gateway validates → X-Catalyst-User
+# header injected → chepherd's WS upgrade reads header.
+auth:
+  enabled: true
+  cookieName: __Host-catalyst_sess
+  whoamiEndpoint: http://catalyst-api.catalyst-system.svc/api/v1/internal/whoami
+
+# Resources — chepherd is a coordinator + pty-host. Per-session PTYs are
+# claude REPL processes which are the actual heavy users; bp-chepherd's
+# own footprint is light.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+# Console UI registration — see openova-io/openova#2316 (j) / Wave 5.69
+# (consoleUI.sidebarEntry field on Blueprint CRD; this chart emits the
+# Blueprint CR with that block).
+consoleUI:
+  enabled: true
+  sidebarEntry: true
+  sidebarLabel: Chepherd
+  sidebarRoute: /apps/bp-chepherd/dashboard
+  sidebarOrder: 50

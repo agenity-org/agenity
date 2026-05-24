@@ -1,0 +1,28 @@
+{{- if .Values.consoleUI.enabled }}
+# Blueprint CR — registers chepherd in the Sovereign console.
+# Depends on openova Wave 5.69 (consoleUI.sidebarEntry field on
+# Blueprint CRD). When that field lands, the console sidebar auto-adds
+# the "Chepherd" entry pointing at /apps/bp-chepherd/dashboard.
+apiVersion: openova.io/v1alpha1
+kind: Blueprint
+metadata:
+  name: {{ include "chepherd.fullname" . }}
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+spec:
+  title: Chepherd
+  summary: AI engineering team — supervised, observable, multi-agent dashboard
+  source:
+    type: thirdparty
+    repository: https://github.com/chepherd/chepherd
+    version: {{ .Chart.AppVersion | quote }}
+  card:
+    icon: chepherd.svg
+    {{- if .Values.consoleUI.sidebarEntry }}
+    consoleUI:
+      sidebarEntry: true
+      sidebarLabel: {{ .Values.consoleUI.sidebarLabel | quote }}
+      sidebarRoute: {{ .Values.consoleUI.sidebarRoute | quote }}
+      sidebarOrder: {{ .Values.consoleUI.sidebarOrder }}
+    {{- end }}
+{{- end }}

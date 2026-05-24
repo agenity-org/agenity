@@ -1,0 +1,26 @@
+{{- if .Values.openovaMCP.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chepherd.fullname" . }}-mcp
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+data:
+  # MCP config injected into each spawned agent's config directory.
+  # Agents read this via /etc/chepherd/mcp/<file> mounted at the
+  # canonical agent paths (~/.claude.json, ~/.qwen/settings.json, etc.)
+  # by the runtime at spawn time.
+  ".mcp.json": |
+    {
+      "mcpServers": {
+        "chepherd": {
+          "command": "chepherd",
+          "args": ["mcp"]
+        },
+        "openova-sandbox": {
+          "command": "/usr/local/bin/openova-sandbox-mcp",
+          "args": []
+        }
+      }
+    }
+{{- end }}
