@@ -161,13 +161,13 @@ func (a *App) UnpauseSelected() {
 	}
 }
 
-// TmuxAttachSelected handles 't' / Enter: prints the attach command in
-// the dashboard log + footer hint so the operator can run it in a
-// separate terminal. v0.4.2: dropped the tv.Suspend(tmux attach) path
-// because founder reported it freezes the dashboard without ever
-// handing terminal control to tmux — the embedded-attach assumption
-// doesn't hold on every TTY/SSH combo. Printing the command is
-// guaranteed-no-freeze.
+// TmuxAttachSelected handles 't' / Enter: suspends chepherd + runs
+// `tmux attach -t <target>` so the operator lands inside the live
+// tmux session. v0.4.3: routes the Suspend via QueueUpdate so it
+// fires AFTER the current input handler returns — calling Suspend
+// directly from inside an input capture froze on founder's setup
+// (tview re-entry into the main loop). Also prints the attach command
+// to the log as a fallback the operator can run manually.
 func (a *App) TmuxAttachSelected() {
 	s := a.Selected()
 	if s == nil {
@@ -182,10 +182,18 @@ func (a *App) TmuxAttachSelected() {
 		return
 	}
 	target := s.TmuxName
-	a.dashboard.appendLog(fmt.Sprintf(
-		"[attach] In another terminal, run:  tmux attach -t %s    (Ctrl-B D returns)", target))
-	a.dashboard.appendLog(fmt.Sprintf(
-		"[attach] Or copy-paste:  tmux attach -t %s", target))
+	a.dashboard.appendLog(fmt.Sprintf("[attach] attaching to %s (Ctrl-B D returns)", target))
+	// Queue the actual suspend+attach so it fires after the current input
+	// event finishes — direct call from inside a SetInputCapture callback
+	// hung on the founder's TTY/SSH combo.
+	a.tv.QueueUpdate(func() {
+		a.tv.Suspend(func() {
+			if err := execCmd("tmux", "attach", "-t", target); err != nil {
+				a.dashboard.appendLog(fmt.Sprintf(
+					"[attach] failed: %v — run manually: tmux attach -t %s", err, target))
+			}
+		})
+	})
 }
 
 // performTmuxAttach does the actual attach, wrapping it with:
@@ -287,7 +295,10 @@ func (a *App) applyFilter(query string) {
 	a.filterText = query
 	a.applyFilterLocked()
 	a.mu.Unlock()
-	a.tv.QueueUpdateDraw(a.dashboard.render)
+	// No QueueUpdateDraw — called from filter input's SetChangedFunc
+	// (input handler context). Re-entry into tview's main loop hangs
+	// the input field on every keystroke. Next tickerLoop tick (≤1s)
+	// reflects the new filter naturally.
 }
 
 // applyFilterLocked recomputes a.sessions from a.allSessions + a.filterText.
