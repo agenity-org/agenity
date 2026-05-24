@@ -11,6 +11,11 @@
 -->
 <script>
   import { onMount } from 'svelte';
+  // xterm ships its own CSS — without this, .xterm-screen and .xterm-rows
+  // lack their absolute-positioning rules and render at the bottom of
+  // the page instead of inside .xterm-viewport, leaving the terminal
+  // pane visually empty even though chunks arrive over the WebSocket.
+  import '@xterm/xterm/css/xterm.css';
 
   let sessions = $state([]);
   let selectedName = $state(null);
@@ -30,8 +35,9 @@
     use_default_prompt: false,
   });
   let folderQuery = $state('');
-  let folderResults = $state([]);
+  let folderFocused = $state(false);
   let allFolders = $state([]);
+  let confirmDialog = $state(null); // { title, body, onConfirm }
   let claudeSessions = $state([]);
   let claudeQuery = $state('');
   let spawnError = $state('');
@@ -72,15 +78,14 @@
       const res = await fetch(`${API}/folders/recent`);
       const data = await res.json();
       allFolders = data.folders || [];
-      filterFolders();
     } catch {}
   }
 
-  function filterFolders() {
+  let folderResults = $derived.by(() => {
     const q = folderQuery.trim().toLowerCase();
-    if (!q) { folderResults = allFolders.slice(0, 8); return; }
-    folderResults = allFolders.filter(f => f.path.toLowerCase().includes(q)).slice(0, 8);
-  }
+    if (!q) return allFolders.slice(0, 8);
+    return allFolders.filter(f => f.path.toLowerCase().includes(q)).slice(0, 8);
+  });
 
   async function refreshClaudeSessions(cwd) {
     try {
@@ -109,13 +114,15 @@
   let termContainer = null;
   let ws = null;
   let fitAddon = null;
+  let resizeObs = null;
 
   async function attachTo(name) {
     if (selectedName === name) return;
     selectedName = name;
     selectedInfo = sessions.find(s => s.name === name) || null;
-    if (ws) ws.close();
-    if (term) term.dispose();
+    if (ws) { ws.close(); ws = null; }
+    if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+    if (term) { term.dispose(); term = null; }
 
     const { Terminal } = await import('@xterm/xterm');
     const { FitAddon } = await import('@xterm/addon-fit');
@@ -125,36 +132,63 @@
       fontSize: 13,
       theme: { background: '#0a0a0a' },
       cursorBlink: true,
+      // Claude TUI assumes ~80 cols minimum; xterm will reflow but its
+      // initial line breaks are determined by the dimensions at first
+      // render, which is why we MUST fit() after the container is sized.
+      cols: 120,
+      rows: 32,
     });
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(termContainer);
-    requestAnimationFrame(() => fitAddon.fit());
+
+    // Multiple fit() passes catch the layout settling. flex + Svelte
+    // hydration means the container's first ClientRect can be wrong.
+    const tryFit = () => {
+      if (!fitAddon || !termContainer) return;
+      const r = termContainer.getBoundingClientRect();
+      if (r.width < 10 || r.height < 10) return;
+      try { fitAddon.fit(); } catch {}
+    };
+    tryFit();
+    requestAnimationFrame(tryFit);
+    setTimeout(tryFit, 100);
+    setTimeout(tryFit, 400);
+
+    // Refit when the container size changes (sidebar widths, viewport
+    // resize, browser zoom, etc.). Without this, the initial fit captures
+    // a too-narrow viewport and Claude TUI output gets mangled.
+    resizeObs = new ResizeObserver(() => tryFit());
+    resizeObs.observe(termContainer);
 
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${wsProto}//${window.location.host}${API}/sessions/${name}/attach`);
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (ev) => {
+      if (!term) return;
       if (ev.data instanceof ArrayBuffer) term.write(new Uint8Array(ev.data));
       else term.write(ev.data);
     };
     term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
   }
 
-  function openSpawn() {
+  async function openSpawn() {
     spawnForm = { name: '', agent: 'claude-code', tribe: 'default', role: 'worker', cwd: '', mode: 'fresh', resume_uuid: '', use_default_prompt: false };
     folderQuery = '';
+    folderFocused = false;
     claudeQuery = '';
     spawnError = '';
     showSpawn = true;
-    loadAllFolders();
-    refreshClaudeSessions(null);
+    // Await both so the autocomplete dropdown is populated by the time
+    // the user starts typing — eliminates a class of race conditions in
+    // tests + slow networks.
+    await Promise.all([loadAllFolders(), refreshClaudeSessions(null)]);
   }
 
   function pickFolder(path) {
     spawnForm.cwd = path;
     folderQuery = path;
-    folderResults = [];
+    folderFocused = false;
     if (spawnForm.mode === 'resume') refreshClaudeSessions(path);
     if (!spawnForm.name) spawnForm.name = autoName(path);
   }
@@ -178,6 +212,10 @@
 
   async function submitSpawn() {
     spawnError = '';
+    // Use the folderQuery text as cwd if the user typed something but
+    // didn't click a suggestion (the input is bound to folderQuery, not
+    // spawnForm.cwd, until pickFolder fires).
+    if (!spawnForm.cwd && folderQuery) spawnForm.cwd = folderQuery;
     // Auto-name if blank
     if (!spawnForm.name && spawnForm.cwd) spawnForm.name = autoName(spawnForm.cwd);
     if (!spawnForm.name) { spawnError = 'Pick a folder so I can auto-name, or enter a name'; return; }
@@ -219,15 +257,23 @@
     refreshSessions();
   }
 
-  async function stopSession() {
+  function stopSession() {
     if (!selectedName) return;
-    if (!confirm(`Stop "${selectedName}"? The agent process will be terminated.`)) return;
-    await fetch(`${API}/sessions/${selectedName}`, { method: 'DELETE' });
-    if (term) term.dispose();
-    if (ws) ws.close();
-    selectedName = null;
-    selectedInfo = null;
-    refreshSessions();
+    const name = selectedName;
+    confirmDialog = {
+      title: 'Stop session?',
+      body: `The agent process for "${name}" will be terminated. This cannot be undone.`,
+      confirmLabel: 'Stop session',
+      danger: true,
+      onConfirm: async () => {
+        await fetch(`${API}/sessions/${name}`, { method: 'DELETE' });
+        if (term) term.dispose();
+        if (ws) ws.close();
+        selectedName = null;
+        selectedInfo = null;
+        refreshSessions();
+      },
+    };
   }
 
   function ageString(createdAt) {
@@ -265,7 +311,7 @@
       <a href="/download">Download</a>
       <a href="https://github.com/chepherd/chepherd" target="_blank" rel="noopener">GitHub</a>
     </nav>
-    <button class="primary" on:click={openSpawn}>+ spawn agent</button>
+    <button class="primary" on:click={openSpawn} data-testid="spawn-button">+ spawn agent</button>
   </header>
 
   <div class="body">
@@ -401,13 +447,15 @@
         <label>
           <span>Working directory <em>(start typing to filter)</em></span>
           <div class="autocomplete">
-            <input type="text" bind:value={folderQuery} on:input={filterFolders}
-                   on:focus={() => { if (allFolders.length===0) loadAllFolders(); filterFolders(); }}
-                   placeholder="/home/openova/repos/yourproject" autocomplete="off" />
-            {#if folderResults.length}
-              <ul class="suggestions">
+            <input type="text" bind:value={folderQuery}
+                   on:focus={() => { folderFocused = true; if (allFolders.length===0) loadAllFolders(); }}
+                   on:blur={() => setTimeout(() => folderFocused = false, 250)}
+                   placeholder="/home/openova/repos/yourproject" autocomplete="off"
+                   data-testid="spawn-cwd-input" />
+            {#if (folderFocused || folderQuery) && folderResults.length > 0}
+              <ul class="suggestions" data-testid="spawn-cwd-suggestions">
                 {#each folderResults as f}
-                  <li on:click={() => pickFolder(f.path)}>
+                  <li on:mousedown|preventDefault={() => pickFolder(f.path)}>
                     <code>{f.path}</code>
                     <small>{f.sessions} session{f.sessions===1?'':'s'}</small>
                   </li>
@@ -474,8 +522,31 @@
 
       <footer class="modal-footer">
         <button class="ghost" on:click={() => showSpawn = false}>Cancel</button>
-        <button class="primary" on:click={submitSpawn} disabled={spawnBusy}>
+        <button class="primary" on:click={submitSpawn} disabled={spawnBusy} data-testid="spawn-submit">
           {spawnBusy ? 'Spawning…' : (spawnForm.mode==='resume' ? 'Resume session' : 'Spawn agent')}
+        </button>
+      </footer>
+    </div>
+  </div>
+{/if}
+
+<!-- Confirm dialog — replaces window.confirm/alert/prompt -->
+{#if confirmDialog}
+  <div class="modal-backdrop" on:click={() => confirmDialog = null} data-testid="confirm-backdrop">
+    <div class="modal confirm" on:click|stopPropagation>
+      <header class="modal-header">
+        <h2>{confirmDialog.title}</h2>
+        <button class="close" on:click={() => confirmDialog = null}>×</button>
+      </header>
+      <div class="modal-body">
+        <p style="color:#ccc; line-height:1.5;">{confirmDialog.body}</p>
+      </div>
+      <footer class="modal-footer">
+        <button class="ghost" on:click={() => confirmDialog = null} data-testid="confirm-cancel">Cancel</button>
+        <button class={confirmDialog.danger ? 'danger' : 'primary'}
+                on:click={async () => { const fn = confirmDialog.onConfirm; confirmDialog = null; if (fn) await fn(); }}
+                data-testid="confirm-ok">
+          {confirmDialog.confirmLabel || 'Confirm'}
         </button>
       </footer>
     </div>
@@ -503,7 +574,7 @@
   .body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
   /* Left pane */
-  .left { width: 280px; min-width: 280px; background: #0a0a0a; border-right: 1px solid #1e1e1e; padding: 0.9rem 1rem; overflow-y: auto; }
+  .left { width: 240px; min-width: 240px; background: #0a0a0a; border-right: 1px solid #1e1e1e; padding: 0.9rem 1rem; overflow-y: auto; }
   .left h2 { font-size: 0.74rem; color: #888; text-transform: uppercase; letter-spacing: 0.07em; margin: 0 0 0.4rem 0; font-weight: 600; }
   .left h2 .count { color: #555; font-weight: normal; }
   .session-list { list-style: none; padding: 0; margin: 0; }
@@ -536,7 +607,7 @@
   .center .term :global(.xterm-viewport) { height: 100% !important; }
 
   /* Right pane */
-  .right { width: 290px; min-width: 290px; background: #0a0a0a; border-left: 1px solid #1e1e1e; padding: 0.9rem 1rem; overflow-y: auto; }
+  .right { width: 240px; min-width: 240px; background: #0a0a0a; border-left: 1px solid #1e1e1e; padding: 0.9rem 1rem; overflow-y: auto; }
   .right h2 { font-size: 0.74rem; color: #888; text-transform: uppercase; letter-spacing: 0.07em; margin: 0 0 0.5rem 0; font-weight: 600; }
   .right dl { margin: 0; }
   .right dt { color: #888; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.55rem; }

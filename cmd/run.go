@@ -11,10 +11,10 @@
 //
 // Usage:
 //
-//	chepherd run                          # default: spawn Adam + Chepherd
-//	chepherd run --unmonitored            # spawn Adam only (no shepherd)
+//	chepherd run                          # default: zero workers, one shepherd
+//	chepherd run --no-shepherd            # zero workers, zero shepherds (opt out)
 //	chepherd run --agent qwen-code        # use qwen-code as default agent
-//	chepherd run --cwd ~/repos/myproject  # set Adam's CWD
+//	chepherd run --cwd ~/repos/myproject  # initial cwd for any session that omits it
 package cmd
 
 import (
@@ -40,7 +40,7 @@ import (
 var (
 	runFlagAgent       string
 	runFlagCwd         string
-	runFlagUnmonitored bool
+	runFlagNoShepherd  bool
 	runFlagStateDir    string
 	runFlagHeadless    bool
 	runFlagListen      string
@@ -53,11 +53,10 @@ var runCmd = &cobra.Command{
 @target in-band relay for agent-to-agent messaging, runtime registry with tribe/role
 metadata.
 
-By default it spawns two sessions:
-  - Adam      (worker role; the user-facing primary agent)
-  - Chepherd  (shepherd role; the meta-supervisor watching Adam)
-
-Use --unmonitored to spawn only Adam (no shepherd).
+By default it starts with ZERO workers and ONE shepherd (the meta-supervisor
+watching the "default" tribe). Workers are spawned on demand by the operator
+via the dashboard's "+ spawn agent" button. Pass --no-shepherd to start
+completely empty (4-eyes off).
 
 This is the v0.5 development entrypoint. The legacy 'chepherd dashboard' and
 'chepherd daemon' (tmux-based) are LEFT UNTOUCHED so existing users keep working.
@@ -69,8 +68,8 @@ target this runtime instead of tmux.`,
 
 func init() {
 	runCmd.Flags().StringVar(&runFlagAgent, "agent", "claude-code", "default agent CLI slug (claude-code, qwen-code, aider, ...)")
-	runCmd.Flags().StringVar(&runFlagCwd, "cwd", "", "Adam's working directory (default: current)")
-	runCmd.Flags().BoolVar(&runFlagUnmonitored, "unmonitored", false, "spawn Adam only; no Chepherd (4-eyes off)")
+	runCmd.Flags().StringVar(&runFlagCwd, "cwd", "", "fallback working directory (default: current)")
+	runCmd.Flags().BoolVar(&runFlagNoShepherd, "no-shepherd", false, "skip the default shepherd (4-eyes off)")
 	runCmd.Flags().StringVar(&runFlagStateDir, "state-dir", "", "runtime state dir (default: ~/.local/state/chepherd-v05)")
 	runCmd.Flags().BoolVar(&runFlagHeadless, "headless", false, "skip TUI; print runtime status + sleep (for testing / systemd)")
 	runCmd.Flags().StringVar(&runFlagListen, "listen", "127.0.0.1:8080", "HTTP/WS listen addr (set to '' to disable; for web/mobile clients)")
@@ -92,7 +91,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  state-dir: %s\n", stateDir)
 	fmt.Printf("  agent:     %s\n", runFlagAgent)
 	fmt.Printf("  cwd:       %s\n", cwd)
-	fmt.Printf("  monitored: %v\n\n", !runFlagUnmonitored)
+	fmt.Printf("  shepherd:  %v\n\n", !runFlagNoShepherd)
 
 	rt, err := runtime.New(stateDir)
 	if err != nil {
@@ -129,13 +128,27 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
 	}
 
-	// No auto-spawn. The operator opens the dashboard, sees zero sessions,
-	// and clicks "+ spawn agent" to create what they want. A shepherd is
-	// opt-in via the web UI (or the chepherd.spawn MCP tool with
-	// role=shepherd) — never default.
-	_ = prompts.Worker   // exposed via runtimehttp for "spawn worker w/ default prompt"
-	_ = prompts.Shepherd // exposed via runtimehttp for "spawn shepherd w/ default prompt"
-	fmt.Println("\nRuntime up. Open http://" + runFlagListen + " (dashboard) to spawn sessions.")
+	// Zero workers by default — the operator opens the dashboard and
+	// spawns what they want. ONE shepherd is auto-spawned to watch the
+	// "default" tribe so 4-eyes coverage is on by default; pass
+	// --no-shepherd to opt out (or stop it from the dashboard).
+	_ = prompts.Worker // exposed via runtimehttp for explicit worker spawns w/ default prompt
+	if !runFlagNoShepherd {
+		_, _, err := rt.Spawn(runtime.SpawnSpec{
+			Name:         "shepherd",
+			AgentSlug:    runFlagAgent,
+			Tribe:        "default",
+			Role:         runtime.RoleShepherd,
+			Cwd:          cwd,
+			SystemPrompt: prompts.Shepherd,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warn: default shepherd failed (continuing): %v\n", err)
+		} else {
+			fmt.Println("✓ Default shepherd spawned (4-eyes on; --no-shepherd to opt out)")
+		}
+	}
+	fmt.Println("\nRuntime up. Open http://" + runFlagListen + " (dashboard) to spawn workers.")
 	fmt.Println()
 
 	// Graceful shutdown plumbing — fires whether TUI exits naturally or
