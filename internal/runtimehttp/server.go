@@ -80,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/reviews/", s.reviewsByTarget)
 	mux.HandleFunc("/api/v1/workspaces", s.workspacesHandler)
 	mux.HandleFunc("/api/v1/workspaces/", s.workspaceByName)
+	mux.HandleFunc("/api/v1/events", s.eventsHandler)
+	mux.HandleFunc("/api/v1/events/stream", s.eventsStream)
 
 	return logMiddleware(mux)
 }
@@ -673,6 +675,56 @@ func (s *Server) workspaceByName(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// eventsHandler returns the most recent N events (default 200).
+func (s *Server) eventsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := 200
+	if l := r.URL.Query().Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": s.rt.Events(limit)})
+}
+
+// eventsStream — server-sent events of every runtime event. Stays open
+// for the dashboard's live events strip. Each line:
+//
+//	data: {"id":"...","at":"...","kind":"...","actor":"...","body":"...","meta":{...}}
+func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Replay recent events first so the client has context.
+	for _, e := range s.rt.Events(50) {
+		b, _ := json.Marshal(e)
+		fmt.Fprintf(w, "data: %s\n\n", string(b))
+	}
+	flusher.Flush()
+
+	ch, unsub := s.rt.SubscribeEvents()
+	defer unsub()
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e, ok := <-ch:
+			if !ok {
+				return
+			}
+			b, _ := json.Marshal(e)
+			fmt.Fprintf(w, "data: %s\n\n", string(b))
+			flusher.Flush()
+		}
 	}
 }
 

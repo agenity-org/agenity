@@ -186,6 +186,38 @@ type Runtime struct {
 	// Per-axis review records (v0.6-C council pattern). Keyed by target
 	// agent name; inner map keyed by axis (G|V|F|E|D|custom).
 	axisReviews map[string]map[string]*AxisReview
+
+	// Event log — runtime-wide chronological audit (v0.6-F).
+	events *eventBuffer
+}
+
+// RecordEvent appends an event to the runtime's audit log. Called by
+// runtime internals on spawn/exit/scorecard/etc. and by agents via the
+// chepherd.record_event MCP tool.
+func (r *Runtime) RecordEvent(e Event) {
+	if r.events == nil {
+		return
+	}
+	r.events.push(e)
+}
+
+// Events returns the most recent N events (or all if limit == 0).
+func (r *Runtime) Events(limit int) []Event {
+	if r.events == nil {
+		return nil
+	}
+	return r.events.snapshot(limit)
+}
+
+// SubscribeEvents returns a channel that receives future events + an
+// unsubscribe function. Used by SSE/WS endpoints.
+func (r *Runtime) SubscribeEvents() (<-chan Event, func()) {
+	if r.events == nil {
+		ch := make(chan Event)
+		close(ch)
+		return ch, func() {}
+	}
+	return r.events.subscribe()
 }
 
 // AxisReview is one reviewer's score on one axis of one target worker.
@@ -240,6 +272,7 @@ func New(stateDir string) (*Runtime, error) {
 		teams:       make(map[string]*Team),
 		memberships: make(map[string]*Membership),
 		axisReviews: make(map[string]map[string]*AxisReview),
+		events:      newEventBuffer(1000),
 	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
@@ -387,6 +420,12 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	for _, h := range hooks {
 		h(s, spec.Name)
 	}
+	// Event: agent spawned
+	r.RecordEvent(Event{
+		Kind: "spawn", Actor: "runtime",
+		Body: fmt.Sprintf("agent %q spawned (%s, team=%s, role=%s)", spec.Name, spec.AgentSlug, spec.Team, spec.Role),
+		Meta: map[string]any{"name": spec.Name, "agent_slug": spec.AgentSlug, "team": spec.Team, "role": string(spec.Role), "cwd": spec.Cwd},
+	})
 	r.broadcast()
 	return info, s, nil
 }
@@ -447,7 +486,17 @@ func (r *Runtime) markExited(id string) {
 	name := info.Name
 	code := info.ExitCode
 	r.mu.Unlock()
-	r.HumanInbox("runtime", fmt.Sprintf("session '%s' exited (code %d)", name, code))
+	// Event: agent exited
+	r.RecordEvent(Event{
+		Kind: "exit", Actor: "runtime",
+		Body: fmt.Sprintf("agent %q exited (code %d)", name, code),
+		Meta: map[string]any{"name": name, "exit_code": code},
+	})
+	// Inbox: only for failed exits (clean exits = routine, lives in events
+	// only per v0.6-F refinement)
+	if code != 0 {
+		r.HumanInbox("runtime", fmt.Sprintf("[failure] agent %q exited (code %d)", name, code))
+	}
 
 	// Clean exits (code 0) disappear from the list immediately — the
 	// inbox message preserves the historical record and the operator's
@@ -634,14 +683,20 @@ func (r *Runtime) List() []*SessionInfo {
 // each call overwrites the previous scorecard for that name.
 func (r *Runtime) SetScorecard(name string, sc Scorecard) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	id, ok := r.byName[name]
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("runtime.SetScorecard: unknown session %q", name)
 	}
 	sc.At = time.Now().UTC()
 	r.info[id].Scorecard = &sc
 	r.cond.Broadcast()
+	r.mu.Unlock()
+	r.RecordEvent(Event{
+		Kind: "scorecard", Actor: "shepherd",
+		Body: fmt.Sprintf("scorecard for %q: G=%.1f V=%.1f F=%.1f E=%.1f D=%.1f", name, sc.Goal, sc.Velocity, sc.Focus, sc.EndState, sc.Discipline),
+		Meta: map[string]any{"target": name, "G": sc.Goal, "V": sc.Velocity, "F": sc.Focus, "E": sc.EndState, "D": sc.Discipline, "note": sc.Note},
+	})
 	return nil
 }
 
@@ -650,9 +705,9 @@ func (r *Runtime) SetScorecard(name string, sc Scorecard) error {
 // surfaced for "last_verdict" but don't bump InterventionCount.
 func (r *Runtime) RecordVerdict(name, verdict, msg string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	id, ok := r.byName[name]
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("runtime.RecordVerdict: unknown session %q", name)
 	}
 	info := r.info[id]
@@ -663,6 +718,12 @@ func (r *Runtime) RecordVerdict(name, verdict, msg string) error {
 		info.InterventionCount++
 	}
 	r.cond.Broadcast()
+	r.mu.Unlock()
+	r.RecordEvent(Event{
+		Kind: "verdict", Actor: "shepherd",
+		Body: fmt.Sprintf("verdict for %q: %s — %s", name, verdict, msg),
+		Meta: map[string]any{"target": name, "verdict": verdict, "message": msg},
+	})
 	return nil
 }
 

@@ -239,11 +239,40 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 
 	// Periodic baseline tick — 60s. Catches drift between explicit spawn
 	// events (e.g. an existing agent that's been silent or stuck).
+	// Anti-rot: after maxTicks the shepherd is retired and a fresh one
+	// is spawned with anchored summary of the previous shepherd's state.
+	const maxTicksBeforeRefresh = 50
+	tickCount := 0
 	tick := time.NewTicker(60 * time.Second)
 	defer tick.Stop()
 	for range tick.C {
 		live, _ := rt.Get("shepherd")
 		if live == nil || live != sess {
+			return
+		}
+		tickCount++
+		if tickCount >= maxTicksBeforeRefresh {
+			// Anti-rot: fresh shepherd. Capture the current shepherd's
+			// pane as the anchored handoff summary, then retire it +
+			// spawn replacement. The MCP socket + dashboard see no
+			// discontinuity — same name, same membership, same role.
+			rt.RecordEvent(runtime.Event{
+				Kind: "shepherd_refresh", Actor: "runtime",
+				Body: "shepherd hit tick limit (50); refreshing for anti-rot",
+			})
+			pokeShepherd(sess, "FINAL TICK before refresh: write a 5-line summary of the current state of your watch (workers + their latest scorecard + any open coaching threads + open questions) via chepherd.record_event(kind='shepherd_handoff', body='<summary>'). I'll spawn a replacement shepherd in 10s with this summary as its boot context.")
+			time.Sleep(15 * time.Second)
+			_ = rt.Stop("shepherd")
+			time.Sleep(2 * time.Second)
+			// Respawn (skip cycle; new bootstrapShepherd starts its own loop)
+			_, newSess, err := rt.Spawn(runtime.SpawnSpec{
+				Name: "shepherd", AgentSlug: "claude-code", Team: "default",
+				Role: runtime.RoleShepherd, Cwd: "/home/openova",
+				SystemPrompt: prompts.Shepherd,
+			})
+			if err == nil {
+				go bootstrapShepherd(rt, newSess)
+			}
 			return
 		}
 		pokeShepherd(sess, "Tick: chepherd.list + read_pane each non-paused worker. Then chepherd.set_scorecard + chepherd.record_verdict for each — update scores based on what changed since last tick. Stay quiet unless alert_human is needed.")

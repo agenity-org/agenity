@@ -274,6 +274,30 @@ func (s *Server) toolList() []map[string]any {
 				"note":   map[string]any{"type": "string"},
 			},
 		}},
+		{"name": "chepherd.note", "description": "Shepherd-only: attach a per-worker observation note (lightweight, goes to the worker's scorecard.note field — NEVER to the inbox). Use this for routine 'I saw X happen' commentary. Args: target, body.", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"target", "body"},
+			"properties": map[string]any{
+				"target": map[string]any{"type": "string"},
+				"body":   map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.record_event", "description": "Append an event to the runtime audit log (events strip). Use for any structured observation that doesn't warrant the inbox. Args: kind (free-form, e.g. 'observation'|'milestone'|'warning'), body, actor (optional, defaults to caller agent).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"kind", "body"},
+			"properties": map[string]any{
+				"kind":  map[string]any{"type": "string"},
+				"body":  map[string]any{"type": "string"},
+				"actor": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.read_canon", "description": "Read the current canon (CLAUDE.md / team-specific rules) for a team. Returns the canon text. Shepherds should call this every tick to re-ground their judgment against the live canon (which can be edited mid-run via the dashboard's canon-viewer widget). Args: team.", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"team"},
+			"properties": map[string]any{
+				"team": map[string]any{"type": "string"},
+			},
+		}},
 	}
 }
 
@@ -522,9 +546,6 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			Score                        float64
 		}
 		_ = json.Unmarshal(args, &a)
-		// If reviewer name wasn't supplied by the caller, default to
-		// the caller's own session name once we wire connection metadata.
-		// For now: anonymous reviewer is OK.
 		if a.Reviewer == "" {
 			a.Reviewer = "anonymous"
 		}
@@ -533,6 +554,46 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			return resp
 		}
 		resp.Result = map[string]any{"ok": true}
+	case "note":
+		var a struct{ Target, Body string }
+		_ = json.Unmarshal(args, &a)
+		// Lightweight observation — append to the target's scorecard note
+		// without disturbing the scores. If no scorecard exists yet, write
+		// to events log only.
+		_, info := s.rt.Get(a.Target)
+		if info != nil && info.Scorecard != nil {
+			info.Scorecard.Note = info.Scorecard.Note + "\n" + a.Body
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind: "note", Actor: "shepherd",
+			Body: a.Target + ": " + a.Body,
+			Meta: map[string]any{"target": a.Target, "body": a.Body},
+		})
+		resp.Result = map[string]any{"ok": true}
+	case "record_event":
+		var a struct{ Kind, Body, Actor string }
+		_ = json.Unmarshal(args, &a)
+		if a.Actor == "" {
+			a.Actor = "mcp"
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind: a.Kind, Actor: a.Actor, Body: a.Body,
+		})
+		resp.Result = map[string]any{"ok": true}
+	case "read_canon":
+		var a struct{ Team string }
+		_ = json.Unmarshal(args, &a)
+		teams := s.rt.ListTeams()
+		var canon string
+		for _, t := range teams {
+			if t.Name == a.Team {
+				if b, err := os.ReadFile(t.CanonPath); err == nil {
+					canon = string(b)
+				}
+				break
+			}
+		}
+		resp.Result = map[string]any{"team": a.Team, "canon": canon}
 	default:
 		resp.Error = &rpcErr{Code: -32601, Message: "unknown chepherd tool: " + name}
 	}
