@@ -115,12 +115,12 @@ If v0.6 misbehaves, v0.5 is your safety net. Just point your browser back at `ht
 
 ## When to switch permanently
 
-Recommended once:
-- All 6 v0.6 blockers in EPIC #80 are closed (currently 3 closed, 3 open: council composition, anti-rot context handoff, e2e tests)
-- You've validated v0.6 on a real-day workflow for at least one full day
-- The migration ETA on EPIC #80 reads "ready to switch"
+**Status: ready to switch.** EPIC #80 closed 2026-05-25 — all 6 blockers shipped, 8/8 e2e tests green.
 
-Until then, treat v0.6 as the experimental dashboard you can flip to whenever you want to try the new workspace canvas, but keep daily work on v0.5.
+Recommended path before flipping the symlink:
+1. Spend one full work-day driving v0.6 (`http://localhost:4322/v06`) for real tasks
+2. Keep v0.5 running in parallel so you can flip back instantly if anything feels off
+3. Once you've gone 24h on v0.6 without a rollback, run the symlink step below
 
 ## After permanent switch
 
