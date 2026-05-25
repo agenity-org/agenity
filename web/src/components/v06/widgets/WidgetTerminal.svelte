@@ -40,7 +40,7 @@
     resizeObs = new ResizeObserver(tryFit);
     resizeObs.observe(termContainer);
 
-    ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/sessions/${name}/attach`);
+    ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api-v06/v1/sessions/${name}/attach`);
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (ev) => {
       if (!term) return;

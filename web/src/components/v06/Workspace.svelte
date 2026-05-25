@@ -59,7 +59,9 @@
   }
 
   // --- API ---
-  const API = '/api/v1';
+  // v0.6 uses its own /api-v06 namespace so it always hits the v0.6 runtime
+  // (:8081) regardless of which Astro dev server / port served the page.
+  const API = '/api-v06/v1';
   async function refresh() {
     try {
       const [s, t, m, ib, ev] = await Promise.all([

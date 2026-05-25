@@ -1,10 +1,11 @@
 <script>
   let { inbox } = $props();
+  const API = '/api-v06/v1';
   async function markRead(id) {
-    try { await fetch(`/api/v1/inbox/${id}/read`, { method: 'POST' }); } catch {}
+    try { await fetch(`${API}/inbox/${id}/read`, { method: 'POST' }); } catch {}
   }
   async function markAllRead() {
-    try { await fetch(`/api/v1/inbox/read-all`, { method: 'POST' }); } catch {}
+    try { await fetch(`${API}/inbox/read-all`, { method: 'POST' }); } catch {}
   }
   function relTime(ts) {
     if (!ts) return '';

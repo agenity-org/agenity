@@ -6,6 +6,7 @@
 <script>
   import { onMount } from 'svelte';
   let { onClose, onSpawned } = $props();
+  const API = '/api-v06/v1';
 
   let name = $state('');
   let agent = $state('claude-code');
@@ -34,7 +35,7 @@
 
   async function loadResumeOptions(forCwd) {
     try {
-      const url = forCwd ? `/api/v1/claude-sessions?cwd=${encodeURIComponent(forCwd)}` : '/api/v1/claude-sessions';
+      const url = forCwd ? `${API}/claude-sessions?cwd=${encodeURIComponent(forCwd)}` : `${API}/claude-sessions`;
       const r = await fetch(url);
       const data = await r.json();
       claudeSessions = data.sessions || [];
@@ -43,7 +44,7 @@
 
   async function loadRecentFolders() {
     try {
-      const r = await fetch('/api/v1/folders/recent');
+      const r = await fetch(`${API}/folders/recent`);
       const data = await r.json();
       recentFolders = data.folders || [];
     } catch {}
@@ -83,7 +84,7 @@
     try {
       const body = { name, agent, team, role, cwd, use_default_prompt: useDefaultPrompt };
       if (mode === 'resume' && resumeUuid) body.resume_uuid = resumeUuid;
-      const r = await fetch('/api/v1/sessions', {
+      const r = await fetch(`${API}/sessions`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });

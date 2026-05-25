@@ -1,16 +1,20 @@
 import { defineConfig } from 'astro/config';
 import svelte from '@astrojs/svelte';
 
-// Dev-server proxy. Backend port is configurable via CHEPHERD_PORT env
-// var (default 8080 = v0.5). Set CHEPHERD_PORT=8081 to point the dev
-// server at the v0.6 runtime.
+// Dev-server proxy.
+//   /api/*       → :CHEPHERD_PORT  (default 8080 → v0.5 runtime)
+//   /api-v06/*   → :CHEPHERD_PORT_V06 (default 8081 → v0.6 runtime)
 //
-//   CHEPHERD_PORT=8080 npm run dev       # v0.5 dashboard (default)
-//   CHEPHERD_PORT=8081 npm run dev -- --port 4322   # v0.6 dashboard
+// The two namespaces let a SINGLE Astro dev server (on :4321) serve both
+// dashboards through one SSH tunnel. The /v06 page hits /api-v06/v1/...
+// which always lands on the v0.6 runtime regardless of which port the
+// page itself was served from. The /app page keeps using /api/v1/... so
+// v0.5 is undisturbed.
 //
 // Production builds are static (served alongside the runtime so /api
 // shares its origin) and ignore this block.
 const backendPort = process.env.CHEPHERD_PORT || '8080';
+const backendPortV06 = process.env.CHEPHERD_PORT_V06 || '8081';
 
 export default defineConfig({
   integrations: [svelte()],
@@ -20,6 +24,24 @@ export default defineConfig({
   vite: {
     server: {
       proxy: {
+        // --- v0.6 (always :8081, path rewrite strips "-v06") ---
+        '/api-v06/v1/sessions': {
+          target: `ws://127.0.0.1:${backendPortV06}`,
+          ws: true,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api-v06/, '/api'),
+        },
+        '/api-v06/v1/events/stream': {
+          target: `http://127.0.0.1:${backendPortV06}`,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api-v06/, '/api'),
+        },
+        '/api-v06': {
+          target: `http://127.0.0.1:${backendPortV06}`,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api-v06/, '/api'),
+        },
+        // --- v0.5 (default :8080) ---
         '/api/v1/sessions': {
           target: `ws://127.0.0.1:${backendPort}`,
           ws: true,

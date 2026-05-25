@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   let { onClose, onApplied } = $props();
+  const API = '/api-v06/v1';
   let templates = $state([]);
   let selected = $state(null);
   let team = $state('');
@@ -9,7 +10,7 @@
   let error = $state('');
   onMount(async () => {
     try {
-      const r = await fetch('/api/v1/templates');
+      const r = await fetch(`${API}/templates`);
       const data = await r.json();
       templates = data.templates || [];
       if (templates.length) selected = templates[0].name;
@@ -19,7 +20,7 @@
     if (!selected) return;
     busy = true; error = '';
     try {
-      const r = await fetch(`/api/v1/templates/${selected}/apply`, {
+      const r = await fetch(`${API}/templates/${selected}/apply`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ team: team || selected, cwd }),
       });
