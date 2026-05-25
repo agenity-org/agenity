@@ -216,12 +216,62 @@ func (s *Server) toolList() []map[string]any {
 				"paused": map[string]any{"type": "boolean"},
 			},
 		}},
-		{"name": "chepherd.alert_human", "description": "Surface a high-priority message in the human's dashboard inbox. Args: body, urgency ('low'|'medium'|'high', optional default 'medium').", "inputSchema": map[string]any{
+		{"name": "chepherd.alert_human", "description": "Surface a high-signal message in the human's inbox. ONLY for: accomplishment (major win), failure (something broke), stuck (agent blocked despite intervention), or question (operator decision needed). Routine observations go to chepherd.note or chepherd.record_event instead. Args: body, kind, urgency.", "inputSchema": map[string]any{
 			"type":     "object",
-			"required": []string{"body"},
+			"required": []string{"body", "kind"},
 			"properties": map[string]any{
 				"body":    map[string]any{"type": "string"},
+				"kind":    map[string]any{"type": "string", "enum": []string{"accomplishment", "failure", "stuck", "question"}},
 				"urgency": map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}},
+			},
+		}},
+		// v0.6 team / membership tools
+		{"name": "chepherd.create_team", "description": "Create a team. Args: name, canon_path (optional), topology ('hub'|'mesh'|'custom', default 'hub').", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name":       map[string]any{"type": "string"},
+				"canon_path": map[string]any{"type": "string"},
+				"topology":   map[string]any{"type": "string", "enum": []string{"hub", "mesh", "custom"}},
+			},
+		}},
+		{"name": "chepherd.join_team", "description": "Add an agent to a team with a role. Idempotent on (agent, team) — re-call to update role. Args: agent, team, role ('worker'|'shepherd'|'reviewer'|'reviewer-discipline'|'reviewer-architect'|'reviewer-economics'|'tester'|'architect'), brief_override (optional).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"agent", "team", "role"},
+			"properties": map[string]any{
+				"agent":          map[string]any{"type": "string"},
+				"team":           map[string]any{"type": "string"},
+				"role":           map[string]any{"type": "string"},
+				"brief_override": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.leave_team", "description": "Remove an agent's membership from a team. Args: agent, team.", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"agent", "team"},
+			"properties": map[string]any{
+				"agent": map[string]any{"type": "string"},
+				"team":  map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.list_teams", "description": "Enumerate all teams.", "inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}},
+		{"name": "chepherd.list_memberships", "description": "List memberships, optionally filtered by agent or team (pass empty to skip a filter). Args: agent (optional), team (optional).", "inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"agent": map[string]any{"type": "string"},
+				"team":  map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.set_review_axis", "description": "Reviewer-only: record a per-axis assessment of a target worker. Used in the council pattern (v0.6). Args: target, axis (e.g., 'G','V','F','E','D','quality'), score (0..10), note (optional).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"target", "axis", "score"},
+			"properties": map[string]any{
+				"target": map[string]any{"type": "string"},
+				"axis":   map[string]any{"type": "string"},
+				"score":  map[string]any{"type": "number"},
+				"note":   map[string]any{"type": "string"},
 			},
 		}},
 	}
@@ -416,13 +466,72 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		}
 		resp.Result = map[string]any{"ok": true}
 	case "alert_human":
-		var a struct{ Body, Urgency, From string }
+		var a struct{ Body, Kind, Urgency, From string }
 		_ = json.Unmarshal(args, &a)
 		from := a.From
 		if from == "" {
 			from = "shepherd"
 		}
-		s.rt.HumanInbox(from, a.Body)
+		// v0.6: include kind in the inbox body so dashboard can render
+		// per-kind treatment. Default kind = "alert" for legacy callers
+		// that don't pass it.
+		body := a.Body
+		if a.Kind != "" {
+			body = "[" + a.Kind + "] " + body
+		}
+		s.rt.HumanInbox(from, body)
+		resp.Result = map[string]any{"ok": true}
+	case "create_team":
+		var a struct {
+			Name, CanonPath, Topology string
+		}
+		_ = json.Unmarshal(args, &a)
+		if a.Name == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "name required"}
+			return resp
+		}
+		t, created := s.rt.CreateTeam(a.Name, a.CanonPath, runtime.Topology(a.Topology))
+		resp.Result = map[string]any{"team": t, "created": created}
+	case "join_team":
+		var a struct {
+			Agent, Team, Role, BriefOverride string
+		}
+		_ = json.Unmarshal(args, &a)
+		m, err := s.rt.JoinTeam(a.Agent, a.Team, runtime.MembershipRole(a.Role), a.BriefOverride)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"membership": m}
+	case "leave_team":
+		var a struct{ Agent, Team string }
+		_ = json.Unmarshal(args, &a)
+		ok := s.rt.LeaveTeam(a.Agent, a.Team)
+		resp.Result = map[string]any{"ok": ok}
+	case "list_teams":
+		teams := s.rt.ListTeams()
+		resp.Result = map[string]any{"teams": teams}
+	case "list_memberships":
+		var a struct{ Agent, Team string }
+		_ = json.Unmarshal(args, &a)
+		m := s.rt.ListMemberships(a.Agent, a.Team)
+		resp.Result = map[string]any{"memberships": m}
+	case "set_review_axis":
+		var a struct {
+			Reviewer, Target, Axis, Note string
+			Score                        float64
+		}
+		_ = json.Unmarshal(args, &a)
+		// If reviewer name wasn't supplied by the caller, default to
+		// the caller's own session name once we wire connection metadata.
+		// For now: anonymous reviewer is OK.
+		if a.Reviewer == "" {
+			a.Reviewer = "anonymous"
+		}
+		if err := s.rt.SetReviewAxis(a.Reviewer, a.Target, a.Axis, a.Score, a.Note); err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
 		resp.Result = map[string]any{"ok": true}
 	default:
 		resp.Error = &rpcErr{Code: -32601, Message: "unknown chepherd tool: " + name}

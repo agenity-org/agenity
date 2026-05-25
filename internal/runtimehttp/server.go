@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,6 +72,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/inbox/read-all", s.inboxReadAll)
 	mux.HandleFunc("/api/v1/claude-sessions", s.claudeSessions)
 	mux.HandleFunc("/api/v1/folders/recent", s.recentFolders)
+
+	// v0.6 unified-model endpoints
+	mux.HandleFunc("/api/v1/teams", s.teamsHandler)
+	mux.HandleFunc("/api/v1/teams/", s.teamByName)
+	mux.HandleFunc("/api/v1/memberships", s.membershipsHandler)
+	mux.HandleFunc("/api/v1/reviews/", s.reviewsByTarget)
+	mux.HandleFunc("/api/v1/workspaces", s.workspacesHandler)
+	mux.HandleFunc("/api/v1/workspaces/", s.workspaceByName)
+
 	return logMiddleware(mux)
 }
 
@@ -140,6 +150,13 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			SystemPrompt: systemPrompt,
 			AgentArgs:    args,
 		})
+		if err == nil && req.Team != "" {
+			// v0.6: also record the membership in the unified model.
+			// Best-effort; failure here doesn't block the spawn since
+			// v0.5 SessionInfo.Team is still the source of truth in
+			// transitional code.
+			_, _ = s.rt.JoinTeam(req.Name, req.Team, runtime.MembershipRole(req.Role), "")
+		}
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
@@ -503,6 +520,160 @@ func readSessionMeta(path string) (string, string) {
 		}
 	}
 	return cwd, first
+}
+
+// ===== v0.6 endpoints: teams, memberships, reviews, workspaces =====
+
+func (s *Server) teamsHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"teams": s.rt.ListTeams()})
+	case http.MethodPost:
+		var req struct {
+			Name, CanonPath, Topology string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if req.Name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name required"})
+			return
+		}
+		t, created := s.rt.CreateTeam(req.Name, req.CanonPath, runtime.Topology(req.Topology))
+		status := http.StatusCreated
+		if !created {
+			status = http.StatusOK
+		}
+		writeJSON(w, status, map[string]any{"team": t, "created": created})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) teamByName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/teams/")
+	if name == "" {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodDelete:
+		// Not yet implemented — leaving as 405 for now
+		http.Error(w, "team deletion not implemented", http.StatusMethodNotAllowed)
+	default:
+		// Find by name in ListTeams
+		for _, t := range s.rt.ListTeams() {
+			if t.Name == name {
+				writeJSON(w, http.StatusOK, map[string]any{"team": t})
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) membershipsHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		agent := r.URL.Query().Get("agent")
+		team := r.URL.Query().Get("team")
+		writeJSON(w, http.StatusOK, map[string]any{"memberships": s.rt.ListMemberships(agent, team)})
+	case http.MethodPost:
+		var req struct {
+			Agent, Team, Role, BriefOverride string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		m, err := s.rt.JoinTeam(req.Agent, req.Team, runtime.MembershipRole(req.Role), req.BriefOverride)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"membership": m})
+	case http.MethodDelete:
+		agent := r.URL.Query().Get("agent")
+		team := r.URL.Query().Get("team")
+		ok := s.rt.LeaveTeam(agent, team)
+		writeJSON(w, http.StatusOK, map[string]any{"removed": ok})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) reviewsByTarget(w http.ResponseWriter, r *http.Request) {
+	target := strings.TrimPrefix(r.URL.Path, "/api/v1/reviews/")
+	if target == "" {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reviews": s.rt.ListReviews(target)})
+}
+
+// Workspaces: persist user's pane layouts so they're shared across operators.
+// Stored as JSON files in <stateDir>/workspaces/<name>.json.
+// Simple key-value: GET list / GET by name / PUT (save) / DELETE.
+func (s *Server) workspacesHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		dir := filepath.Join(s.rt.StateDir(), "workspaces")
+		entries, _ := os.ReadDir(dir)
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".json") {
+				names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+			}
+		}
+		sort.Strings(names)
+		writeJSON(w, http.StatusOK, map[string]any{"workspaces": names})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) workspaceByName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/workspaces/")
+	if name == "" || strings.Contains(name, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	dir := filepath.Join(s.rt.StateDir(), "workspaces")
+	_ = os.MkdirAll(dir, 0o700)
+	path := filepath.Join(dir, name+".json")
+	switch r.Method {
+	case http.MethodGet:
+		b, err := os.ReadFile(path)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(b)
+	case http.MethodPut:
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		// Validate it's JSON
+		var v any
+		if err := json.Unmarshal(b, &v); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case http.MethodDelete:
+		_ = os.Remove(path)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // decodeClaudeProjectDir converts Claude's "-home-openova-repos-iogrid"

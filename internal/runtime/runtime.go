@@ -199,6 +199,13 @@ type AxisReview struct {
 	At       time.Time `json:"at"`
 }
 
+// StateDir returns the root state directory for this runtime
+// (~/.local/state/chepherd-v0X). Used by HTTP server for workspace
+// persistence paths.
+func (r *Runtime) StateDir() string {
+	return r.stateDir
+}
+
 // AddSpawnHook registers a callback invoked after every successful Spawn.
 // Called synchronously in Spawn after persistence, before broadcast.
 func (r *Runtime) AddSpawnHook(hook func(*session.Session, string)) {
