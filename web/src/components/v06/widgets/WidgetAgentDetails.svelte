@@ -7,11 +7,16 @@
   let { agent } = $props();
   const API = '/api-v06/v1';
   let claudeStatus = $state(null);
+  let claudeProfile = $state(null);
 
   onMount(async () => {
     try {
       const r = await fetch(`${API}/runtime/claude-status`);
       claudeStatus = await r.json();
+    } catch {}
+    try {
+      const r = await fetch(`${API}/runtime/claude-profile`);
+      claudeProfile = await r.json();
     } catch {}
   });
 
@@ -79,6 +84,7 @@
       <dt>branch</dt><dd>{agent.branch || '—'}</dd>
       <dt>agent</dt><dd>{agent.agent}</dd>
       <dt>login</dt><dd>{claudeStatus?.login_method ?? '—'}</dd>
+      <dt>email</dt><dd title="Anthropic profile API didn't return this — likely requires elevated OAuth scope">{claudeProfile?.email || '—'}</dd>
       <dt>subscription</dt><dd>{claudeStatus?.subscription ?? '—'}</dd>
       <dt>model</dt><dd class="mono">{modelLabel()}</dd>
       <dt>pid</dt><dd class="mono">{agent.pid ?? '—'}</dd>

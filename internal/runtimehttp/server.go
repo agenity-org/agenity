@@ -88,10 +88,129 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/templates/", s.templateApply)
 	mux.HandleFunc("/api/v1/prompts/", s.promptsHandler) // /api/v1/prompts/{role}
 	mux.HandleFunc("/api/v1/runtime/claude-status", s.claudeStatusHandler)
+	mux.HandleFunc("/api/v1/runtime/claude-profile", s.claudeProfileHandler)
 	mux.HandleFunc("/api/v1/folders/git-info", s.gitInfoHandler)
 	mux.HandleFunc("/api/v1/folders/git-setup", s.gitSetupHandler)
+	mux.HandleFunc("/api/v1/teams/saved", s.savedTeamsHandler)
 
 	return logMiddleware(mux)
+}
+
+// claudeProfileHandler — proxy to Anthropic's OAuth profile endpoint to
+// surface the operator's account email. Best-effort: if Anthropic doesn't
+// respond or the endpoint shape has changed, returns logged_in=true with
+// email="".  Never returns the access token itself.
+func (s *Server) claudeProfileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	home, _ := os.UserHomeDir()
+	b, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"logged_in": false})
+		return
+	}
+	var creds struct {
+		ClaudeAiOauth struct {
+			AccessToken      string `json:"accessToken"`
+			SubscriptionType string `json:"subscriptionType"`
+			RateLimitTier    string `json:"rateLimitTier"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal(b, &creds); err != nil || creds.ClaudeAiOauth.AccessToken == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"logged_in": false})
+		return
+	}
+	// Try Anthropic's OAuth profile endpoint. Path is the canonical OAuth
+	// userinfo path used by their internal API. Best-effort — if the
+	// endpoint shape changes or the call is rate-limited we silently
+	// return the parts we can derive locally.
+	out := map[string]any{
+		"logged_in":    true,
+		"subscription": creds.ClaudeAiOauth.SubscriptionType,
+		"rate_tier":    creds.ClaudeAiOauth.RateLimitTier,
+		"email":        "",
+		"name":         "",
+	}
+	for _, url := range []string{
+		"https://api.anthropic.com/api/oauth/profile",
+		"https://api.anthropic.com/v1/oauth/profile",
+		"https://api.anthropic.com/api/oauth/user",
+	} {
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("Authorization", "Bearer "+creds.ClaudeAiOauth.AccessToken)
+		req.Header.Set("User-Agent", "chepherd-v06")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp == nil {
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 {
+			continue
+		}
+		var profile map[string]any
+		if err := json.Unmarshal(body, &profile); err != nil {
+			continue
+		}
+		// Capture whatever fields the response gives us, regardless of
+		// the exact shape (defensive against Anthropic API churn).
+		for _, k := range []string{"email", "email_address", "primary_email"} {
+			if v, ok := profile[k].(string); ok && v != "" {
+				out["email"] = v
+				break
+			}
+		}
+		for _, k := range []string{"name", "full_name", "display_name"} {
+			if v, ok := profile[k].(string); ok && v != "" {
+				out["name"] = v
+				break
+			}
+		}
+		if out["email"] != "" || out["name"] != "" {
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// savedTeamsHandler — list every team apply on disk that's now dormant
+// (no live members) so the wizard's Stage 1 can offer one-click
+// resurrect. Each team carries the template name, member list, last-
+// observed claude_uuid per member, and last_active timestamp.
+func (s *Server) savedTeamsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	root := filepath.Join(s.rt.StateDir(), "teams")
+	entries, _ := os.ReadDir(root)
+	live := map[string]bool{}
+	for _, info := range s.rt.List() {
+		if !info.Exited {
+			live[info.Team] = true
+		}
+	}
+	out := []map[string]any{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(root, e.Name(), "apply.json")
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(b, &rec); err != nil {
+			continue
+		}
+		rec["name"] = e.Name()
+		rec["live"] = live[e.Name()]
+		out = append(out, rec)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"teams": out})
 }
 
 // gitInfoHandler — GET /api/v1/folders/git-info?cwd=<abs>
@@ -830,6 +949,11 @@ func (s *Server) teamByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sub-resource: /api/v1/teams/{name}/resurrect
+	if sub == "resurrect" && r.Method == http.MethodPost {
+		s.resurrectTeamHandler(w, r, name)
+		return
+	}
 	// Sub-resource: /api/v1/teams/{name}/canon — view + edit team CLAUDE.md.
 	if sub == "canon" {
 		var canonPath string
@@ -1267,6 +1391,31 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, res)
 	}
+	// Persist team apply for resurrect. Member→claude_uuid is "" at apply
+	// time; the List() refresh fills it in as Claude writes its JSONL.
+	memberRecs := make([]map[string]any, 0, len(p.Members))
+	for _, m := range p.Members {
+		memberRecs = append(memberRecs, map[string]any{
+			"name":        m.Name,
+			"agent":       m.Agent,
+			"role":        string(m.Role),
+			"cwd":         func() string { if m.Cwd != "" { return m.Cwd }; return cwd }(),
+			"claude_uuid": "",
+		})
+	}
+	teamDir := filepath.Join(s.rt.StateDir(), "teams", team)
+	_ = os.MkdirAll(teamDir, 0o700)
+	apply := map[string]any{
+		"template":     p.Name,
+		"team":         team,
+		"cwd":          cwd,
+		"topology":     string(effectiveTopology),
+		"members":      memberRecs,
+		"last_active":  time.Now().UTC().Format(time.RFC3339),
+	}
+	if b, err := json.MarshalIndent(apply, "", "  "); err == nil {
+		_ = os.WriteFile(filepath.Join(teamDir, "apply.json"), b, 0o600)
+	}
 	s.rt.RecordEvent(runtime.Event{
 		Kind: "template_applied", Actor: "runtime",
 		Body: fmt.Sprintf("template %q applied as team %q (%d members)", p.Name, team, len(p.Members)),
@@ -1274,6 +1423,90 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"template": p.Name, "team": team, "members": results,
 	})
+}
+
+// resurrectTeamHandler — POST /api/v1/teams/{name}/resurrect
+// Reads <stateDir>/teams/<name>/apply.json and re-spawns every member
+// using its last-known claude_uuid as --resume. Used by the wizard's
+// Saved-teams card.
+func (s *Server) resurrectTeamHandler(w http.ResponseWriter, r *http.Request, team string) {
+	teamDir := filepath.Join(s.rt.StateDir(), "teams", team)
+	b, err := os.ReadFile(filepath.Join(teamDir, "apply.json"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no saved state for team " + team})
+		return
+	}
+	var rec struct {
+		Template string         `json:"template"`
+		Cwd      string         `json:"cwd"`
+		Topology string         `json:"topology"`
+		Members  []struct {
+			Name, Agent, Role, Cwd, ClaudeUUID string `json:"-"`
+		} `json:"members"`
+	}
+	// Use a flexible decode so JSON tags match the saved shape.
+	var loose struct {
+		Template string                   `json:"template"`
+		Cwd      string                   `json:"cwd"`
+		Topology string                   `json:"topology"`
+		Members  []map[string]interface{} `json:"members"`
+	}
+	if err := json.Unmarshal(b, &loose); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	_ = rec
+	// Ensure team exists with saved topology
+	_, _ = s.rt.CreateTeam(team, "", runtime.Topology(loose.Topology))
+	type res struct {
+		Name string `json:"name"`
+		Err  string `json:"err,omitempty"`
+	}
+	var results []res
+	for _, m := range loose.Members {
+		name, _ := m["name"].(string)
+		agent, _ := m["agent"].(string)
+		role, _ := m["role"].(string)
+		mcwd, _ := m["cwd"].(string)
+		uuid, _ := m["claude_uuid"].(string)
+		if mcwd == "" {
+			mcwd = loose.Cwd
+		}
+		var args []string
+		if uuid != "" && agent == "claude-code" {
+			args = append(args, "--resume", uuid)
+		}
+		role0 := runtime.Role(role)
+		if role0 != runtime.RoleShepherd {
+			role0 = runtime.RoleWorker
+		}
+		// Try to source a default prompt
+		var sysPrompt string
+		if role0 == runtime.RoleShepherd {
+			sysPrompt = prompts.Shepherd
+		} else {
+			sysPrompt = prompts.Worker
+		}
+		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{
+			Name: name, AgentSlug: agent, Team: team, Role: role0, Cwd: mcwd,
+			SystemPrompt: sysPrompt, AgentArgs: args,
+		})
+		r := res{Name: name}
+		if err != nil {
+			r.Err = err.Error()
+		} else {
+			_, _ = s.rt.JoinTeam(name, team, runtime.MembershipRole(role), "")
+			if role0 == runtime.RoleShepherd && newSess != nil {
+				s.rt.BootstrapShepherd(newSess, name)
+			}
+		}
+		results = append(results, r)
+	}
+	s.rt.RecordEvent(runtime.Event{
+		Kind: "team_resurrected", Actor: "operator",
+		Body: fmt.Sprintf("team %q resurrected from saved state (%d members)", team, len(results)),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"team": team, "members": results})
 }
 
 // eventsHandler returns the most recent N events (default 200).

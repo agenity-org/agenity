@@ -21,9 +21,11 @@
   let remoteUrl = $state('');
   let gitInfo = $state(null);                // { is_git, remote, branch }
   let recentFolders = $state([]);
-  let memberOverrides = $state({});          // memberName → { resume_uuid | FRESH }
+  let memberOverrides = $state({});          // memberName → { resume_uuid | FRESH | cwd }
   let availableSessions = $state([]);
   let templates = $state([]);
+  let savedTeams = $state([]);               // dormant teams operator can resurrect
+  let topology = $state('');                 // override topology when applying template
   let busy = $state(false);
   let error = $state('');
 
@@ -32,10 +34,11 @@
     { id: 'solo-supervised',  icon: '👤',  title: 'Solo + Shepherd', blurb: 'One worker + one shepherd watching. The daily default.' },
     { id: 'pair',             icon: '👥',  title: 'Pair',            blurb: 'Implementer + reviewer + shepherd. Code review built in.' },
     { id: 'council',          icon: '🏛',  title: 'Council',         blurb: '5 agents: implementer + tester + 2 specialist reviewers + orchestrator. Heavy or risky work.' },
-    { id: 'custom-yaml',      icon: '🛠',  title: 'Custom (YAML)',   blurb: 'Define your own team in catalog YAML — topology, members, prompts.' },
+    { id: 'resurrect',        icon: '↻',   title: 'Resurrect a team', blurb: 'Bring back a previously-spawned team — each member resumes its last Claude session.' },
+    { id: 'custom-yaml',      icon: '🛠',  title: 'Custom (YAML)',   blurb: 'Define your own team in catalog YAML — topology, members, prompts. Or fork an existing template to start from.' },
   ];
 
-  // ----- mount: pre-load templates + folders + sessions for default cwd -----
+  // ----- mount: pre-load templates + folders + sessions + saved teams -----
   onMount(async () => {
     try {
       const r = await fetch(`${API}/templates`);
@@ -46,6 +49,11 @@
       const r = await fetch(`${API}/folders/recent`);
       const d = await r.json();
       recentFolders = d.folders || [];
+    } catch {}
+    try {
+      const r = await fetch(`${API}/teams/saved`);
+      const d = await r.json();
+      savedTeams = (d.teams || []).filter(t => !t.live);
     } catch {}
     refreshSessions();
     refreshGitInfo();
@@ -70,7 +78,23 @@
   function pickShape(s) {
     shape = s;
     teamName = s; // default team name = shape id; user can edit
+    if (s === 'resurrect') {
+      // Resurrect flow has its own stage 2 (pick which saved team).
+      stage = 2;
+      return;
+    }
     stage = 2;
+  }
+  let pickedResurrect = $state(null); // selected saved team name
+  async function doResurrect() {
+    if (!pickedResurrect) return;
+    busy = true; error = '';
+    try {
+      const r = await fetch(`${API}/teams/${pickedResurrect}/resurrect`, { method: 'POST' });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); error = e.error || `HTTP ${r.status}`; }
+      else { onLaunched?.(); onClose?.(); }
+    } catch (e) { error = String(e); }
+    busy = false;
   }
   function pickFolder(p) { cwd = p; }
 
@@ -119,16 +143,22 @@
         // Open the catalog directory in the operator's file manager doesn't make sense here.
         // Drop a hint instead.
         throw new Error('Custom YAML mode: drop your YAML at ~/.local/state/chepherd-v06/catalog/<name>.yaml then re-open this wizard — your template will appear as a shape choice.');
+      } else if (shape === 'resurrect') {
+        await doResurrect();
+        return;
       } else {
         // Template apply
         const mo = {};
         for (const [k, v] of Object.entries(memberOverrides)) {
-          if (v.resume_uuid === 'FRESH') mo[k] = { fresh: true };
-          else if (v.resume_uuid) mo[k] = { resume_uuid: v.resume_uuid };
+          const entry = {};
+          if (v.resume_uuid === 'FRESH') entry.fresh = true;
+          else if (v.resume_uuid) entry.resume_uuid = v.resume_uuid;
+          if (v.cwd) entry.cwd = v.cwd;
+          if (Object.keys(entry).length) mo[k] = entry;
         }
         const r = await fetch(`${API}/templates/${shape}/apply`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ team: teamName || shape, cwd, member_overrides: mo }),
+          body: JSON.stringify({ team: teamName || shape, cwd, topology, member_overrides: mo }),
         });
         if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
       }
@@ -143,11 +173,13 @@
   function back() { if (stage > 1) stage -= 1; }
   function nextEnabled() {
     if (stage === 1) return !!shape;
+    if (stage === 2 && shape === 'resurrect') return !!pickedResurrect;
     if (stage === 2) return !!cwd && (gitMode !== 'connect-remote' || !!remoteUrl);
     if (stage === 3) return true;
     return true;
   }
   function next() {
+    if (stage === 2 && shape === 'resurrect') { doResurrect(); return; }
     if (stage === 2 && shape === 'solo') { stage = 4; return; }
     if (stage === 2 && shape === 'custom-yaml') { stage = 4; return; }
     stage += 1;
@@ -181,6 +213,27 @@
           {/each}
         </div>
 
+      {:else if stage === 2 && shape === 'resurrect'}
+        <h3>Pick a team to resurrect</h3>
+        <p class="prose">Past templates you applied. Each member will re-spawn with its last-known Claude session as <code>--resume</code>.</p>
+        {#if !savedTeams.length}
+          <p class="empty">No saved teams yet — apply a template first.</p>
+        {/if}
+        <div class="saved-teams">
+          {#each savedTeams as t}
+            <button class="saved-team" class:active={pickedResurrect===t.name} on:click={() => (pickedResurrect = t.name)}>
+              <div class="head"><strong>{t.name}</strong> <small>· template: {t.template} · {(t.members||[]).length} members</small></div>
+              <div class="meta">cwd: <code>{t.cwd}</code></div>
+              <div class="meta">last active: {t.last_active ? new Date(t.last_active).toLocaleString() : '—'}</div>
+              <ul class="m-list">
+                {#each (t.members||[]) as m}
+                  <li>{m.role === 'shepherd' ? '✻' : '●'} {m.name} <small>({m.role}{m.claude_uuid ? ' · ↻ ' + m.claude_uuid.slice(0,8) : ' · ⊕ fresh'})</small></li>
+                {/each}
+              </ul>
+            </button>
+          {/each}
+        </div>
+
       {:else if stage === 2}
         <h3>Where will they work?</h3>
         <p class="prose">Pick a working directory. Agents read + write inside this folder. If it isn't a git repo we'll offer to set one up.</p>
@@ -210,11 +263,21 @@
           </div>
         {/if}
         <label>Team name <input bind:value={teamName} placeholder={shape} /></label>
+        {#if shape !== 'solo' && shape !== 'custom-yaml'}
+          <label>Topology
+            <select bind:value={topology}>
+              <option value="">(template default)</option>
+              <option value="hub">hub (shepherd in the middle)</option>
+              <option value="mesh">mesh (peer-to-peer)</option>
+              <option value="custom">custom</option>
+            </select>
+          </label>
+        {/if}
 
       {:else if stage === 3}
         {@const ms = membersOfShape()}
-        <h3>{ms.length} members — fresh or resume?</h3>
-        <p class="prose">By default each member starts fresh. To bring a prior Claude session into a role, pick its uuid from that member's dropdown.</p>
+        <h3>{ms.length} members — fresh, resume, custom cwd?</h3>
+        <p class="prose">By default every member shares the team cwd. Click <em>per-member cwd</em> on a row to override (e.g. multi-repo work). Pick a session to resume; leave on Fresh for a clean start.</p>
         <div class="members">
           {#each ms as m}
             <div class="member-row">
@@ -229,6 +292,12 @@
                   <option value={s.uuid}>↻ {s.uuid.slice(0,8)} · {new Date(s.modified).toLocaleString()} · {(s.first_message || '').slice(0,45)}</option>
                 {/each}
               </select>
+              <details class="cwd-override">
+                <summary>per-member cwd</summary>
+                <input placeholder="/home/.../other-repo (leave blank = team cwd)"
+                       value={memberOverrides[m.name]?.cwd || ''}
+                       on:input={(e) => memberOverrides = { ...memberOverrides, [m.name]: { ...(memberOverrides[m.name] || {}), cwd: e.target.value } }} />
+              </details>
             </div>
           {/each}
         </div>
@@ -306,7 +375,20 @@
   .m-head .icon.shepherd { color: var(--accent); }
   .m-head .name { font-weight: 600; }
   .m-head .role { color: var(--fg-muted); }
+  .member-row { grid-template-columns: 1fr 1.4fr; }
   .member-row select { width: 100%; padding: 0.35rem 0.5rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; cursor: pointer; }
+  .cwd-override { grid-column: 1 / span 2; margin-top: 0.35rem; }
+  .cwd-override summary { cursor: pointer; color: var(--fg-muted); font-size: 0.78rem; user-select: none; }
+  .cwd-override input { width: 100%; padding: 0.3rem 0.5rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-family: ui-monospace, monospace; margin-top: 0.3rem; box-sizing: border-box; }
+  .saved-teams { display: flex; flex-direction: column; gap: 0.5rem; max-height: 360px; overflow-y: auto; }
+  .saved-team { padding: 0.7rem 0.85rem; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; cursor: pointer; text-align: left; color: var(--fg); }
+  .saved-team:hover { border-color: var(--accent-2); }
+  .saved-team.active { border-color: var(--accent); background: rgba(255,165,0,0.06); }
+  .saved-team .head { color: var(--accent); }
+  .saved-team .head small { color: var(--fg-muted); }
+  .saved-team .meta { color: var(--fg-muted); margin-top: 0.2rem; }
+  .saved-team .m-list { margin: 0.35rem 0 0 0; padding-left: 1.2rem; color: var(--fg-muted); }
+  .empty { color: var(--fg-faint); text-align: center; padding: 1.2rem; }
   .confirm { margin: 0; padding-left: 1.2rem; color: var(--fg); }
   .confirm strong { color: var(--accent-2); }
   .confirm ul { margin: 0.3rem 0 0 0; padding-left: 1rem; color: var(--fg-muted); }

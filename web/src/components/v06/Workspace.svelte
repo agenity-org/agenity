@@ -16,6 +16,8 @@
   import '@xterm/xterm/css/xterm.css';
   import Pane from './Pane.svelte';
   import SpawnWizard from './SpawnWizard.svelte';
+  import AgentSettings from './AgentSettings.svelte';
+  import TeamSettings from './TeamSettings.svelte';
 
   // --- props / state ---
   let sessions = $state([]);
@@ -26,6 +28,8 @@
   let selectedAgent = $state(null);
   let theme = $state('dark');
   let showWizard = $state(false);
+  let showAgentSettings = $state(false);
+  let showTeamSettings = $state(null); // null | { team, members }
   let confirmDialog = $state(null);
 
   // Workspace layout — default = Focus template
@@ -271,7 +275,9 @@
     const intv = setInterval(refresh, 2500);
     startEventStream();
     loadLayout('current');
-    return () => { clearInterval(intv); evStream?.close(); };
+    const onTeamSettings = (ev) => { showTeamSettings = ev.detail; };
+    window.addEventListener('chepherd-open-team-settings', onTeamSettings);
+    return () => { clearInterval(intv); evStream?.close(); window.removeEventListener('chepherd-open-team-settings', onTeamSettings); };
   });
 
   function toggleTheme() {
@@ -313,6 +319,7 @@
         <button class="secondary" on:click={() => (showAgentMenu = !showAgentMenu)} title="agent actions">⚙ {selectedAgent}</button>
         {#if showAgentMenu}
           <div class="dropdown">
+            <button on:click={() => { showAgentSettings = true; showAgentMenu = false; }}>⚙ Settings…</button>
             <button on:click={() => agentAction('pause')}>⏸ Pause</button>
             <button on:click={() => agentAction('unpause')}>▶ Resume</button>
             <button on:click={() => agentAction('restart')}>↻ Restart</button>
@@ -333,6 +340,13 @@
 
 {#if showWizard}
   <SpawnWizard onClose={() => (showWizard = false)} onLaunched={refresh} />
+{/if}
+{#if showAgentSettings && selectedAgent}
+  {@const ag = sessions.find(s => s.name === selectedAgent)}
+  {#if ag}<AgentSettings agent={ag} {teams} onClose={() => (showAgentSettings = false)} />{/if}
+{/if}
+{#if showTeamSettings}
+  <TeamSettings team={showTeamSettings.team} members={showTeamSettings.members} onClose={() => (showTeamSettings = null)} onChanged={refresh} />
 {/if}
 {#if showSaveAs}
   <div class="backdrop" on:click={() => (showSaveAs = false)}>

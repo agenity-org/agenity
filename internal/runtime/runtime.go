@@ -736,10 +736,55 @@ func (r *Runtime) List() []*SessionInfo {
 		}
 		if extras.ClaudeUUID != "" {
 			c.ClaudeUUID = extras.ClaudeUUID
+			// Persist into the team's apply.json so resurrect can pick
+			// up where this session left off after a runtime restart.
+			r.maybeUpdateTeamApply(c.Team, c.Name, extras.ClaudeUUID)
 		}
 		out = append(out, &c)
 	}
 	return out
+}
+
+// maybeUpdateTeamApply patches the saved team apply record with the
+// latest observed claude_uuid for a member. Best-effort: silently
+// no-ops if the apply.json doesn't exist (solo spawns, manual joins).
+func (r *Runtime) maybeUpdateTeamApply(team, member, uuid string) {
+	if team == "" || team == "default" || member == "" || uuid == "" {
+		return
+	}
+	p := filepath.Join(r.stateDir, "teams", team, "apply.json")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var rec map[string]interface{}
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return
+	}
+	members, _ := rec["members"].([]interface{})
+	changed := false
+	for i, m := range members {
+		mm, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if mm["name"] == member {
+			if mm["claude_uuid"] != uuid {
+				mm["claude_uuid"] = uuid
+				members[i] = mm
+				changed = true
+			}
+			break
+		}
+	}
+	if !changed {
+		return
+	}
+	rec["members"] = members
+	rec["last_active"] = time.Now().UTC().Format(time.RFC3339)
+	if nb, err := json.MarshalIndent(rec, "", "  "); err == nil {
+		_ = os.WriteFile(p, nb, 0o600)
+	}
 }
 
 // SetScorecard stores shepherd's latest assessment of a worker. Idempotent:

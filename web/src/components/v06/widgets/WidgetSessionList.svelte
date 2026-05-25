@@ -7,6 +7,10 @@
   const API = '/api-v06/v1';
   let ctxMenu = $state(null); // { x, y, agent, currentTeam, currentRole }
 
+  function openTeamSettings(t, mems) {
+    window.dispatchEvent(new CustomEvent('chepherd-open-team-settings', { detail: { team: t, members: mems } }));
+  }
+
   function openContext(ev, agent, currentTeam, currentRole) {
     ev.preventDefault();
     ctxMenu = { x: ev.clientX, y: ev.clientY, agent, currentTeam, currentRole };
@@ -77,7 +81,7 @@
 <div class="list">
   {#each tree as group (group.team.name)}
     <section class="team">
-      <h3>
+      <h3 class="team-head" on:click={() => openTeamSettings(group.team, group.members)} title="open team settings">
         <span class="team-name">{group.team.name}</span>
         <span class="team-meta">· {group.team.topology} · {group.members.length}</span>
       </h3>
@@ -125,6 +129,8 @@
   .list { padding: 0.5rem 0.5rem; height: 100%; overflow-y: auto; background: var(--bg); }
   .team { margin-bottom: 0.8rem; }
   .team h3 { font-size: 0.74rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.3rem 0.2rem; font-weight: 600; }
+  .team-head { cursor: pointer; }
+  .team-head:hover { color: var(--accent); }
   .team-meta { color: var(--fg-faint); font-weight: normal; text-transform: none; letter-spacing: 0; }
   .team ul { list-style: none; padding: 0; margin: 0; }
   .team li { display: flex; align-items: center; gap: 0.45rem; padding: 0.4rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; border: 1px solid transparent; }
