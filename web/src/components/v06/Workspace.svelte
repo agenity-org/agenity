@@ -347,11 +347,22 @@
   }
   :global(html) { --ws-font: 13px; }
   :global(html), :global(body) { background: var(--bg); color: var(--fg); margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
-  /* All v0.6 widget bodies inherit --ws-font. Per-element type-scales are
-     expressed as em multiples of this so the operator's A-/A+ adjustment
-     scales the whole canvas uniformly (terminal, lists, prompt body, etc). */
-  :global(.pane-body), :global(.pane-body *) { font-size: var(--ws-font); }
-  :global(.pane-body .xterm) { font-size: var(--ws-font) !important; }
+  /* Widget root → font scales with --ws-font. Children inherit by default
+     unless they explicitly override (rem, px). Using em on widget body
+     elements keeps relative scales consistent. */
+  :global(.pane-body) { font-size: var(--ws-font); }
+  /* Force-scale common typographic descendants (some widgets set explicit
+     px/rem sizes that wouldn't otherwise pick up --ws-font). */
+  :global(.pane-body p), :global(.pane-body li), :global(.pane-body td), :global(.pane-body th),
+  :global(.pane-body small), :global(.pane-body span), :global(.pane-body button),
+  :global(.pane-body select), :global(.pane-body input), :global(.pane-body textarea),
+  :global(.pane-body pre), :global(.pane-body code), :global(.pane-body dt), :global(.pane-body dd),
+  :global(.pane-body label), :global(.pane-body summary), :global(.pane-body div) {
+    font-size: var(--ws-font) !important;
+  }
+  :global(.pane-body h1), :global(.pane-body h2), :global(.pane-body h3) { font-size: calc(var(--ws-font) * 1.2) !important; }
+  :global(.pane-body h4) { font-size: calc(var(--ws-font) * 1.05) !important; }
+  :global(.pane-body h5), :global(.pane-body h6) { font-size: var(--ws-font) !important; }
   .workspace { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--fg); }
   .topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.55rem 1rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
   .topbar .brand { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.1rem; }

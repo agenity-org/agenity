@@ -33,8 +33,10 @@ type MemberSpec struct {
 	Agent            string                  // claude-code | qwen-code | ...
 	Role             runtime.MembershipRole
 	UseDefaultPrompt bool
-	BriefOverride    string
+	Prompt           string                  // operator-authored per-member system prompt; empty → falls back to role-default
+	BriefOverride    string                  // legacy alias for Prompt (kept for backward compat); merged into Prompt at apply time
 	StatSheet        runtime.AgentStatSheet
+	Cwd              string                  // optional per-member working dir override (defaults to the team-wide apply cwd)
 }
 
 // Load parses a single TeamProfile YAML from path.
@@ -75,14 +77,20 @@ func Parse(text string) (*TeamProfile, error) {
 
 	var inMembers, inMemberStatSheet bool
 	var inDescription, inBriefOverride bool
+	var foldedKey string // "prompt" | "brief_override" — which member field gets the folded text
 	var descIndent int
 	var cur *MemberSpec
 	flushCur := func() {
 		if cur != nil {
+			// Backfill Prompt from BriefOverride for legacy templates.
+			if cur.Prompt == "" && cur.BriefOverride != "" {
+				cur.Prompt = cur.BriefOverride
+			}
 			p.Members = append(p.Members, *cur)
 			cur = nil
 		}
 		inMemberStatSheet = false
+		foldedKey = ""
 	}
 
 	for i, raw := range lines {
@@ -105,11 +113,20 @@ func Parse(text string) (*TeamProfile, error) {
 		}
 		if inBriefOverride {
 			if indent > descIndent || strings.TrimSpace(line) == "" {
-				cur.BriefOverride += strings.TrimLeft(raw, " ") + "\n"
+				if foldedKey == "prompt" {
+					cur.Prompt += strings.TrimLeft(raw, " ") + "\n"
+				} else {
+					cur.BriefOverride += strings.TrimLeft(raw, " ") + "\n"
+				}
 				continue
 			}
-			cur.BriefOverride = strings.TrimSpace(cur.BriefOverride)
+			if foldedKey == "prompt" {
+				cur.Prompt = strings.TrimSpace(cur.Prompt)
+			} else {
+				cur.BriefOverride = strings.TrimSpace(cur.BriefOverride)
+			}
 			inBriefOverride = false
+			foldedKey = ""
 			// fall through
 		}
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -149,7 +166,7 @@ func Parse(text string) (*TeamProfile, error) {
 				inMemberStatSheet = false
 				// parse first kv on the "- key: value" line
 				k, v := splitKV(strings.TrimPrefix(line, "- "))
-				setMemberKV(cur, k, v, &inBriefOverride, &descIndent, indent)
+				setMemberKV(cur, k, v, &inBriefOverride, &foldedKey, &descIndent, indent)
 				continue
 			}
 			if cur == nil {
@@ -162,7 +179,7 @@ func Parse(text string) (*TeamProfile, error) {
 				case "stat_sheet":
 					inMemberStatSheet = true
 				default:
-					setMemberKV(cur, k, v, &inBriefOverride, &descIndent, indent)
+					setMemberKV(cur, k, v, &inBriefOverride, &foldedKey, &descIndent, indent)
 				}
 				continue
 			}
@@ -194,7 +211,7 @@ func splitKV(line string) (string, string) {
 	return k, v
 }
 
-func setMemberKV(m *MemberSpec, k, v string, inBriefOverride *bool, descIndent *int, indent int) {
+func setMemberKV(m *MemberSpec, k, v string, inBriefOverride *bool, foldedKey *string, descIndent *int, indent int) {
 	switch k {
 	case "name":
 		m.Name = v
@@ -204,9 +221,20 @@ func setMemberKV(m *MemberSpec, k, v string, inBriefOverride *bool, descIndent *
 		m.Role = runtime.MembershipRole(v)
 	case "use_default_prompt":
 		m.UseDefaultPrompt = v == "true"
+	case "cwd":
+		m.Cwd = v
+	case "prompt":
+		if v == "|" {
+			*inBriefOverride = true
+			*foldedKey = "prompt"
+			*descIndent = indent
+		} else {
+			m.Prompt = v
+		}
 	case "brief_override":
 		if v == "|" {
 			*inBriefOverride = true
+			*foldedKey = "brief_override"
 			*descIndent = indent
 		} else {
 			m.BriefOverride = v

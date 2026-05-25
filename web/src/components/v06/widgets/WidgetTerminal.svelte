@@ -1,11 +1,21 @@
 <!--
-  WidgetTerminal — xterm.js viewer for the selected agent's PTY. WebSocket
-  attach to /api/v1/sessions/{name}/attach. Resize handler wires SIGWINCH
-  back through the WS via {type:"resize"} text frames.
+  WidgetTerminal — xterm.js viewer for an agent's PTY. Each pane carries
+  its own per-pane agent selection (so two terminal panes side-by-side
+  can show two different agents). Defaults to the workspace-wide
+  selectedAgent so single-terminal use still works as before.
+
+  Font tracks the workspace --ws-font CSS var: when operator hits A+/A-
+  in the top bar, the terminal re-applies fontSize, re-fits the addon,
+  and pushes a resize frame over the WebSocket so the underlying PTY
+  re-wraps (Claude / shell honor the SIGWINCH-equivalent).
 -->
 <script>
   import { onMount, onDestroy } from 'svelte';
-  let { selectedAgent, sessions } = $props();
+  let { selectedAgent, sessions, node } = $props();
+
+  // Per-pane override: if node.config.agent is set, that wins; otherwise
+  // fall back to the workspace-wide selectedAgent.
+  let myAgent = $derived(node?.config?.agent || selectedAgent || '');
 
   let term = null;
   let ws = null;
@@ -13,6 +23,30 @@
   let resizeObs = null;
   let termContainer;
   let attached = null;
+  let fontObs = null;
+
+  function currentWsFont() {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--ws-font').trim();
+      const n = parseFloat(v);
+      return n > 0 ? n : 13;
+    } catch { return 13; }
+  }
+
+  function applyFontAndRefit() {
+    if (!term || !fitAddon) return;
+    const f = currentWsFont();
+    if (term.options.fontSize !== f) {
+      term.options.fontSize = f;
+    }
+    try { fitAddon.fit(); } catch {}
+    sendResize();
+  }
+
+  function sendResize() {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
+    try { ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols })); } catch {}
+  }
 
   async function attachTo(name) {
     if (attached === name) return;
@@ -27,7 +61,7 @@
     const sel = (typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light')
       ? { background: '#fafafa', foreground: '#1a1a1a', cursor: '#1a1a1a', selectionBackground: '#cbd5e1' }
       : { background: '#0a0a0a', foreground: '#f5f5f5', cursor: '#f5f5f5', selectionBackground: '#2a3540' };
-    term = new Terminal({ convertEol: true, fontFamily: 'ui-monospace, monospace', fontSize: 14, theme: sel, cursorBlink: true, cols: 120, rows: 32 });
+    term = new Terminal({ convertEol: true, fontFamily: 'ui-monospace, monospace', fontSize: currentWsFont(), theme: sel, cursorBlink: true, cols: 120, rows: 32 });
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(termContainer);
@@ -47,10 +81,6 @@
       if (ev.data instanceof ArrayBuffer) term.write(new Uint8Array(ev.data));
       else term.write(ev.data);
     };
-    const sendResize = () => {
-      if (!ws || ws.readyState !== WebSocket.OPEN || !term) return;
-      try { ws.send(JSON.stringify({ type: 'resize', rows: term.rows, cols: term.cols })); } catch {}
-    };
     term.onResize(sendResize);
     ws.addEventListener('open', () => setTimeout(sendResize, 200));
     term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
@@ -69,25 +99,45 @@
     });
   }
 
-  $effect(() => { attachTo(selectedAgent); });
+  $effect(() => { attachTo(myAgent); });
+
+  onMount(() => {
+    // Watch for --ws-font changes on documentElement style attribute.
+    fontObs = new MutationObserver(() => applyFontAndRefit());
+    fontObs.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  });
 
   onDestroy(() => {
     if (ws) ws.close();
     if (resizeObs) resizeObs.disconnect();
     if (term) term.dispose();
+    if (fontObs) fontObs.disconnect();
   });
 
-  let info = $derived(sessions?.find(s => s.name === selectedAgent));
+  let info = $derived(sessions?.find(s => s.name === myAgent));
+
+  function pickAgent(ev) {
+    const v = ev.target.value;
+    if (!node) return;
+    if (!node.config) node.config = {};
+    node.config.agent = v;
+    // Trigger re-attach
+    attached = null;
+  }
 </script>
 
 <div class="term-pane">
   <div class="term-title">
-    {#if selectedAgent}
-      <span class="dot" class:shepherd={info?.role === 'shepherd'}>{info?.role === 'shepherd' ? '✻' : '●'}</span>
-      <span class="name">{selectedAgent}</span>
-      <span class="sub">— live attach</span>
+    <select class="agent-pick" value={myAgent} on:change={pickAgent} title="pick which agent this pane attaches to">
+      <option value="">(no agent)</option>
+      {#each (sessions || []) as s}
+        <option value={s.name}>{s.role === 'shepherd' ? '✻ ' : '● '}{s.name}</option>
+      {/each}
+    </select>
+    {#if myAgent}
+      <span class="sub">— live attach · {info?.role ?? '—'}</span>
     {:else}
-      <span class="sub">Pick an agent ← (or use Spawn to create one)</span>
+      <span class="sub">Pick an agent ↑ (or use Spawn to create one)</span>
     {/if}
   </div>
   <div class="term-body" bind:this={termContainer}></div>
@@ -95,11 +145,9 @@
 
 <style>
   .term-pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
-  .term-title { padding: 0.3rem 0.7rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); font-family: ui-monospace, monospace; font-size: 0.82rem; }
-  .term-title .dot { color: var(--accent-2); margin-right: 0.3rem; }
-  .term-title .dot.shepherd { color: var(--accent); }
-  .term-title .name { font-weight: 600; }
-  .term-title .sub { color: var(--fg-muted); margin-left: 0.4rem; font-size: 0.78rem; }
+  .term-title { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.7rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); font-family: ui-monospace, monospace; font-size: 0.82rem; }
+  .term-title .sub { color: var(--fg-muted); font-size: 0.78rem; }
+  .agent-pick { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0.15rem 0.4rem; font-size: 0.78rem; cursor: pointer; max-width: 220px; }
   .term-body { flex: 1; padding: 0.3rem 0.4rem; min-height: 0; overflow: hidden; }
   .term-body :global(.xterm) { height: 100%; }
   .term-body :global(.xterm-viewport) { height: 100% !important; }

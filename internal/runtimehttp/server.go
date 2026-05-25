@@ -383,6 +383,50 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request, sess *sess
 	_ = name // reserved for future audit log
 }
 
+// latestClaudeSessionUUID returns the UUID of the most-recently-modified
+// Claude session whose canonical cwd matches `cwd`, or "" if none. Used
+// by templateApply's "resume_strategy=latest-in-cwd" path so a Council /
+// Pair template can auto-resume each member's prior session.
+func latestClaudeSessionUUID(cwd string) string {
+	home, _ := os.UserHomeDir()
+	root := filepath.Join(home, ".claude", "projects")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	type cand struct {
+		uuid string
+		mod  time.Time
+	}
+	var best cand
+	for _, projDir := range entries {
+		if !projDir.IsDir() {
+			continue
+		}
+		if decodeClaudeProjectDir(projDir.Name()) != cwd {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, projDir.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+				continue
+			}
+			info, err := f.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(best.mod) {
+				best.mod = info.ModTime()
+				best.uuid = strings.TrimSuffix(f.Name(), ".jsonl")
+			}
+		}
+	}
+	return best.uuid
+}
+
 // claudeSessions enumerates Claude Code session files under
 // ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl so the web Spawn modal
 // can offer a "resume which session?" picker for a chosen folder.
@@ -927,7 +971,12 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	templateName := parts[0]
-	var req struct{ Team, Cwd, Topology string }
+	var req struct {
+		Team           string
+		Cwd            string
+		Topology       string
+		ResumeStrategy string `json:"resume_strategy"` // "" | "fresh" | "latest-in-cwd"
+	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	// Find the template
 	dirs := []string{
@@ -975,12 +1024,41 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		if role != runtime.RoleShepherd {
 			role = runtime.RoleWorker
 		}
+		// Effective per-member cwd: member-override > apply-time cwd.
+		memberCwd := m.Cwd
+		if memberCwd == "" {
+			memberCwd = cwd
+		}
+		// Effective per-member system prompt:
+		//   member.Prompt > member.BriefOverride > role-default (prompts.Worker / .Shepherd)
+		sysPrompt := m.Prompt
+		if sysPrompt == "" {
+			sysPrompt = m.BriefOverride
+		}
+		if sysPrompt == "" {
+			if role == runtime.RoleShepherd {
+				sysPrompt = prompts.Shepherd
+			} else {
+				sysPrompt = prompts.Worker
+			}
+		}
+		// Build agent args — optionally resume from the most recent
+		// Claude session in memberCwd when operator picked that strategy.
+		var agentArgs []string
+		if req.ResumeStrategy == "latest-in-cwd" && m.Agent == "claude-code" {
+			if uuid := latestClaudeSessionUUID(memberCwd); uuid != "" {
+				agentArgs = append(agentArgs, "--resume", uuid)
+			}
+		}
 		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{
-			Name:      m.Name,
-			AgentSlug: m.Agent,
-			Team:      team,
-			Role:      role,
-			Cwd:       cwd,
+			Name:         m.Name,
+			AgentSlug:    m.Agent,
+			Team:         team,
+			Role:         role,
+			Cwd:          memberCwd,
+			SystemPrompt: sysPrompt,
+			StatSheet:    m.StatSheet,
+			AgentArgs:    agentArgs,
 		})
 		res := spawned{Name: m.Name, Role: string(m.Role)}
 		if err != nil {

@@ -107,7 +107,7 @@
     </header>
     <div class="pane-body">
       {#if node.widget === 'terminal'}
-        <WidgetTerminal {selectedAgent} {sessions} />
+        <WidgetTerminal {selectedAgent} {sessions} {node} />
       {:else if node.widget === 'session-list'}
         <WidgetSessionList {sessions} {teams} {memberships} {selectedAgent} {selectAgent} />
       {:else if node.widget === 'session-board'}

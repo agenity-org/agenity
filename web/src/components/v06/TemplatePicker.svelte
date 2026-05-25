@@ -7,6 +7,7 @@
   let team = $state('');
   let topology = $state('');               // hub | mesh | custom — '' means use template default
   let cwd = $state('/home/openova/repos/chepherd');
+  let resumeStrategy = $state('fresh');    // 'fresh' | 'latest-in-cwd'
   let busy = $state(false);
   let error = $state('');
   let forkName = $state('');
@@ -27,7 +28,7 @@
     try {
       const r = await fetch(`${API}/templates/${selected}/apply`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team: team || selected, cwd, topology }),
+        body: JSON.stringify({ team: team || selected, cwd, topology, resume_strategy: resumeStrategy }),
       });
       if (!r.ok) { const e = await r.json().catch(()=>({})); error = e.error || `HTTP ${r.status}`; }
       else { onApplied?.(); onClose?.(); }
@@ -74,6 +75,10 @@
         </select></label>
       </div>
       <label>Working directory <input bind:value={cwd} /></label>
+      <label>Resume strategy <select bind:value={resumeStrategy}>
+        <option value="fresh">Fresh sessions (default)</option>
+        <option value="latest-in-cwd">Resume each member's latest Claude session in their cwd (when available)</option>
+      </select></label>
 
       <details class="fork">
         <summary>🍴 Fork this template (copy it under your own name → edit YAML on disk → re-apply)</summary>
