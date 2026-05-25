@@ -24,12 +24,43 @@ func (r *Runtime) BootstrapShepherd(sess *session.Session, agentName string) {
 
 func (r *Runtime) shepherdLoop(sess *session.Session, name string) {
 	// Wait for the Claude TUI to render the trust prompt + welcome.
-	time.Sleep(6 * time.Second)
+	// 8s gives the splash animation time to settle before we Enter.
+	time.Sleep(8 * time.Second)
 	// Accept trust ("Yes, I trust this folder" — Enter).
 	_, _ = sess.Write([]byte("\r"))
-	time.Sleep(5 * time.Second)
+	// 15s post-trust gives Claude time to: read settings, discover MCP
+	// via --mcp-config, render the input box, and become ready to accept
+	// typed prompts. 5s (the previous value) was too short — kickoff text
+	// arrived mid-splash + got eaten by the renderer (issue #88).
+	time.Sleep(15 * time.Second)
 	const kickoff = "Begin the tick loop from your system brief. For every non-paused worker in your team(s), call chepherd.list then chepherd.read_pane(name, 60), then chepherd.set_scorecard(name, G, V, F, E, D, note) with the 5-axis evaluation AND chepherd.record_verdict(name, verdict, message). Use baseline scores of 5/5/5/5/5 with note 'first observation; baseline scores' for any worker you haven't observed before. Each tick poke means: re-list, re-read, re-score, re-verdict every worker."
 	r.pokeAgent(sess, kickoff)
+
+	// Sentinel: if shepherd doesn't call any MCP tool within 90s, the
+	// kickoff was probably eaten by the splash. Re-send it once.
+	go func() {
+		time.Sleep(90 * time.Second)
+		live, _ := r.Get(name)
+		if live == nil || live != sess {
+			return
+		}
+		// Check recent events for this shepherd as actor
+		events := r.Events(50)
+		seen := false
+		for _, e := range events {
+			if e.Actor == name || (e.Actor == "shepherd" && e.Meta != nil && e.Meta["reviewer"] == name) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			r.RecordEvent(Event{
+				Kind: "shepherd_kickoff_retry", Actor: "runtime",
+				Body: fmt.Sprintf("shepherd %q didn't tool-call in 90s; resending kickoff", name),
+			})
+			r.pokeAgent(sess, kickoff)
+		}
+	}()
 
 	// Event-driven: every new spawn (other than this shepherd) triggers an
 	// immediate sweep so the operator sees the shepherd react in real time.
