@@ -14,8 +14,22 @@
   let { selectedAgent, sessions, node } = $props();
 
   // Per-pane override: if node.config.agent is set, that wins; otherwise
-  // fall back to the workspace-wide selectedAgent.
-  let myAgent = $derived(node?.config?.agent || selectedAgent || '');
+  // fall back to the workspace-wide selectedAgent. If neither is set,
+  // auto-pick the first non-shepherd live agent so the operator never
+  // sees an empty "(no agent)" state at first open.
+  let myAgent = $derived.by(() => {
+    if (node?.config?.agent) return node.config.agent;
+    if (selectedAgent) return selectedAgent;
+    const candidate = (sessions || []).find(s => !s.exited && s.role !== 'shepherd')
+                   || (sessions || []).find(s => !s.exited)
+                   || null;
+    if (candidate && node) {
+      if (!node.config) node.config = {};
+      node.config.agent = candidate.name;
+      return candidate.name;
+    }
+    return '';
+  });
 
   let term = null;
   let ws = null;
@@ -126,28 +140,17 @@
   }
 </script>
 
+<!--
+  No inner header — Pane.svelte's pane-header row now hosts the agent
+  picker + Live/age/Ctx chips alongside the widget-pick + split/close.
+  This widget renders only the xterm canvas, full height.
+-->
 <div class="term-pane">
-  <div class="term-title">
-    <select class="agent-pick" value={myAgent} on:change={pickAgent} title="pick which agent this pane attaches to">
-      <option value="">(no agent)</option>
-      {#each (sessions || []) as s}
-        <option value={s.name}>{s.role === 'shepherd' ? '✻ ' : '● '}{s.name}</option>
-      {/each}
-    </select>
-    {#if myAgent}
-      <span class="sub">— live attach · {info?.role ?? '—'}</span>
-    {:else}
-      <span class="sub">Pick an agent ↑ (or use Spawn to create one)</span>
-    {/if}
-  </div>
   <div class="term-body" bind:this={termContainer}></div>
 </div>
 
 <style>
   .term-pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
-  .term-title { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.7rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); font-family: ui-monospace, monospace; font-size: 0.82rem; }
-  .term-title .sub { color: var(--fg-muted); font-size: 0.78rem; }
-  .agent-pick { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0.15rem 0.4rem; font-size: 0.78rem; cursor: pointer; max-width: 220px; }
   .term-body { flex: 1; padding: 0.3rem 0.4rem; min-height: 0; overflow: hidden; }
   .term-body :global(.xterm) { height: 100%; }
   .term-body :global(.xterm-viewport) { height: 100% !important; }

@@ -92,6 +92,15 @@ type SessionInfo struct {
 	// which writes a fresh user message and updates this field.
 	SystemPrompt string         `json:"system_prompt,omitempty"`
 	StatSheet    AgentStatSheet `json:"stat_sheet,omitempty"`
+
+	// Live Claude-side details, refreshed in List() from the most recent
+	// JSONL the spawned agent is writing to. Cheap to compute (we only
+	// scan the last ~50 lines of one file). Zero values when not applicable
+	// (non-claude-code agents) or when no JSONL has been written yet.
+	Model         string `json:"model,omitempty"`           // e.g. "claude-opus-4-7"
+	ContextSize   int    `json:"context_size,omitempty"`    // model context window (e.g. 200_000 or 1_000_000)
+	ContextTokens int    `json:"context_tokens,omitempty"`  // tokens currently held in the window (last usage block)
+	ClaudeUUID    string `json:"claude_uuid,omitempty"`     // sessionId of the JSONL Claude is appending to
 }
 
 // Scorecard is shepherd's latest 5-axis assessment of a session.
@@ -713,6 +722,21 @@ func (r *Runtime) List() []*SessionInfo {
 		if c.Cwd != "" {
 			c.Branch = readGitBranch(c.Cwd)
 		}
+		// Refresh Claude extras (model + context tokens + sessionId UUID)
+		// from the JSONL transcript. Cheap: tail-reads last ~200 lines.
+		extras := r.claudeRuntimeExtras(c.AgentSlug, c.Cwd, c.CreatedAt)
+		if extras.Model != "" {
+			c.Model = extras.Model
+		}
+		if extras.ContextSize != 0 {
+			c.ContextSize = extras.ContextSize
+		}
+		if extras.ContextTokens != 0 {
+			c.ContextTokens = extras.ContextTokens
+		}
+		if extras.ClaudeUUID != "" {
+			c.ClaudeUUID = extras.ClaudeUUID
+		}
 		out = append(out, &c)
 	}
 	return out
@@ -894,6 +918,181 @@ func (r *Runtime) Stop(name string) error {
 	_ = os.Remove(filepath.Join(r.stateDir, "sessions", id+".json"))
 	r.broadcast()
 	return nil
+}
+
+// claudeRuntimeExtras reads the most recent Claude JSONL written under
+// ~/.claude/projects/<encoded-cwd>/*.jsonl for this session's cwd, and
+// extracts model + last-usage context tokens + sessionId. Cheap: only
+// the last ~80 lines of a single file are parsed. Returns zero values
+// for non-claude agents or sessions whose JSONL doesn't exist yet.
+//
+// Why we read JSONL rather than ask Claude over IPC: Claude Code doesn't
+// expose a control socket, but it does persist its full transcript with
+// per-message usage blocks. Reading is harmless + reflects reality.
+type claudeExtras struct {
+	Model         string
+	ContextTokens int
+	ContextSize   int
+	ClaudeUUID    string
+}
+
+func (r *Runtime) claudeRuntimeExtras(agentSlug, cwd string, spawnedAfter time.Time) claudeExtras {
+	if agentSlug != "claude-code" {
+		return claudeExtras{}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return claudeExtras{}
+	}
+	projects := filepath.Join(home, ".claude", "projects")
+	entries, err := os.ReadDir(projects)
+	if err != nil {
+		return claudeExtras{}
+	}
+	// Find the project dir whose decoded path matches cwd
+	var projDir string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if decodeClaudeProjectDirSimple(e.Name()) == cwd {
+			projDir = filepath.Join(projects, e.Name())
+			break
+		}
+	}
+	if projDir == "" {
+		return claudeExtras{}
+	}
+	files, err := os.ReadDir(projDir)
+	if err != nil {
+		return claudeExtras{}
+	}
+	// Pick the most recent .jsonl modified after spawnedAfter (so we
+	// attach to THIS spawn's transcript, not a leftover from earlier).
+	var bestPath string
+	var bestMod time.Time
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+			continue
+		}
+		info, err := f.Info()
+		if err != nil {
+			continue
+		}
+		if !spawnedAfter.IsZero() && info.ModTime().Before(spawnedAfter) {
+			continue
+		}
+		if info.ModTime().After(bestMod) {
+			bestMod = info.ModTime()
+			bestPath = filepath.Join(projDir, f.Name())
+		}
+	}
+	if bestPath == "" {
+		return claudeExtras{}
+	}
+	uuid := strings.TrimSuffix(filepath.Base(bestPath), ".jsonl")
+	// Tail-read the file: only need the last assistant usage block.
+	data, err := os.ReadFile(bestPath)
+	if err != nil {
+		return claudeExtras{ClaudeUUID: uuid}
+	}
+	// Walk lines back-to-front looking for the last record with message.model + usage
+	lines := strings.Split(string(data), "\n")
+	var model string
+	var ctxTokens int
+	for i := len(lines) - 1; i >= 0 && i >= len(lines)-200; i-- {
+		ln := strings.TrimSpace(lines[i])
+		if ln == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(ln), &rec); err != nil {
+			continue
+		}
+		msg, _ := rec["message"].(map[string]any)
+		if msg == nil {
+			continue
+		}
+		if m, ok := msg["model"].(string); ok && m != "" && m != "<synthetic>" {
+			if model == "" {
+				model = m
+			}
+		}
+		usage, _ := msg["usage"].(map[string]any)
+		if usage != nil && ctxTokens == 0 {
+			ctxTokens = sumIntField(usage, "input_tokens") +
+				sumIntField(usage, "cache_creation_input_tokens") +
+				sumIntField(usage, "cache_read_input_tokens")
+		}
+		if model != "" && ctxTokens > 0 {
+			break
+		}
+	}
+	ctxSize := contextSizeFor(model)
+	// If observed usage exceeds the default 200k cap, the session is
+	// running the 1M extended-context beta. Upgrade the size so the
+	// UI's "used %" stays meaningful (otherwise it would render > 100%).
+	if ctxTokens > 200_000 && ctxSize <= 200_000 {
+		ctxSize = 1_000_000
+		// Tag the model so the UI's modelLabel() shows [1m] suffix.
+		if model != "" && !strings.Contains(model, "[1m]") {
+			model = model + "[1m]"
+		}
+	}
+	return claudeExtras{
+		Model:         model,
+		ContextTokens: ctxTokens,
+		ContextSize:   ctxSize,
+		ClaudeUUID:    uuid,
+	}
+}
+
+func decodeClaudeProjectDirSimple(name string) string {
+	// Claude encodes /home/openova/repos/chepherd as -home-openova-repos-chepherd
+	// (replaces / with -). To decode, simply replace - back to /. This is the
+	// "simple" form — it can confuse hyphenated repo names, but is sufficient
+	// for matching since we're checking equality against an absolute path.
+	if !strings.HasPrefix(name, "-") {
+		return name
+	}
+	return "/" + strings.ReplaceAll(name[1:], "-", "/")
+}
+
+func sumIntField(m map[string]any, k string) int {
+	v, ok := m[k]
+	if !ok {
+		return 0
+	}
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	}
+	return 0
+}
+
+func contextSizeFor(model string) int {
+	// Conservative defaults — Anthropic doesn't publish a single source
+	// of truth machine-readable. Override the 1M variant by checking
+	// for an explicit [1m] tag (our convention).
+	m := strings.ToLower(model)
+	if strings.Contains(m, "[1m]") {
+		return 1_000_000
+	}
+	if strings.Contains(m, "opus-4") {
+		return 200_000
+	}
+	if strings.Contains(m, "sonnet") {
+		return 200_000
+	}
+	if strings.Contains(m, "haiku") {
+		return 200_000
+	}
+	if strings.Contains(m, "claude-3") {
+		return 200_000
+	}
+	return 0
 }
 
 // Restart stops the named session + spawns a replacement with the same

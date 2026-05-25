@@ -79,6 +79,14 @@
       if (selectedAgent && !sessions.find(s => s.name === selectedAgent)) {
         selectedAgent = null;
       }
+      // Auto-pick first non-shepherd worker when nothing is selected — so
+      // AgentDetails / terminal / prompt / skills widgets render real
+      // content without requiring an extra click after opening the dashboard.
+      if (!selectedAgent && sessions.length) {
+        const w = sessions.find(s => !s.exited && s.role !== 'shepherd')
+              || sessions.find(s => !s.exited);
+        if (w) selectedAgent = w.name;
+      }
     } catch {}
   }
 
@@ -202,12 +210,13 @@
 
   // --- workspace font-size (granular, applies to ALL widgets uniformly) ---
   // Uses a CSS variable --ws-font so every widget inherits.
-  let fontSize = $state(13);
+  let fontSize = $state(14);
   function applyFontSize(n) {
     fontSize = Math.max(9, Math.min(22, n));
     document.documentElement.style.setProperty('--ws-font', fontSize + 'px');
     try { localStorage.setItem('chepherd-font', String(fontSize)); } catch {}
   }
+  // Default font on first load: 14 (overridable via localStorage from prior session)
 
   // --- save-as named layout ---
   let showSaveAs = $state(false);
@@ -247,7 +256,7 @@
   // --- mount ---
   onMount(() => {
     try { theme = localStorage.getItem('chepherd-theme') || 'dark'; document.documentElement.dataset.theme = theme; } catch {}
-    try { const f = +(localStorage.getItem('chepherd-font') || 13); applyFontSize(f); } catch { applyFontSize(13); }
+    try { const f = +(localStorage.getItem('chepherd-font') || 14); applyFontSize(f); } catch { applyFontSize(14); }
     refresh();
     listSavedLayouts();
     const intv = setInterval(refresh, 2500);

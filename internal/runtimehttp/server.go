@@ -86,8 +86,67 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/templates", s.templatesHandler)
 	mux.HandleFunc("/api/v1/templates/", s.templateApply)
 	mux.HandleFunc("/api/v1/prompts/", s.promptsHandler) // /api/v1/prompts/{role}
+	mux.HandleFunc("/api/v1/runtime/claude-status", s.claudeStatusHandler)
 
 	return logMiddleware(mux)
+}
+
+// claudeStatusHandler returns the operator's Claude login info — read from
+// ~/.claude/.credentials.json — so the AgentDetails widget can surface
+// "Login method: Claude Max account" etc. The OAuth access token + refresh
+// token are NEVER returned; only the subscription type + rate-limit tier
+// + token-expiry timestamp.
+func (s *Server) claudeStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"logged_in": false})
+		return
+	}
+	var creds struct {
+		ClaudeAiOauth struct {
+			ExpiresAt        int64    `json:"expiresAt"`
+			Scopes           []string `json:"scopes"`
+			SubscriptionType string   `json:"subscriptionType"`
+			RateLimitTier    string   `json:"rateLimitTier"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal(b, &creds); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"logged_in": false, "error": err.Error()})
+		return
+	}
+	loginMethod := "Claude account"
+	switch creds.ClaudeAiOauth.SubscriptionType {
+	case "max":
+		loginMethod = "Claude Max account"
+	case "pro":
+		loginMethod = "Claude Pro account"
+	case "team":
+		loginMethod = "Claude Team account"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"logged_in":     true,
+		"login_method":  loginMethod,
+		"subscription":  creds.ClaudeAiOauth.SubscriptionType,
+		"rate_tier":     creds.ClaudeAiOauth.RateLimitTier,
+		"expires_at":    creds.ClaudeAiOauth.ExpiresAt,
+		"scopes":        creds.ClaudeAiOauth.Scopes,
+	})
+}
+
+// MemberOverrideReq lets the operator specialize a single template member
+// at apply time — pick a specific resume UUID, swap cwd, or replace the
+// per-role prompt without forking the YAML.
+type MemberOverrideReq struct {
+	ResumeUUID string `json:"resume_uuid,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+	Fresh      bool   `json:"fresh,omitempty"` // explicit opt-out from resume_strategy
 }
 
 // promptsHandler returns the default system prompt for a given role so
@@ -854,6 +913,14 @@ func (s *Server) workspaceByName(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func truncatePrompt(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 160 {
+		return s[:160] + "…"
+	}
+	return s
+}
+
 // templatesHandler — list available TeamProfile templates from the
 // catalog dir (./catalog at the repo root in dev; ~/.local/state/chepherd-v06/catalog
 // in production installs).
@@ -872,11 +939,22 @@ func (s *Server) templatesHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[p.Name] = true
+			memberSpecs := make([]map[string]any, 0, len(p.Members))
+			for _, m := range p.Members {
+				memberSpecs = append(memberSpecs, map[string]any{
+					"name":          m.Name,
+					"agent":         m.Agent,
+					"role":          string(m.Role),
+					"prompt_preview": truncatePrompt(m.Prompt + m.BriefOverride),
+					"cwd":           m.Cwd,
+				})
+			}
 			out = append(out, map[string]any{
-				"name":        p.Name,
-				"description": p.Description,
-				"topology":    p.Topology,
-				"members":     len(p.Members),
+				"name":         p.Name,
+				"description":  p.Description,
+				"topology":     p.Topology,
+				"members":      len(p.Members),
+				"member_specs": memberSpecs,
 			})
 		}
 	}
@@ -972,10 +1050,11 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	}
 	templateName := parts[0]
 	var req struct {
-		Team           string
-		Cwd            string
-		Topology       string
-		ResumeStrategy string `json:"resume_strategy"` // "" | "fresh" | "latest-in-cwd"
+		Team            string
+		Cwd             string
+		Topology        string
+		ResumeStrategy  string                       `json:"resume_strategy"` // "" | "fresh" | "latest-in-cwd"
+		MemberOverrides map[string]MemberOverrideReq `json:"member_overrides"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	// Find the template
@@ -1024,14 +1103,21 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		if role != runtime.RoleShepherd {
 			role = runtime.RoleWorker
 		}
-		// Effective per-member cwd: member-override > apply-time cwd.
-		memberCwd := m.Cwd
+		ov := req.MemberOverrides[m.Name]
+		// Effective per-member cwd: override > YAML m.Cwd > apply-time cwd.
+		memberCwd := ov.Cwd
+		if memberCwd == "" {
+			memberCwd = m.Cwd
+		}
 		if memberCwd == "" {
 			memberCwd = cwd
 		}
 		// Effective per-member system prompt:
-		//   member.Prompt > member.BriefOverride > role-default (prompts.Worker / .Shepherd)
-		sysPrompt := m.Prompt
+		//   override.Prompt > member.Prompt > member.BriefOverride > role-default
+		sysPrompt := ov.Prompt
+		if sysPrompt == "" {
+			sysPrompt = m.Prompt
+		}
 		if sysPrompt == "" {
 			sysPrompt = m.BriefOverride
 		}
@@ -1042,12 +1128,18 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 				sysPrompt = prompts.Worker
 			}
 		}
-		// Build agent args — optionally resume from the most recent
-		// Claude session in memberCwd when operator picked that strategy.
+		// Resume resolution chain:
+		//   1. override.ResumeUUID (operator picked explicitly per-member)
+		//   2. resume_strategy="latest-in-cwd" → newest .jsonl in memberCwd
+		//   3. fresh (override.Fresh=true also forces fresh even if 2 would resolve)
 		var agentArgs []string
-		if req.ResumeStrategy == "latest-in-cwd" && m.Agent == "claude-code" {
-			if uuid := latestClaudeSessionUUID(memberCwd); uuid != "" {
-				agentArgs = append(agentArgs, "--resume", uuid)
+		if m.Agent == "claude-code" && !ov.Fresh {
+			resumeUUID := ov.ResumeUUID
+			if resumeUUID == "" && req.ResumeStrategy == "latest-in-cwd" {
+				resumeUUID = latestClaudeSessionUUID(memberCwd)
+			}
+			if resumeUUID != "" {
+				agentArgs = append(agentArgs, "--resume", resumeUUID)
 			}
 		}
 		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{

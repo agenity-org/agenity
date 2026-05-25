@@ -16,6 +16,7 @@
   import WidgetSpider from './widgets/WidgetSpider.svelte';
   import WidgetAgentPrompt from './widgets/WidgetAgentPrompt.svelte';
   import WidgetAgentSkills from './widgets/WidgetAgentSkills.svelte';
+  import WidgetAgentDetails from './widgets/WidgetAgentDetails.svelte';
   import WidgetCanon from './widgets/WidgetCanon.svelte';
   import WidgetMCPLog from './widgets/WidgetMCPLog.svelte';
 
@@ -56,9 +57,7 @@
     'terminal': '▦ terminal',
     'session-list': '☰ sessions',
     'session-board': '▤ board',
-    'identity-card': 'ⓘ identity',
-    'location-card': '📍 location',
-    'process-card': '⚙ process',
+    'agent-details': 'ⓘ details',
     'shepherd-assessment-card': '✻ scorecard',
     'inbox': '✉ inbox',
     'events': '⏱ events',
@@ -66,7 +65,38 @@
     'canon-viewer': '📜 canon',
     'agent-prompt': '✏ prompt',
     'agent-skills': '🎮 skills',
+    // Legacy single-purpose cards kept for back-compat (saved layouts).
+    'identity-card': 'ⓘ identity (legacy)',
+    'location-card': '📍 location (legacy)',
+    'process-card': '⚙ process (legacy)',
   };
+
+  // Per-pane derived agent for the terminal widget header chips.
+  let paneAgent = $derived(() => {
+    if (node?.kind !== 'pane') return null;
+    if (node.widget !== 'terminal') return null;
+    const want = node.config?.agent || selectedAgent;
+    return (sessions || []).find(s => s.name === want) || null;
+  });
+
+  function relAge(at) {
+    if (!at) return '—';
+    const s = Math.floor((Date.now() - new Date(at).getTime()) / 1000);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s/60)}m`;
+    if (s < 86400) return `${Math.floor(s/3600)}h`;
+    return `${Math.floor(s/86400)}d`;
+  }
+  function ctxPct(a) {
+    if (!a?.context_size || !a?.context_tokens) return null;
+    return Math.min(100, (a.context_tokens / a.context_size) * 100);
+  }
+
+  function pickPaneAgent(ev) {
+    if (!node) return;
+    if (!node.config) node.config = {};
+    node.config.agent = ev.target.value;
+  }
 
   const WIDGETS = Object.keys(WIDGET_LABELS);
 </script>
@@ -100,6 +130,26 @@
           <option value={w}>{WIDGET_LABELS[w]}</option>
         {/each}
       </select>
+
+      {#if node.widget === 'terminal'}
+        <!-- Terminal-specific header content: agent picker + status chips,
+             in the same single header line per operator request. No
+             secondary header inside WidgetTerminal. -->
+        <select class="agent-pick" value={node.config?.agent || selectedAgent || ''} on:change={pickPaneAgent} title="agent attached to this terminal">
+          <option value="">(pick agent)</option>
+          {#each (sessions || []) as s}
+            <option value={s.name}>{s.role === 'shepherd' ? '✻ ' : '● '}{s.name}</option>
+          {/each}
+        </select>
+        {@const a = paneAgent()}
+        {#if a}
+          <span class="chip ok" title="agent is live + reading from its PTY">● Live</span>
+          <span class="chip muted" title="time since spawn">{relAge(a.created_at)} ago</span>
+          {@const p = ctxPct(a)}
+          {#if p != null}<span class="chip ctx" title="{a.context_tokens?.toLocaleString()} / {a.context_size?.toLocaleString()} context tokens">Ctx: {p.toFixed(0)}%</span>{/if}
+        {/if}
+      {/if}
+
       <div class="spacer"></div>
       <button title="split horizontally (add right)" on:click={() => splitPane(node.id, 'h')}>⬌</button>
       <button title="split vertically (add below)" on:click={() => splitPane(node.id, 'v')}>⬍</button>
@@ -112,6 +162,8 @@
         <WidgetSessionList {sessions} {teams} {memberships} {selectedAgent} {selectAgent} />
       {:else if node.widget === 'session-board'}
         <WidgetSessionBoard {sessions} {selectedAgent} {selectAgent} />
+      {:else if node.widget === 'agent-details'}
+        <WidgetAgentDetails agent={(sessions || []).find(s => s.name === selectedAgent) || null} />
       {:else if node.widget === 'identity-card'}
         <WidgetCard kind="identity" {selectedAgent} {sessions} {memberships} />
       {:else if node.widget === 'location-card'}
@@ -152,6 +204,11 @@
   .pane-header button { background: transparent; color: var(--fg-muted); border: none; padding: 0 0.3rem; cursor: pointer; font-size: 0.85rem; }
   .pane-header button:hover { color: var(--accent); }
   .widget-pick { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 0.15rem 0.3rem; font-size: 0.78rem; cursor: pointer; }
+  .agent-pick { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0.15rem 0.4rem; font-size: 0.78rem; cursor: pointer; max-width: 180px; }
+  .chip { display: inline-flex; align-items: center; padding: 0.05rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; line-height: 1.4; }
+  .chip.ok { background: rgba(80, 200, 120, 0.15); color: #5cd57f; }
+  .chip.muted { background: rgba(150, 150, 150, 0.12); color: var(--fg-muted); }
+  .chip.ctx { background: rgba(135, 206, 235, 0.15); color: var(--accent-2); }
   .pane-body { flex: 1; overflow: hidden; min-height: 0; }
   .empty { color: var(--fg-faint); padding: 1rem; text-align: center; font-size: 0.85rem; }
 </style>
