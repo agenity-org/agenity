@@ -33,7 +33,7 @@ func (r *Runtime) shepherdLoop(sess *session.Session, name string) {
 	// typed prompts. 5s (the previous value) was too short — kickoff text
 	// arrived mid-splash + got eaten by the renderer (issue #88).
 	time.Sleep(15 * time.Second)
-	const kickoff = "Begin the tick loop from your system brief. For every non-paused worker in your team(s), call chepherd.list then chepherd.read_pane(name, 60), then chepherd.set_scorecard(name, G, V, F, E, D, note) with the 5-axis evaluation AND chepherd.record_verdict(name, verdict, message). Use baseline scores of 5/5/5/5/5 with note 'first observation; baseline scores' for any worker you haven't observed before. Each tick poke means: re-list, re-read, re-score, re-verdict every worker."
+	kickoff := fmt.Sprintf("You are the shepherd named %q. Your FIRST action: call chepherd.list_memberships(agent=%q) to find which team(s) you watch. Then for every worker in those teams (use chepherd.list_memberships(team=<your-team>) per team to enumerate workers), call chepherd.read_pane(name, 60), then chepherd.set_scorecard(name, G, V, F, E, D, note) with 5/5/5/5/5 baseline + note 'first observation; baseline scores', AND chepherd.record_verdict(name, 'silent', 'baseline tick'). Each subsequent tick poke means: re-list-memberships (in case teams changed), re-read, re-score, re-verdict every worker.", name, name)
 	r.pokeAgent(sess, kickoff)
 
 	// Sentinel: if shepherd doesn't call any MCP tool within 90s, the
@@ -96,7 +96,7 @@ func (r *Runtime) shepherdLoop(sess *session.Session, name string) {
 			r.pokeAgent(sess, "FINAL TICK before refresh: write a 5-line summary of the current state of your watch via chepherd.record_event(kind='shepherd_handoff', body='<summary>'). I'll spawn a replacement in 10s with this summary as its boot context.")
 			return // upstream replaces the shepherd
 		}
-		r.pokeAgent(sess, "Tick: chepherd.list + read_pane each non-paused worker. Then chepherd.set_scorecard + chepherd.record_verdict for each — update scores based on what changed since last tick. Stay quiet unless alert_human is needed.")
+		r.pokeAgent(sess, fmt.Sprintf("Tick (shepherd %q): chepherd.list_memberships(agent=%q) to find your teams, then for each worker in those teams call chepherd.read_pane → chepherd.set_scorecard → chepherd.record_verdict. Update scores based on what changed since last tick. Stay quiet unless alert_human is needed.", name, name))
 	}
 }
 
