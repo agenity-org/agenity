@@ -1,0 +1,19 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: multi-team
+description: |
+  Placeholder template — operator manually attaches multiple teams to
+  this workspace. Useful for juggling multiple projects (e.g., chepherd-dev
+  + openova-dev + iogrid-dev) under one operator dashboard but distinct
+  shepherd contexts per project.
+
+  After installing, the operator should:
+    1. chepherd create-team chepherd-dev  --canon ~/repos/chepherd/CLAUDE.md
+    2. chepherd create-team openova-dev   --canon ~/repos/openova/CLAUDE.md
+    3. chepherd spawn worker-1 --team chepherd-dev --cwd ~/repos/chepherd
+    4. chepherd spawn shepherd-1 --team chepherd-dev --role shepherd
+    5. (repeat for each team)
+
+  The dashboard's tree view renders each team as a separate subtree.
+topology: hub
+members: []   # empty — populated by the operator post-install

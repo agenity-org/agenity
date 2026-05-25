@@ -32,6 +32,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
@@ -82,6 +83,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/workspaces/", s.workspaceByName)
 	mux.HandleFunc("/api/v1/events", s.eventsHandler)
 	mux.HandleFunc("/api/v1/events/stream", s.eventsStream)
+	mux.HandleFunc("/api/v1/templates", s.templatesHandler)
+	mux.HandleFunc("/api/v1/templates/", s.templateApply)
 
 	return logMiddleware(mux)
 }
@@ -676,6 +679,112 @@ func (s *Server) workspaceByName(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// templatesHandler — list available TeamProfile templates from the
+// catalog dir (./catalog at the repo root in dev; ~/.local/state/chepherd-v06/catalog
+// in production installs).
+func (s *Server) templatesHandler(w http.ResponseWriter, r *http.Request) {
+	dirs := []string{
+		"./catalog",
+		filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog"),
+		filepath.Join(s.rt.StateDir(), "..", "..", "..", "repos", "chepherd", "catalog"), // fallback to repo
+	}
+	seen := map[string]bool{}
+	var out []map[string]any
+	for _, d := range dirs {
+		ps, _ := catalog.LoadAll(d)
+		for _, p := range ps {
+			if seen[p.Name] {
+				continue
+			}
+			seen[p.Name] = true
+			out = append(out, map[string]any{
+				"name":        p.Name,
+				"description": p.Description,
+				"topology":    p.Topology,
+				"members":     len(p.Members),
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
+}
+
+// templateApply — POST /api/v1/templates/{name}/apply {team, cwd}
+func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/templates/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 || parts[1] != "apply" || r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	templateName := parts[0]
+	var req struct{ Team, Cwd string }
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	// Find the template
+	dirs := []string{
+		"./catalog",
+		filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog"),
+	}
+	var p *catalog.TeamProfile
+	for _, d := range dirs {
+		ps, _ := catalog.LoadAll(d)
+		for _, t := range ps {
+			if t.Name == templateName {
+				p = t
+				break
+			}
+		}
+		if p != nil {
+			break
+		}
+	}
+	if p == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such template: " + templateName})
+		return
+	}
+	team := req.Team
+	if team == "" {
+		team = p.Name
+	}
+	cwd := req.Cwd
+	if cwd == "" {
+		cwd = os.Getenv("HOME")
+	}
+	// Spawn each member; auto-join to team
+	_, _ = s.rt.CreateTeam(team, "", p.Topology)
+	type spawned struct {
+		Name, Role string
+		Err        string `json:",omitempty"`
+	}
+	var results []spawned
+	for _, m := range p.Members {
+		role := runtime.Role(m.Role)
+		if role != runtime.RoleShepherd {
+			role = runtime.RoleWorker
+		}
+		_, _, err := s.rt.Spawn(runtime.SpawnSpec{
+			Name:      m.Name,
+			AgentSlug: m.Agent,
+			Team:      team,
+			Role:      role,
+			Cwd:       cwd,
+		})
+		res := spawned{Name: m.Name, Role: string(m.Role)}
+		if err != nil {
+			res.Err = err.Error()
+		} else {
+			_, _ = s.rt.JoinTeam(m.Name, team, m.Role, m.BriefOverride)
+		}
+		results = append(results, res)
+	}
+	s.rt.RecordEvent(runtime.Event{
+		Kind: "template_applied", Actor: "runtime",
+		Body: fmt.Sprintf("template %q applied as team %q (%d members)", p.Name, team, len(p.Members)),
+	})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"template": p.Name, "team": team, "members": results,
+	})
 }
 
 // eventsHandler returns the most recent N events (default 200).

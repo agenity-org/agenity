@@ -1,0 +1,26 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: solo-supervised
+description: |
+  Default daily-driver. One worker + one shepherd (all-in-one supervisor —
+  handles discipline + goal + velocity + focus + end-state assessment).
+  Hub topology; shepherd is the watcher. The 90% template.
+topology: hub
+members:
+  - name: worker-1
+    agent: claude-code
+    role: worker
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000
+      discipline_weight: 1.0
+      velocity_expect: medium
+  - name: shepherd-1
+    agent: claude-code
+    role: shepherd
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 100000
+      discipline_weight: 1.0

@@ -1,0 +1,39 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: pair
+description: |
+  Implementer + reviewer + shepherd. The implementer ships code; the
+  reviewer reads diffs + tests + flags issues; the shepherd composes
+  the overall assessment. Use when you want code review built into the
+  loop without spinning up a full council.
+topology: hub
+members:
+  - name: implementer-1
+    agent: claude-code
+    role: worker
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000
+      velocity_expect: high
+  - name: reviewer-1
+    agent: claude-code
+    role: reviewer
+    use_default_prompt: true
+    brief_override: |
+      You are a code reviewer. You DO NOT write code. You read the
+      implementer's diffs + test runs + commit messages and score them
+      on quality (F), velocity (V), and end-state proximity (E). Call
+      chepherd.set_review_axis for each. Coach via chepherd.send_to_session
+      with [@reviewer-1] prefix only when shipping something risky.
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 80000
+      discipline_weight: 1.2
+  - name: shepherd-1
+    agent: claude-code
+    role: shepherd
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 100000

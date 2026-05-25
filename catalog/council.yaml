@@ -1,0 +1,71 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: council
+description: |
+  Implementer + tester + 2 specialist reviewers + shepherd-orchestrator.
+  The council pattern: each specialist scores one axis; the shepherd
+  composes the final scorecard from the union. Use for heavy / risky
+  work where multiple lenses on the same problem add value.
+topology: hub
+members:
+  - name: implementer-1
+    agent: claude-code
+    role: worker
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000
+      velocity_expect: high
+  - name: tester-1
+    agent: claude-code
+    role: tester
+    use_default_prompt: true
+    brief_override: |
+      You are a tester. You ONLY run tests, write new tests, validate
+      assertions, and report verifiable outcomes. Never ship code without
+      a test. Call chepherd.set_review_axis(axis="E") with your verdict
+      on end-state proximity (test-evidence-based, not narrative).
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 100000
+  - name: reviewer-discipline
+    agent: claude-code
+    role: reviewer-discipline
+    use_default_prompt: true
+    brief_override: |
+      You are the discipline reviewer. You read the team's CLAUDE.md
+      (via chepherd.read_canon) every tick and score each worker on
+      the D axis: did they ref an issue in commits? Skip tests? Use
+      --no-verify? Write defensive code masking upstream bugs? Use
+      banned phrases ("Should I", "Holding")? Call chepherd.set_review_axis(axis="D").
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 50000
+      discipline_weight: 1.5
+  - name: reviewer-architect
+    agent: claude-code
+    role: reviewer-architect
+    use_default_prompt: true
+    brief_override: |
+      You are the architecture reviewer. You read recent diffs + edits
+      across files and score F (focus — scope creep?) and the
+      architectural trajectory. Are the workers building toward a coherent
+      end state, or are they accreting orthogonal changes? Call
+      chepherd.set_review_axis for F + commentary on the broader shape.
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 100000
+  - name: shepherd-1
+    agent: claude-code
+    role: shepherd
+    use_default_prompt: true
+    brief_override: |
+      You are the council orchestrator. Each tick: read all
+      chepherd.list_reviews(target=<worker>) for each worker, COMPOSE
+      a final scorecard (median or argmin per axis depending on signal
+      type), call chepherd.set_scorecard once per worker, and decide
+      ONE verdict per worker. Coach via chepherd.send_to_session
+      sparingly. Workers see only YOUR voice, never the reviewers'.
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 100000
