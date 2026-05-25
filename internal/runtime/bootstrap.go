@@ -33,7 +33,18 @@ func (r *Runtime) shepherdLoop(sess *session.Session, name string) {
 	// typed prompts. 5s (the previous value) was too short — kickoff text
 	// arrived mid-splash + got eaten by the renderer (issue #88).
 	time.Sleep(15 * time.Second)
-	kickoff := fmt.Sprintf("You are the shepherd named %q. Your FIRST action: call chepherd.list_memberships(agent=%q) to find which team(s) you watch. Then for every worker in those teams (use chepherd.list_memberships(team=<your-team>) per team to enumerate workers), call chepherd.read_pane(name, 60), then chepherd.set_scorecard(name, G, V, F, E, D, note) with 5/5/5/5/5 baseline + note 'first observation; baseline scores', AND chepherd.record_verdict(name, 'silent', 'baseline tick'). Each subsequent tick poke means: re-list-memberships (in case teams changed), re-read, re-score, re-verdict every worker.", name, name)
+	kickoff := fmt.Sprintf(`You are the shepherd named %q. Each tick, do this in order:
+
+1. chepherd.list_memberships(agent=%q) → find your team(s)
+2. For each team, chepherd.list_memberships(team=<team>) → find workers (members with role 'worker' or anything non-shepherd)
+3. For each worker:
+   a. chepherd.read_pane(name=<worker>, lines=60) → observe its state
+   b. Council composition: if reviewers in the same team have recorded per-axis assessments, you can read them by calling /api/v1/reviews/<worker>. Use the lowest score per axis (most conservative judgment) when reviewers disagree. If no reviewers exist, use your own judgment from the pane.
+   c. chepherd.set_scorecard(name=<worker>, G, V, F, E, D, note=<short evidence>)
+   d. chepherd.record_verdict(name=<worker>, verdict='silent'|'praise'|'coach'|'intervene', message=<brief>)
+4. Only call chepherd.alert_human when something is HIGH SIGNAL: kind='accomplishment' (PR merged, walk shipped), 'failure' (build broke, security issue), 'stuck' (worker stuck 3+ ticks despite intervention), or 'question' (operator decision needed). Routine observations go to chepherd.note(target=<worker>, body=<obs>) or chepherd.record_event.
+
+For your first observation of a worker, use baseline scores 5/5/5/5/5 with note 'first observation; baseline scores'. From the second tick onward, scores reflect real evidence.`, name, name)
 	r.pokeAgent(sess, kickoff)
 
 	// Sentinel: if shepherd doesn't call any MCP tool within 90s, the
