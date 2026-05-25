@@ -34,20 +34,24 @@
   let layout = $state(defaultFocusLayout());
 
   function defaultFocusLayout() {
+    // Goal: terminal gets generous middle column, agent-details gets
+    // enough horizontal room on the right (≥ 280px in typical widths)
+    // so the dense KV rows don't wrap. Left session-list 16%, terminal
+    // column 56%, details column 28% — totals 100%.
     return {
       kind: 'h',
-      ratio: 0.18,
+      ratio: 0.16,
       a: { kind: 'pane', id: 'p1', widget: 'session-list', config: {} },
       b: {
-        kind: 'h', ratio: 0.78,
+        kind: 'h', ratio: 0.68,
         a: {
           kind: 'v', ratio: 0.78,
           a: { kind: 'pane', id: 'p2', widget: 'terminal', config: {} },
           b: { kind: 'pane', id: 'p3', widget: 'events', config: {} },
         },
         b: {
-          kind: 'v', ratio: 0.5,
-          a: { kind: 'pane', id: 'p4', widget: 'identity-card', config: {} },
+          kind: 'v', ratio: 0.55,
+          a: { kind: 'pane', id: 'p4', widget: 'agent-details', config: {} },
           b: {
             kind: 'v', ratio: 0.5,
             a: { kind: 'pane', id: 'p5', widget: 'shepherd-assessment-card', config: {} },
@@ -140,7 +144,7 @@
   function doSplit(node, id, direction) {
     if (node.kind === 'pane' && node.id === id) {
       const newId = 'p' + Date.now();
-      const newPane = { kind: 'pane', id: newId, widget: 'identity-card', config: {} };
+      const newPane = { kind: 'pane', id: newId, widget: 'agent-details', config: {} };
       return { kind: direction, ratio: 0.5, a: node, b: newPane };
     }
     if (node.kind !== 'pane') {
@@ -354,29 +358,26 @@
     --accent: #c97900; --accent-2: #2563eb; --danger: #c92020;
     --select-bg: #e0f2fe; --select-border: #2563eb;
   }
-  :global(html) { --ws-font: 13px; }
+  :global(html) { --ws-font: 14px; }
   :global(html), :global(body) { background: var(--bg); color: var(--fg); margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
-  /* Widget root → font scales with --ws-font. Children inherit by default
-     unless they explicitly override (rem, px). Using em on widget body
-     elements keeps relative scales consistent. */
+  /* Widget root inherits --ws-font; children can override (chips, small,
+     headings) without being clobbered. The previous version had an
+     overly-aggressive :global(.pane-body div/span/button) !important
+     rule that broke every chip/badge/icon visual hierarchy. */
   :global(.pane-body) { font-size: var(--ws-font); }
-  /* Force-scale common typographic descendants (some widgets set explicit
-     px/rem sizes that wouldn't otherwise pick up --ws-font). */
+  /* Containers where explicit sizing rules (like 0.78rem on .agent-pick)
+     should yield to the workspace knob. Targeting nothing that defines
+     its own typography on purpose (no chips/badges). */
   :global(.pane-body p), :global(.pane-body li), :global(.pane-body td), :global(.pane-body th),
-  :global(.pane-body small), :global(.pane-body span), :global(.pane-body button),
-  :global(.pane-body select), :global(.pane-body input), :global(.pane-body textarea),
-  :global(.pane-body pre), :global(.pane-body code), :global(.pane-body dt), :global(.pane-body dd),
-  :global(.pane-body label), :global(.pane-body summary), :global(.pane-body div) {
-    font-size: var(--ws-font) !important;
-  }
-  :global(.pane-body h1), :global(.pane-body h2), :global(.pane-body h3) { font-size: calc(var(--ws-font) * 1.2) !important; }
-  :global(.pane-body h4) { font-size: calc(var(--ws-font) * 1.05) !important; }
-  :global(.pane-body h5), :global(.pane-body h6) { font-size: var(--ws-font) !important; }
+  :global(.pane-body dt), :global(.pane-body dd), :global(.pane-body pre),
+  :global(.pane-body label):not(.chip) { font-size: var(--ws-font); }
+  :global(.pane-body h1), :global(.pane-body h2), :global(.pane-body h3) { font-size: calc(var(--ws-font) * 1.2); }
+  :global(.pane-body h4) { font-size: calc(var(--ws-font) * 1.05); }
   .workspace { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--fg); }
   .topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.55rem 1rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
   .topbar .brand { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.1rem; }
   .topbar .brand .ver { font-size: 0.72rem; color: var(--fg-muted); margin-left: 0.4rem; }
-  .topbar .stats { flex: 1; color: var(--fg-muted); font-size: 0.85rem; }
+  .topbar .stats { flex: 1; color: var(--fg-muted); font-size: 0.78rem; white-space: nowrap; }
   .view-switcher { display: flex; gap: 0.2rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.18rem; }
   .view-switcher button { padding: 0.32rem 0.7rem; background: transparent; color: var(--fg-muted); border: none; border-radius: 4px; cursor: pointer; font-size: 0.82rem; }
   .view-switcher button:hover { color: var(--accent); }
@@ -387,6 +388,7 @@
   .font-knob { display: flex; align-items: center; gap: 0.15rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.14rem; }
   .font-num { font-size: 0.7rem; color: var(--fg-muted); padding: 0 0.3rem; min-width: 28px; text-align: center; font-family: ui-monospace, monospace; }
   .agent-menu { position: relative; }
+  .agent-menu > button { white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
   .agent-menu .dropdown { position: absolute; top: 100%; right: 0; margin-top: 4px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.25rem; display: flex; flex-direction: column; gap: 0.1rem; z-index: 100; min-width: 140px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
   .agent-menu .dropdown button { padding: 0.4rem 0.7rem; background: transparent; color: var(--fg); border: none; border-radius: 4px; cursor: pointer; text-align: left; font-size: 0.82rem; }
   .agent-menu .dropdown button:hover { background: var(--bg); }
