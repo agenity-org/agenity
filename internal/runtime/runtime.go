@@ -176,6 +176,27 @@ type Runtime struct {
 	// goroutines attached at Spawn time; read on every List/Get to fill
 	// SessionInfo.{TotalBytes,Bytes5m,IdleSeconds}.
 	activity map[string]*sessionActivity
+
+	// v0.6 unified data model — Agent + Team + Membership as first-class objects.
+	// Coexists with v0.5 SessionInfo during the transition; new MCP tools
+	// (create_team / join_team / leave_team / list_teams) operate on these.
+	teams        map[string]*Team        // by name
+	memberships  map[string]*Membership  // by composite key "agent_name|team_name"
+
+	// Per-axis review records (v0.6-C council pattern). Keyed by target
+	// agent name; inner map keyed by axis (G|V|F|E|D|custom).
+	axisReviews map[string]map[string]*AxisReview
+}
+
+// AxisReview is one reviewer's score on one axis of one target worker.
+// Multiple reviewers can write to the same target; shepherd composes
+// the final scorecard by reading the union.
+type AxisReview struct {
+	Reviewer string    `json:"reviewer"`
+	Axis     string    `json:"axis"`
+	Score    float64   `json:"score"`
+	Note     string    `json:"note,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // AddSpawnHook registers a callback invoked after every successful Spawn.
@@ -204,11 +225,14 @@ func New(stateDir string) (*Runtime, error) {
 		return nil, err
 	}
 	r := &Runtime{
-		sessions: make(map[string]*session.Session),
-		byName:   make(map[string]string),
-		info:     make(map[string]*SessionInfo),
-		stateDir: stateDir,
-		activity: make(map[string]*sessionActivity),
+		sessions:    make(map[string]*session.Session),
+		byName:      make(map[string]string),
+		info:        make(map[string]*SessionInfo),
+		stateDir:    stateDir,
+		activity:    make(map[string]*sessionActivity),
+		teams:       make(map[string]*Team),
+		memberships: make(map[string]*Membership),
+		axisReviews: make(map[string]map[string]*AxisReview),
 	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
@@ -876,6 +900,150 @@ func stripEnv(env []string, keys ...string) []string {
 		if _, skip := drop[kv[:eq]]; !skip {
 			out = append(out, kv)
 		}
+	}
+	return out
+}
+
+// =========== v0.6 unified-model methods (Agent + Team + Membership) ===========
+
+// CreateTeam adds a new Team to the runtime. Idempotent — if a team with
+// the same name already exists, returns it unchanged. Returns the team
+// + a "created" bool (true if new, false if pre-existed).
+func (r *Runtime) CreateTeam(name string, canonPath string, topology Topology) (*Team, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.teams[name]; ok {
+		return existing, false
+	}
+	if topology == "" {
+		topology = TopologyHub
+	}
+	if canonPath == "" {
+		canonPath = filepath.Join(r.stateDir, "teams", name, "CLAUDE.md")
+	}
+	t := &Team{
+		Name:      name,
+		CanonPath: canonPath,
+		Topology:  topology,
+		CreatedAt: time.Now().UTC(),
+	}
+	r.teams[name] = t
+	r.cond.Broadcast()
+	return t, true
+}
+
+// JoinTeam adds a Membership. Idempotent on (agent, team) — if already
+// joined, updates the role + brief override. Auto-creates the team if it
+// doesn't exist (with default topology=hub).
+func (r *Runtime) JoinTeam(agentName, teamName string, role MembershipRole, briefOverride string) (*Membership, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.byName[agentName]; !ok {
+		return nil, fmt.Errorf("runtime.JoinTeam: unknown agent %q", agentName)
+	}
+	if _, ok := r.teams[teamName]; !ok {
+		canonPath := filepath.Join(r.stateDir, "teams", teamName, "CLAUDE.md")
+		r.teams[teamName] = &Team{
+			Name:      teamName,
+			CanonPath: canonPath,
+			Topology:  TopologyHub,
+			CreatedAt: time.Now().UTC(),
+		}
+	}
+	key := agentName + "|" + teamName
+	m := &Membership{
+		AgentName:     agentName,
+		TeamName:      teamName,
+		Role:          role,
+		BriefOverride: briefOverride,
+		JoinedAt:      time.Now().UTC(),
+	}
+	r.memberships[key] = m
+	r.cond.Broadcast()
+	return m, nil
+}
+
+// LeaveTeam removes a membership. Returns true if removed, false if not present.
+func (r *Runtime) LeaveTeam(agentName, teamName string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := agentName + "|" + teamName
+	if _, ok := r.memberships[key]; !ok {
+		return false
+	}
+	delete(r.memberships, key)
+	r.cond.Broadcast()
+	return true
+}
+
+// ListTeams returns all teams (snapshot copy).
+func (r *Runtime) ListTeams() []*Team {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*Team, 0, len(r.teams))
+	for _, t := range r.teams {
+		c := *t
+		out = append(out, &c)
+	}
+	return out
+}
+
+// ListMemberships returns memberships, optionally filtered by agentName
+// and/or teamName (pass "" to skip a filter).
+func (r *Runtime) ListMemberships(agentName, teamName string) []*Membership {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*Membership, 0, len(r.memberships))
+	for _, m := range r.memberships {
+		if agentName != "" && m.AgentName != agentName {
+			continue
+		}
+		if teamName != "" && m.TeamName != teamName {
+			continue
+		}
+		c := *m
+		out = append(out, &c)
+	}
+	return out
+}
+
+// SetReviewAxis records a per-axis review on a target agent. Used by
+// reviewer agents in the council pattern (v0.6-C). Multiple reviewers
+// can write different axes for the same target; the shepherd composes
+// the final scorecard by reading all of them.
+func (r *Runtime) SetReviewAxis(reviewer, target, axis string, score float64, note string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.byName[target]; !ok {
+		return fmt.Errorf("runtime.SetReviewAxis: unknown target agent %q", target)
+	}
+	if r.axisReviews[target] == nil {
+		r.axisReviews[target] = make(map[string]*AxisReview)
+	}
+	r.axisReviews[target][axis] = &AxisReview{
+		Reviewer: reviewer,
+		Axis:     axis,
+		Score:    score,
+		Note:     note,
+		At:       time.Now().UTC(),
+	}
+	r.cond.Broadcast()
+	return nil
+}
+
+// ListReviews returns all per-axis reviews for a target agent. Used by
+// the shepherd to compose a final scorecard.
+func (r *Runtime) ListReviews(target string) []*AxisReview {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	byAxis := r.axisReviews[target]
+	if byAxis == nil {
+		return nil
+	}
+	out := make([]*AxisReview, 0, len(byAxis))
+	for _, rev := range byAxis {
+		c := *rev
+		out = append(out, &c)
 	}
 	return out
 }
