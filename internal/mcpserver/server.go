@@ -38,6 +38,23 @@ type Server struct {
 	rt       *runtime.Runtime
 	sockPath string
 	listener net.Listener
+	// lastCaller is the most-recently-identified agent name. Set per
+	// dispatch in dispatchWithAgent — handlers read it to attribute
+	// events. NOT thread-safe across concurrent dispatches; serveConn
+	// is per-connection sequential so this works for now (one agent
+	// per conn). Future: pass through context.Context if we need
+	// concurrent calls per conn.
+	lastCaller string
+}
+
+// CurrentCaller returns the name of the agent that made the most-recent
+// MCP call on the current serveConn goroutine. Handlers in toolCallDirect
+// use this to set actor= on emitted events.
+func (s *Server) CurrentCaller() string {
+	if s.lastCaller == "" {
+		return "shepherd"
+	}
+	return s.lastCaller
 }
 
 // New constructs a Server bound to the runtime + a Unix socket at sockPath.
@@ -87,22 +104,48 @@ func (s *Server) acceptLoop() {
 // serveConn handles one MCP client (one chepherd-mcp subprocess bridging
 // one agent). Reads newline-delimited JSON-RPC requests, dispatches to
 // tool handlers, writes responses.
+//
+// Identity: the bridge sends a non-MCP "$/chepherd/identify" first frame
+// with {agent: "<name>"} so the server can attribute every subsequent
+// tool call to the correct agent. Closes #89.
 func (s *Server) serveConn(c net.Conn) {
 	defer c.Close()
 	scanner := bufio.NewScanner(c)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // up to 1 MiB per line
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	w := bufio.NewWriter(c)
+	var connAgent string
 	for scanner.Scan() {
 		var req rpcReq
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
 			s.writeErr(w, nil, -32700, "parse error: "+err.Error())
 			continue
 		}
-		resp := s.dispatch(&req)
+		// Identity frame — capture caller name + skip dispatch.
+		if req.Method == "$/chepherd/identify" {
+			var p struct {
+				Agent string `json:"agent"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			connAgent = p.Agent
+			_ = writeJSON(w, rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"ok": true, "agent": connAgent}})
+			continue
+		}
+		resp := s.dispatchWithAgent(&req, connAgent)
 		if err := writeJSON(w, resp); err != nil {
 			return
 		}
 	}
+}
+
+// dispatchWithAgent wraps dispatch with caller identity context.
+// Tools that record actor in events (e.g. SetScorecard, RecordVerdict,
+// HumanInbox) now have a real caller name instead of hardcoded "shepherd".
+func (s *Server) dispatchWithAgent(req *rpcReq, agent string) rpcResp {
+	if agent == "" {
+		agent = "anonymous"
+	}
+	s.lastCaller = agent
+	return s.dispatch(req)
 }
 
 // dispatch routes one request to its handler.
@@ -397,7 +440,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
 			return resp
 		}
-		if err := s.rt.SetScorecard(a.Name, runtime.Scorecard{
+		if err := s.rt.SetScorecard(s.CurrentCaller(), a.Name, runtime.Scorecard{
 			Goal: a.G, Velocity: a.V, Focus: a.F, EndState: a.E, Discipline: a.D, Note: a.Note,
 		}); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
@@ -409,7 +452,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			Name, Verdict, Message string
 		}
 		_ = json.Unmarshal(args, &a)
-		if err := s.rt.RecordVerdict(a.Name, a.Verdict, a.Message); err != nil {
+		if err := s.rt.RecordVerdict(s.CurrentCaller(), a.Name, a.Verdict, a.Message); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
 		}
@@ -494,7 +537,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		_ = json.Unmarshal(args, &a)
 		from := a.From
 		if from == "" {
-			from = "shepherd"
+			from = s.CurrentCaller()
 		}
 		// v0.6: include kind in the inbox body so dashboard can render
 		// per-kind treatment. Default kind = "alert" for legacy callers
@@ -546,8 +589,11 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			Score                        float64
 		}
 		_ = json.Unmarshal(args, &a)
+		// Default reviewer to the caller's name from MCP connection
+		// identity (#89). Callers can still override by passing reviewer:
+		// explicitly (e.g., orchestrator forwarding on behalf of another).
 		if a.Reviewer == "" {
-			a.Reviewer = "anonymous"
+			a.Reviewer = s.CurrentCaller()
 		}
 		if err := s.rt.SetReviewAxis(a.Reviewer, a.Target, a.Axis, a.Score, a.Note); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
@@ -657,12 +703,30 @@ func splitLines(s string) []string {
 
 // BridgeStdioToSocket is the implementation of the `chepherd mcp` subcommand:
 // it bridges agent stdio (in/out) ↔ a runtime Unix socket.
+//
+// On connect, the bridge sends a non-MCP "$/chepherd/identify" frame with
+// the agent's name (read from CHEPHERD_AGENT_NAME env var set by runtime
+// at spawn). Server uses this to attribute events to the correct agent
+// instead of hardcoding "shepherd" (#89). Server eats the identify frame
+// — Claude never sees it.
 func BridgeStdioToSocket(sockPath string) error {
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		return fmt.Errorf("mcp bridge: dial %s: %w", sockPath, err)
 	}
 	defer conn.Close()
+
+	// Send identify frame first, eat its reply so it doesn't leak to Claude.
+	agent := os.Getenv("CHEPHERD_AGENT_NAME")
+	if agent != "" {
+		idFrame := fmt.Sprintf(`{"jsonrpc":"2.0","id":"$id","method":"$/chepherd/identify","params":{"agent":%q}}`+"\n", agent)
+		if _, err := conn.Write([]byte(idFrame)); err == nil {
+			// Read one line (the reply) and discard.
+			rd := bufio.NewReader(conn)
+			_, _ = rd.ReadString('\n')
+		}
+	}
+
 	errCh := make(chan error, 2)
 	go func() { _, err := io.Copy(conn, os.Stdin); errCh <- err }()
 	go func() { _, err := io.Copy(os.Stdout, conn); errCh <- err }()

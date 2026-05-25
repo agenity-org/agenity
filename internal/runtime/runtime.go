@@ -350,6 +350,11 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		fmt.Fprintf(os.Stderr, "runtime: warning: mcp config write failed for %s: %v\n", spec.Name, err)
 	}
 	envWithMCP := append(append([]string(nil), spec.Env...), mcpEnv...)
+	// Tag the child process with its agent name so the MCP bridge can
+	// forward it as actor identity on every JSON-RPC call. Without this
+	// the server can't tell which shepherd / worker made which call
+	// (#89). Read by the bridge in BridgeStdioToSocket via os.Getenv.
+	envWithMCP = append(envWithMCP, "CHEPHERD_AGENT_NAME="+spec.Name)
 
 	// For Claude Code, pass the absolute mcp-config path explicitly.
 	// Without --mcp-config, Claude only loads .mcp.json after the
@@ -681,7 +686,9 @@ func (r *Runtime) List() []*SessionInfo {
 
 // SetScorecard stores shepherd's latest assessment of a worker. Idempotent:
 // each call overwrites the previous scorecard for that name.
-func (r *Runtime) SetScorecard(name string, sc Scorecard) error {
+// `caller` is the agent name that produced the scorecard (recorded as the
+// event actor for audit attribution — see #89).
+func (r *Runtime) SetScorecard(caller, name string, sc Scorecard) error {
 	r.mu.Lock()
 	id, ok := r.byName[name]
 	if !ok {
@@ -692,8 +699,11 @@ func (r *Runtime) SetScorecard(name string, sc Scorecard) error {
 	r.info[id].Scorecard = &sc
 	r.cond.Broadcast()
 	r.mu.Unlock()
+	if caller == "" {
+		caller = "shepherd"
+	}
 	r.RecordEvent(Event{
-		Kind: "scorecard", Actor: "shepherd",
+		Kind: "scorecard", Actor: caller,
 		Body: fmt.Sprintf("scorecard for %q: G=%.1f V=%.1f F=%.1f E=%.1f D=%.1f", name, sc.Goal, sc.Velocity, sc.Focus, sc.EndState, sc.Discipline),
 		Meta: map[string]any{"target": name, "G": sc.Goal, "V": sc.Velocity, "F": sc.Focus, "E": sc.EndState, "D": sc.Discipline, "note": sc.Note},
 	})
@@ -703,7 +713,7 @@ func (r *Runtime) SetScorecard(name string, sc Scorecard) error {
 // RecordVerdict appends to a session's intervention history. Only
 // coach/intervene verdicts increment the count; silent/praise are
 // surfaced for "last_verdict" but don't bump InterventionCount.
-func (r *Runtime) RecordVerdict(name, verdict, msg string) error {
+func (r *Runtime) RecordVerdict(caller, name, verdict, msg string) error {
 	r.mu.Lock()
 	id, ok := r.byName[name]
 	if !ok {
@@ -719,8 +729,11 @@ func (r *Runtime) RecordVerdict(name, verdict, msg string) error {
 	}
 	r.cond.Broadcast()
 	r.mu.Unlock()
+	if caller == "" {
+		caller = "shepherd"
+	}
 	r.RecordEvent(Event{
-		Kind: "verdict", Actor: "shepherd",
+		Kind: "verdict", Actor: caller,
 		Body: fmt.Sprintf("verdict for %q: %s — %s", name, verdict, msg),
 		Meta: map[string]any{"target": name, "verdict": verdict, "message": msg},
 	})
