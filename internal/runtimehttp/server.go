@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -87,8 +88,108 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/templates/", s.templateApply)
 	mux.HandleFunc("/api/v1/prompts/", s.promptsHandler) // /api/v1/prompts/{role}
 	mux.HandleFunc("/api/v1/runtime/claude-status", s.claudeStatusHandler)
+	mux.HandleFunc("/api/v1/folders/git-info", s.gitInfoHandler)
+	mux.HandleFunc("/api/v1/folders/git-setup", s.gitSetupHandler)
 
 	return logMiddleware(mux)
+}
+
+// gitInfoHandler — GET /api/v1/folders/git-info?cwd=<abs>
+// Reports whether the given cwd is a git repo, its current branch, and
+// the origin remote URL (if set). Used by the SpawnWizard to decide
+// whether to offer init / connect-remote / no-git options.
+func (s *Server) gitInfoHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cwd := r.URL.Query().Get("cwd")
+	if cwd == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cwd required"})
+		return
+	}
+	if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
+		writeJSON(w, http.StatusOK, map[string]any{"exists": false, "is_git": false})
+		return
+	}
+	// Cheap heuristic: .git directory or .git file (worktree).
+	_, gerr := os.Stat(filepath.Join(cwd, ".git"))
+	if gerr != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"exists": true, "is_git": false})
+		return
+	}
+	branch := readGitBranchAt(cwd)
+	remote := readGitRemoteAt(cwd)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"exists": true, "is_git": true,
+		"branch": branch, "remote": remote,
+	})
+}
+
+// gitSetupHandler — POST /api/v1/folders/git-setup
+// {cwd, mode: "init-new" | "connect-remote", remote?: "..."}
+// Best-effort: runs `git init` and/or `git remote add origin <url>` in cwd.
+// Skips silently on "no-git" mode.
+func (s *Server) gitSetupHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct{ Cwd, Mode, Remote string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if req.Cwd == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cwd required"})
+		return
+	}
+	if err := os.MkdirAll(req.Cwd, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if req.Mode == "init-new" || req.Mode == "connect-remote" {
+		if _, err := os.Stat(filepath.Join(req.Cwd, ".git")); err != nil {
+			cmd := execCommand("git", "init")
+			cmd.Dir = req.Cwd
+			if out, err := cmd.CombinedOutput(); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": fmt.Sprintf("git init: %v — %s", err, out)})
+				return
+			}
+		}
+	}
+	if req.Mode == "connect-remote" && req.Remote != "" {
+		cmd := execCommand("git", "remote", "add", "origin", req.Remote)
+		cmd.Dir = req.Cwd
+		_, _ = cmd.CombinedOutput() // ignore "remote already exists"
+	}
+	s.rt.RecordEvent(runtime.Event{
+		Kind: "git_setup", Actor: "operator",
+		Body: fmt.Sprintf("git setup in %q (mode=%s, remote=%q)", req.Cwd, req.Mode, req.Remote),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func readGitBranchAt(cwd string) string {
+	cmd := execCommand("git", "branch", "--show-current")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+func readGitRemoteAt(cwd string) string {
+	cmd := execCommand("git", "config", "--get", "remote.origin.url")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+func execCommand(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
 }
 
 // claudeStatusHandler returns the operator's Claude login info — read from

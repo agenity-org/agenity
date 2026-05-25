@@ -15,8 +15,7 @@
   import { onMount } from 'svelte';
   import '@xterm/xterm/css/xterm.css';
   import Pane from './Pane.svelte';
-  import SpawnModal from './SpawnModal.svelte';
-  import TemplatePicker from './TemplatePicker.svelte';
+  import SpawnWizard from './SpawnWizard.svelte';
 
   // --- props / state ---
   let sessions = $state([]);
@@ -26,8 +25,7 @@
   let events = $state([]);
   let selectedAgent = $state(null);
   let theme = $state('dark');
-  let showSpawn = $state(false);
-  let showTemplates = $state(false);
+  let showWizard = $state(false);
   let confirmDialog = $state(null);
 
   // Workspace layout — default = Focus template
@@ -186,6 +184,13 @@
     }
     saveLayout();
   }
+  function onViewChange(ev) {
+    const v = ev.target.value;
+    if (!v) return;
+    if (v.startsWith('preset:')) applyWorkspaceTemplate(v.slice(7));
+    else if (v.startsWith('saved:')) loadSaved(v.slice(6));
+    ev.target.value = '';
+  }
   function councilLayout() {
     return {
       kind: 'h', ratio: 0.18,
@@ -282,12 +287,22 @@
     <div class="stats">
       {sessions.length} agents · {teams.length} teams · {memberships.length} memberships
     </div>
-    <div class="view-switcher">
-      <button on:click={() => applyWorkspaceTemplate('focus')}>Focus</button>
-      <button on:click={() => applyWorkspaceTemplate('council')}>Council</button>
-      <button on:click={() => applyWorkspaceTemplate('board')}>Board</button>
-      <button on:click={() => applyWorkspaceTemplate('multi-team')}>Multi</button>
-    </div>
+    <select class="view-select" title="layout" on:change={(e) => onViewChange(e)} value="">
+      <option value="" disabled>View…</option>
+      <optgroup label="Built-in">
+        <option value="preset:focus">Focus</option>
+        <option value="preset:council">Council</option>
+        <option value="preset:board">Board</option>
+        <option value="preset:multi-team">Multi</option>
+      </optgroup>
+      {#if savedLayouts.length}
+        <optgroup label="Saved">
+          {#each savedLayouts.filter(n => n !== 'current') as n}
+            <option value="saved:{n}">{n}</option>
+          {/each}
+        </optgroup>
+      {/if}
+    </select>
     <div class="font-knob" title="font size (applies to all widgets)">
       <button class="icon-btn small" on:click={() => applyFontSize(fontSize - 1)} aria-label="smaller">A-</button>
       <span class="font-num">{fontSize}px</span>
@@ -308,14 +323,7 @@
     {/if}
     <button class="icon-btn" on:click={toggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
     <button class="secondary" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">💾 save view</button>
-    {#if savedLayouts.length > 1}
-      <select class="layout-pick" on:change={(e) => loadSaved(e.target.value)} title="Load saved layout">
-        <option value="">— views —</option>
-        {#each savedLayouts as n}<option value={n}>{n}</option>{/each}
-      </select>
-    {/if}
-    <button class="secondary" on:click={() => (showTemplates = true)}>📦 templates</button>
-    <button class="primary" on:click={() => (showSpawn = true)}>+ spawn</button>
+    <button class="primary" on:click={() => (showWizard = true)} title="Spawn a single agent or apply a team template">+ new</button>
   </header>
 
   <div class="canvas">
@@ -323,11 +331,8 @@
   </div>
 </div>
 
-{#if showSpawn}
-  <SpawnModal onClose={() => (showSpawn = false)} onSpawned={refresh} />
-{/if}
-{#if showTemplates}
-  <TemplatePicker onClose={() => (showTemplates = false)} onApplied={refresh} />
+{#if showWizard}
+  <SpawnWizard onClose={() => (showWizard = false)} onLaunched={refresh} />
 {/if}
 {#if showSaveAs}
   <div class="backdrop" on:click={() => (showSaveAs = false)}>
@@ -350,6 +355,9 @@
     --fg: #f5f5f5; --fg-muted: #aaa; --fg-faint: #666;
     --accent: #ffa500; --accent-2: #87ceeb; --danger: #ff6b6b;
     --select-bg: #1a2530; --select-border: #5f9ea0;
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: #2a2a2a;
+    --scrollbar-thumb-hover: #3a3a3a;
   }
   :global(html[data-theme="light"]) {
     --bg: #fafafa; --bg-elev: #ffffff; --bg-input: #ffffff;
@@ -357,22 +365,50 @@
     --fg: #1a1a1a; --fg-muted: #555; --fg-faint: #888;
     --accent: #c97900; --accent-2: #2563eb; --danger: #c92020;
     --select-bg: #e0f2fe; --select-border: #2563eb;
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: #cbd5e1;
+    --scrollbar-thumb-hover: #94a3b8;
   }
+  /* Match v0.5 scrollbars — thin track, rounded thumb, hover→darker, active→accent. */
+  :global(*) { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
+  :global(*::-webkit-scrollbar) { width: 12px; height: 12px; }
+  :global(*::-webkit-scrollbar-track) { background: var(--scrollbar-track); }
+  :global(*::-webkit-scrollbar-thumb) { background: var(--scrollbar-thumb); border-radius: 10px; border: 2px solid var(--bg); min-height: 40px; }
+  :global(*::-webkit-scrollbar-thumb:hover) { background: var(--scrollbar-thumb-hover); }
+  :global(*::-webkit-scrollbar-thumb:active) { background: var(--accent); }
+  :global(*::-webkit-scrollbar-corner) { background: transparent; }
+  :global(.xterm-viewport::-webkit-scrollbar) { width: 12px; }
+  :global(.xterm-viewport::-webkit-scrollbar-track) { background: var(--scrollbar-track); }
+  :global(.xterm-viewport::-webkit-scrollbar-thumb) { background: var(--scrollbar-thumb); border-radius: 10px; border: 2px solid var(--bg); min-height: 40px; }
+  :global(.xterm-viewport::-webkit-scrollbar-thumb:hover) { background: var(--scrollbar-thumb-hover); }
   :global(html) { --ws-font: 14px; }
   :global(html), :global(body) { background: var(--bg); color: var(--fg); margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
-  /* Widget root inherits --ws-font; children can override (chips, small,
-     headings) without being clobbered. The previous version had an
-     overly-aggressive :global(.pane-body div/span/button) !important
-     rule that broke every chip/badge/icon visual hierarchy. */
+  /* Single source of truth: every body-text descendant of a .pane-body
+     uses var(--ws-font). Chrome elements (chips, badges, small notes)
+     are em-scaled relative to ws-font so they always feel proportional
+     to the body. The font-knob in the top bar is the only place that
+     changes type sizing. */
   :global(.pane-body) { font-size: var(--ws-font); }
-  /* Containers where explicit sizing rules (like 0.78rem on .agent-pick)
-     should yield to the workspace knob. Targeting nothing that defines
-     its own typography on purpose (no chips/badges). */
-  :global(.pane-body p), :global(.pane-body li), :global(.pane-body td), :global(.pane-body th),
-  :global(.pane-body dt), :global(.pane-body dd), :global(.pane-body pre),
-  :global(.pane-body label):not(.chip) { font-size: var(--ws-font); }
-  :global(.pane-body h1), :global(.pane-body h2), :global(.pane-body h3) { font-size: calc(var(--ws-font) * 1.2); }
-  :global(.pane-body h4) { font-size: calc(var(--ws-font) * 1.05); }
+  :global(.pane-body) :global(p), :global(.pane-body) :global(li),
+  :global(.pane-body) :global(td), :global(.pane-body) :global(th),
+  :global(.pane-body) :global(dt), :global(.pane-body) :global(dd),
+  :global(.pane-body) :global(pre), :global(.pane-body) :global(code),
+  :global(.pane-body) :global(input), :global(.pane-body) :global(select),
+  :global(.pane-body) :global(textarea), :global(.pane-body) :global(button),
+  :global(.pane-body) :global(label), :global(.pane-body) :global(span):not(.chip):not(.badge),
+  :global(.pane-body) :global(.body), :global(.pane-body) :global(.area),
+  :global(.pane-body) :global(.kv), :global(.pane-body) :global(.list),
+  :global(.pane-body) :global(.events) { font-size: var(--ws-font) !important; }
+  :global(.pane-body) :global(h1), :global(.pane-body) :global(h2),
+  :global(.pane-body) :global(h3) { font-size: calc(var(--ws-font) * 1.18) !important; }
+  :global(.pane-body) :global(h4) { font-size: calc(var(--ws-font) * 1.05) !important; }
+  :global(.pane-body) :global(h5), :global(.pane-body) :global(h6) { font-size: var(--ws-font) !important; }
+  :global(.pane-body) :global(small), :global(.pane-body) :global(.hint),
+  :global(.pane-body) :global(.empty), :global(.pane-body) :global(.tiny),
+  :global(.pane-body) :global(.muted) { font-size: calc(var(--ws-font) * 0.88) !important; }
+  :global(.pane-body) :global(.chip), :global(.pane-body) :global(.badge) {
+    font-size: calc(var(--ws-font) * 0.82) !important;
+  }
   .workspace { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--fg); }
   .topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.55rem 1rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
   .topbar .brand { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.1rem; }

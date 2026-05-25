@@ -1,16 +1,12 @@
 <!--
-  WidgetAgentDetails — single combined "Agent Details" view that replaces
-  the separate identity / location / process cards. Dense key:value rows
-  for everything the operator might want to know about a running agent:
-  liveness, lineage, git context, runtime stats, Claude account, context
-  usage. Built lazily — non-blocking: rows render with the data we have
-  + "—" placeholders for fields the runtime can't (yet) derive.
+  WidgetAgentDetails — flat single-block KV view. No sub-sections,
+  no extra spacing dividers. Every value gets ellipsis on overflow.
 -->
 <script>
   import { onMount } from 'svelte';
   let { agent } = $props();
   const API = '/api-v06/v1';
-  let claudeStatus = $state(null); // { logged_in, login_method, subscription, rate_tier }
+  let claudeStatus = $state(null);
 
   onMount(async () => {
     try {
@@ -57,7 +53,7 @@
   }
   function modelLabel() {
     if (!agent?.model) return '—';
-    if (agent.context_size === 1_000_000) return `${agent.model}[1m]`;
+    if (agent.context_size === 1_000_000 && !agent.model.includes('[1m]')) return `${agent.model}[1m]`;
     return agent.model;
   }
 
@@ -78,37 +74,28 @@
       <dt>started</dt><dd>{ageString(agent.created_at)}</dd>
       <dt>role</dt><dd>{agent.role}</dd>
       <dt>team</dt><dd>{agent.team}</dd>
-      <dt>cwd</dt><dd class="mono">{agent.cwd || '—'}</dd>
-      <dt>repo</dt><dd>{#if agent.github_url}<a href={agent.github_url} target="_blank">{ghRepoShort(agent.github_url)} ↗</a>{:else}—{/if}</dd>
+      <dt>cwd</dt><dd class="mono" title={agent.cwd}>{agent.cwd || '—'}</dd>
+      <dt>repo</dt><dd>{#if agent.github_url}<a href={agent.github_url} target="_blank" title={agent.github_url}>{ghRepoShort(agent.github_url)} ↗</a>{:else}—{/if}</dd>
       <dt>branch</dt><dd>{agent.branch || '—'}</dd>
       <dt>agent</dt><dd>{agent.agent}</dd>
-
-      <dt class="section">Login</dt><dd class="section">&nbsp;</dd>
-      <dt>method</dt><dd>{claudeStatus?.login_method ?? '—'}</dd>
+      <dt>login</dt><dd>{claudeStatus?.login_method ?? '—'}</dd>
       <dt>subscription</dt><dd>{claudeStatus?.subscription ?? '—'}</dd>
-      <dt>rate tier</dt><dd>{claudeStatus?.rate_tier ?? '—'}</dd>
       <dt>model</dt><dd class="mono">{modelLabel()}</dd>
-
-      <dt class="section">Process</dt><dd class="section">&nbsp;</dd>
       <dt>pid</dt><dd class="mono">{agent.pid ?? '—'}</dd>
-      <dt>uuid</dt><dd class="mono tiny">{agent.id || '—'}</dd>
-      {#if agent.claude_uuid}<dt>claude session</dt><dd class="mono tiny">{agent.claude_uuid}</dd>{/if}
+      <dt>uuid</dt><dd class="mono" title={agent.id}>{agent.id || '—'}</dd>
+      {#if agent.claude_uuid}<dt>claude session</dt><dd class="mono" title={agent.claude_uuid}>{agent.claude_uuid}</dd>{/if}
       <dt>bytes 5m</dt><dd>{bytesString(agent.bytes_5m)}</dd>
       <dt>total</dt><dd>{bytesString(agent.total_bytes)}</dd>
       <dt>idle</dt><dd>{idleString(agent.idle_seconds)}</dd>
-
-      <dt class="section">Context</dt><dd class="section">&nbsp;</dd>
-      <dt>size</dt><dd>{agent.context_size ? agent.context_size.toLocaleString() + ' tokens' : '—'}</dd>
-      <dt>used</dt><dd>
+      <dt>context size</dt><dd>{agent.context_size ? agent.context_size.toLocaleString() + ' tokens' : '—'}</dd>
+      <dt>context used</dt><dd>
         {#if ctx != null}
           <span class="ctx-bar"><span class="ctx-fill" style="width:{ctx}%"></span></span>
-          <span class="ctx-num">{ctx.toFixed(1)}% ({agent.context_tokens.toLocaleString()})</span>
+          <span class="ctx-num">{ctx.toFixed(1)}%</span>
         {:else}—{/if}
       </dd>
-
-      <dt class="section">Quota (Claude-side, not exposed via API)</dt><dd class="section">&nbsp;</dd>
-      <dt>session usage</dt><dd class="muted">— (run <code>/status</code> in Claude to see)</dd>
-      <dt>weekly usage</dt><dd class="muted">— (Anthropic doesn't expose this)</dd>
+      <dt>session limit</dt><dd class="muted" title="Anthropic's per-session quota — not yet exposed via API">—</dd>
+      <dt>weekly limit</dt><dd class="muted" title="Anthropic's weekly rate-limit quota — not yet exposed via API">—</dd>
     </dl>
   {/if}
 </div>
@@ -117,23 +104,20 @@
   .wrap { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
   header { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.55rem; border-bottom: 1px solid var(--border); }
   h4 { margin: 0; color: var(--accent); }
-  small { color: var(--fg-muted); flex: 1; }
-  dl { display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 0.15rem 0.7rem; padding: 0.5rem 0.7rem; margin: 0; overflow-y: auto; }
+  small { color: var(--fg-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  dl { display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 0.1rem 0.7rem; padding: 0.4rem 0.7rem; margin: 0; overflow-y: auto; }
   dt { color: var(--fg-muted); white-space: nowrap; }
-  dd { margin: 0; color: var(--fg); overflow-wrap: break-word; min-width: 0; }
-  dt.section { color: var(--accent-2); border-top: 1px solid var(--border); padding-top: 0.45rem; margin-top: 0.3rem; font-weight: 600; grid-column: 1 / span 2; }
-  dd.section { display: none; }
+  dd { margin: 0; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .mono { font-family: ui-monospace, monospace; }
-  .tiny { font-size: 0.78em; color: var(--fg-muted); }
   .muted { color: var(--fg-faint); }
-  .chip { display: inline-block; padding: 0.05rem 0.45rem; border-radius: 999px; font-size: 0.78em; font-weight: 600; }
+  .chip { display: inline-block; padding: 0.05rem 0.45rem; border-radius: 999px; font-weight: 600; }
   .chip.ok { background: rgba(80, 200, 120, 0.15); color: #5cd57f; }
   .chip.warn { background: rgba(255, 165, 0, 0.15); color: #ffaa55; }
   .chip.danger { background: rgba(255, 107, 107, 0.18); color: #ff6b6b; }
   .chip.muted { background: rgba(150, 150, 150, 0.15); color: var(--fg-muted); }
   .ctx-bar { display: inline-block; width: 80px; height: 6px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; vertical-align: middle; overflow: hidden; margin-right: 0.4rem; }
   .ctx-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
-  .ctx-num { font-family: ui-monospace, monospace; font-size: 0.85em; }
+  .ctx-num { font-family: ui-monospace, monospace; }
   a { color: var(--accent-2); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .empty { color: var(--fg-muted); padding: 0.6rem 0.7rem; }
