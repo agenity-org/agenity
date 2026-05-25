@@ -763,7 +763,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		if role != runtime.RoleShepherd {
 			role = runtime.RoleWorker
 		}
-		_, _, err := s.rt.Spawn(runtime.SpawnSpec{
+		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:      m.Name,
 			AgentSlug: m.Agent,
 			Team:      team,
@@ -775,6 +775,12 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 			res.Err = err.Error()
 		} else {
 			_, _ = s.rt.JoinTeam(m.Name, team, m.Role, m.BriefOverride)
+			// If the spawned member is a shepherd, kick off its watch
+			// loop so it actually starts ticking (otherwise it'd sit at
+			// the trust prompt indefinitely).
+			if role == runtime.RoleShepherd && newSess != nil {
+				s.rt.BootstrapShepherd(newSess, m.Name)
+			}
 		}
 		results = append(results, res)
 	}
