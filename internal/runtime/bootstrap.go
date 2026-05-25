@@ -33,6 +33,16 @@ func (r *Runtime) shepherdLoop(sess *session.Session, name string) {
 	// typed prompts. 5s (the previous value) was too short — kickoff text
 	// arrived mid-splash + got eaten by the renderer (issue #88).
 	time.Sleep(15 * time.Second)
+
+	// Anti-rot context handoff: if a prior shepherd of the same name
+	// recorded a shepherd_handoff event before exiting, surface its
+	// summary into the new shepherd's kickoff so it picks up where the
+	// retired one left off.
+	handoff := r.findShepherdHandoff(name)
+	if handoff != "" {
+		r.pokeAgent(sess, "Inherited handoff from your retired predecessor (you replaced an older shepherd of the same name as part of anti-rot rotation): "+handoff)
+		time.Sleep(2 * time.Second)
+	}
 	kickoff := fmt.Sprintf(`You are the shepherd named %q. Each tick, do this in order:
 
 1. chepherd.list_memberships(agent=%q) → find your team(s)
@@ -104,8 +114,11 @@ For your first observation of a worker, use baseline scores 5/5/5/5/5 with note 
 				Kind: "shepherd_refresh", Actor: "runtime",
 				Body: fmt.Sprintf("shepherd %q hit tick limit (%d); refreshing for anti-rot", name, maxTicksBeforeRefresh),
 			})
-			r.pokeAgent(sess, "FINAL TICK before refresh: write a 5-line summary of the current state of your watch via chepherd.record_event(kind='shepherd_handoff', body='<summary>'). I'll spawn a replacement in 10s with this summary as its boot context.")
-			return // upstream replaces the shepherd
+			r.pokeAgent(sess, "FINAL TICK before refresh: write a 5-line summary of the current state of your watch via chepherd.record_event(kind='shepherd_handoff', body='<summary>'). I'll spawn a replacement in 15s with this summary as its boot context. Use kind='shepherd_handoff' EXACTLY — your successor's bootstrap looks it up by kind+actor.")
+			// Give the dying shepherd 15s to write the handoff, then
+			// trigger the replacement.
+			go r.respawnShepherd(name, sess)
+			return
 		}
 		r.pokeAgent(sess, fmt.Sprintf("Tick (shepherd %q): chepherd.list_memberships(agent=%q) to find your teams, then for each worker in those teams call chepherd.read_pane → chepherd.set_scorecard → chepherd.record_verdict. Update scores based on what changed since last tick. Stay quiet unless alert_human is needed.", name, name))
 	}
@@ -117,4 +130,71 @@ func (r *Runtime) pokeAgent(sess *session.Session, body string) {
 	_, _ = sess.Write([]byte(body))
 	time.Sleep(120 * time.Millisecond)
 	_, _ = sess.Write([]byte("\r"))
+}
+
+// respawnShepherd retires the current shepherd session + spawns a
+// replacement with the same name + role + team. Called from the tick
+// loop when the tick counter hits the rotation limit (anti-rot).
+// The replacement reads the prior shepherd's handoff via findShepherdHandoff.
+func (r *Runtime) respawnShepherd(name string, oldSess *session.Session) {
+	time.Sleep(15 * time.Second) // let the dying shepherd finish writing handoff
+
+	// Get the old shepherd's spawn context so the replacement gets the
+	// same team + cwd + system prompt.
+	r.mu.Lock()
+	id, ok := r.byName[name]
+	if !ok {
+		r.mu.Unlock()
+		return
+	}
+	info := r.info[id]
+	team := info.Team
+	cwd := info.Cwd
+	agentSlug := info.AgentSlug
+	r.mu.Unlock()
+
+	// Stop the retired shepherd (this also unmaps it from byName so the
+	// new one can claim the same name).
+	_ = r.Stop(name)
+	time.Sleep(2 * time.Second)
+
+	// Spawn replacement — same name, same team, same role.
+	// SystemPrompt is left empty so the runtime's default prompts.Shepherd
+	// (set by HTTP / cmd path) gets re-applied. For programmatic respawn
+	// we don't have direct access to the prompts.Shepherd here, so leave
+	// it as agent-default and let bootstrapShepherd's kickoff seed it.
+	newInfo, newSess, err := r.Spawn(SpawnSpec{
+		Name:      name,
+		AgentSlug: agentSlug,
+		Team:      team,
+		Role:      RoleShepherd,
+		Cwd:       cwd,
+	})
+	if err != nil {
+		r.RecordEvent(Event{
+			Kind: "shepherd_respawn_failed", Actor: "runtime",
+			Body: fmt.Sprintf("respawn of shepherd %q failed: %v", name, err),
+		})
+		return
+	}
+	r.RecordEvent(Event{
+		Kind: "shepherd_respawned", Actor: "runtime",
+		Body: fmt.Sprintf("shepherd %q respawned (id=%s) after anti-rot rotation", name, newInfo.ID),
+	})
+	r.BootstrapShepherd(newSess, name)
+}
+
+// findShepherdHandoff scans recent events for a shepherd_handoff record
+// authored by an agent with the same name (the retired predecessor).
+// Returns its summary body, or "" if no handoff is found.
+// Used by anti-rot to seed the fresh replacement shepherd with context.
+func (r *Runtime) findShepherdHandoff(name string) string {
+	events := r.Events(200)
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Kind == "shepherd_handoff" && e.Actor == name {
+			return e.Body
+		}
+	}
+	return ""
 }
