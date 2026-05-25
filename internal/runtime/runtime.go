@@ -297,6 +297,15 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 
 	argv, env := agent.Resolve(extraArgs, envSliceToMap(envWithMCP))
 
+	// Strip TMUX env vars so spawned agents don't falsely detect tmux.
+	// chepherd's ptyhost allocates a real PTY for each child — they're not
+	// inside tmux. But if chepherd-v05 itself was started from a tmux
+	// session, $TMUX leaks through to children and Claude Code emits
+	// tmux-specific warnings + writes "copied to tmux buffer" messages
+	// when text is selected. The fake context is the source of the
+	// operator's confusion in the dashboard.
+	env = stripEnv(env, "TMUX", "TMUX_PANE", "TMUX_PLUGIN_MANAGER_PATH")
+
 	// Spawn the PTY child via ptyhost
 	id := newSessionID(spec.Name)
 	s, err := session.New(id, session.Spec{
@@ -847,6 +856,28 @@ var execCommand = func(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	out, err := cmd.Output()
 	return string(out), err
+}
+
+// stripEnv returns env with the named keys removed. Used to scrub
+// inherited env vars (like TMUX) that would falsely orient the child
+// process about its execution context.
+func stripEnv(env []string, keys ...string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	out := env[:0]
+	for _, kv := range env {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			out = append(out, kv)
+			continue
+		}
+		if _, skip := drop[kv[:eq]]; !skip {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // --- utilities ---

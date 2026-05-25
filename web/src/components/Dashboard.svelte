@@ -197,6 +197,38 @@
     // Initial sync once the WS is open + fit() has settled.
     ws.addEventListener('open', () => setTimeout(sendResize, 200));
     term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
+
+    // Auto-copy text selection to the OS clipboard. Without this, xterm
+    // only stores selections in its internal buffer — Ctrl+Shift+C /
+    // Ctrl+Insert work as fallbacks, but operators expect "select = copy"
+    // (the gnome-terminal / iTerm / WezTerm default). Selection events
+    // ARE a user gesture so navigator.clipboard.writeText is permitted.
+    let lastCopied = '';
+    term.onSelectionChange(() => {
+      const sel = term.getSelection();
+      if (!sel || sel === lastCopied) return;
+      lastCopied = sel;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(sel).catch(() => {});
+      }
+    });
+    // Handle OSC52 — when Claude or the underlying agent emits
+    // \x1b]52;c;BASE64\x07 to write to the clipboard, intercept it +
+    // forward to navigator.clipboard so the operator's OS clipboard
+    // gets the text. Without this, xterm reports "check clipboard
+    // setting" because the OSC52 default handler is unset.
+    term.parser.registerOscHandler(52, (data) => {
+      // data is "c;BASE64" or "p;BASE64" (clipboard / primary)
+      const parts = data.split(';');
+      if (parts.length < 2) return true;
+      try {
+        const text = atob(parts[1]);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+      } catch {}
+      return true; // we handled it
+    });
   }
 
   async function openSpawn() {
@@ -772,15 +804,32 @@
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   }
-  :global(*::-webkit-scrollbar) { width: 10px; height: 10px; }
+  :global(*::-webkit-scrollbar) { width: 12px; height: 12px; }
   :global(*::-webkit-scrollbar-track) { background: var(--scrollbar-track); }
   :global(*::-webkit-scrollbar-thumb) {
     background: var(--scrollbar-thumb);
     border-radius: 10px;
     border: 2px solid var(--bg);
+    min-height: 40px;
   }
   :global(*::-webkit-scrollbar-thumb:hover) { background: var(--scrollbar-thumb-hover); }
+  :global(*::-webkit-scrollbar-thumb:active) { background: var(--accent); }
   :global(*::-webkit-scrollbar-corner) { background: transparent; }
+
+  /* xterm.js renders its own scrollable .xterm-viewport that dodges
+     the global :global(*) selector due to specificity. Target it
+     explicitly so the center pane scrollbar matches the rest. */
+  :global(.xterm-viewport::-webkit-scrollbar) { width: 12px; }
+  :global(.xterm-viewport::-webkit-scrollbar-track) { background: var(--scrollbar-track); }
+  :global(.xterm-viewport::-webkit-scrollbar-thumb) {
+    background: var(--scrollbar-thumb);
+    border-radius: 10px;
+    border: 2px solid var(--bg);
+    min-height: 40px;
+  }
+  :global(.xterm-viewport::-webkit-scrollbar-thumb:hover) { background: var(--scrollbar-thumb-hover); }
+  :global(.xterm-viewport::-webkit-scrollbar-thumb:active) { background: var(--accent); }
+  :global(.xterm-viewport) { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
 
   .dashboard { display: flex; flex-direction: column; height: 100vh; color: var(--fg); background: var(--bg); font-size: 14px; }
 
