@@ -5,29 +5,48 @@
   let templates = $state([]);
   let selected = $state(null);
   let team = $state('');
+  let topology = $state('');               // hub | mesh | custom — '' means use template default
   let cwd = $state('/home/openova/repos/chepherd');
   let busy = $state(false);
   let error = $state('');
-  onMount(async () => {
+  let forkName = $state('');
+  let forkingBusy = $state(false);
+
+  async function loadTemplates() {
     try {
       const r = await fetch(`${API}/templates`);
       const data = await r.json();
       templates = data.templates || [];
-      if (templates.length) selected = templates[0].name;
+      if (templates.length && !selected) selected = templates[0].name;
     } catch (e) { error = String(e); }
-  });
+  }
+  onMount(loadTemplates);
   async function apply() {
     if (!selected) return;
     busy = true; error = '';
     try {
       const r = await fetch(`${API}/templates/${selected}/apply`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team: team || selected, cwd }),
+        body: JSON.stringify({ team: team || selected, cwd, topology }),
       });
       if (!r.ok) { const e = await r.json().catch(()=>({})); error = e.error || `HTTP ${r.status}`; }
       else { onApplied?.(); onClose?.(); }
     } catch (e) { error = String(e); }
     busy = false;
+  }
+  async function fork() {
+    if (!selected) return;
+    const name = (forkName || (selected + '-fork')).trim();
+    forkingBusy = true; error = '';
+    try {
+      const r = await fetch(`${API}/templates/${selected}/fork`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_name: name }),
+      });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); error = e.error || `HTTP ${r.status}`; }
+      else { forkName = ''; await loadTemplates(); selected = name; }
+    } catch (e) { error = String(e); }
+    forkingBusy = false;
   }
 </script>
 
@@ -45,8 +64,26 @@
           {/each}
         </ul>
       </div>
-      <label>Team name (defaults to template name) <input bind:value={team} placeholder={selected || ''} /></label>
+      <div class="row">
+        <label>Team name (defaults to template name) <input bind:value={team} placeholder={selected || ''} /></label>
+        <label>Topology <select bind:value={topology}>
+          <option value="">(template default)</option>
+          <option value="hub">hub (shepherd in the middle)</option>
+          <option value="mesh">mesh (peer-to-peer)</option>
+          <option value="custom">custom</option>
+        </select></label>
+      </div>
       <label>Working directory <input bind:value={cwd} /></label>
+
+      <details class="fork">
+        <summary>🍴 Fork this template (copy it under your own name → edit YAML on disk → re-apply)</summary>
+        <div class="row">
+          <label>New template name <input bind:value={forkName} placeholder="{selected}-fork" /></label>
+          <button class="ghost" on:click={fork} disabled={forkingBusy || !selected}>{forkingBusy ? 'Forking…' : 'Fork'}</button>
+        </div>
+        <p class="hint">Forked YAML lands at <code>~/.local/state/chepherd-v06/catalog/&lt;name&gt;.yaml</code>; edit it in your IDE, the template list refreshes on next picker open.</p>
+      </details>
+
       {#if error}<div class="error">{error}</div>{/if}
     </div>
     <footer>
@@ -75,4 +112,11 @@
   footer { padding: 0.85rem 1.2rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.6rem; }
   .primary { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 0.45rem 1rem; font-weight: 600; cursor: pointer; }
   .ghost { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.45rem 1rem; cursor: pointer; }
+  .row { display: flex; gap: 0.6rem; align-items: flex-end; }
+  .row label { flex: 1; }
+  .row button { white-space: nowrap; }
+  select { width: 100%; padding: 0.45rem 0.6rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 0.88rem; margin-top: 0.2rem; cursor: pointer; }
+  details.fork { margin-top: 1rem; border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.55rem 0.7rem; background: var(--bg); }
+  details.fork summary { cursor: pointer; color: var(--fg-muted); font-size: 0.8rem; user-select: none; }
+  details.fork .hint { color: var(--fg-muted); font-size: 0.75rem; margin: 0.5rem 0 0 0; }
 </style>

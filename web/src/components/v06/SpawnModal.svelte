@@ -16,6 +16,16 @@
   let mode = $state('fresh'); // 'fresh' | 'resume'
   let resumeUuid = $state('');
   let useDefaultPrompt = $state(true);
+  let promptDraft = $state('');         // editable system prompt textarea
+  let promptDirty = $state(false);      // user has typed into the textarea
+  let advancedOpen = $state(false);     // skills/stat-sheet collapsible
+  let statSheet = $state({              // operator-override of stat sheet (zero=use role default)
+    context_budget: 0,
+    model_tier: '',
+    discipline_weight: 0,
+    velocity_expect: '',
+    token_budget_usd: 0,
+  });
   let error = $state('');
   let busy = $state(false);
 
@@ -71,10 +81,22 @@
     if (mode === 'resume') loadResumeOptions(f.path);
   }
 
+  async function loadDefaultPrompt(forRole) {
+    try {
+      const r = await fetch(`${API}/prompts/${forRole}`);
+      const data = await r.json();
+      if (!promptDirty) promptDraft = data.prompt || '';
+    } catch { /* leave promptDraft as-is */ }
+  }
+
   onMount(() => {
     loadRecentFolders();
     loadResumeOptions(null);
+    loadDefaultPrompt(role);
   });
+
+  // Reload the default prompt when role changes (only if user hasn't edited it).
+  $effect(() => { loadDefaultPrompt(role); });
 
   async function submit() {
     error = '';
@@ -84,6 +106,19 @@
     try {
       const body = { name, agent, team, role, cwd, use_default_prompt: useDefaultPrompt };
       if (mode === 'resume' && resumeUuid) body.resume_uuid = resumeUuid;
+      // Custom prompt override — when user untoggled "default" + textarea has content.
+      if (!useDefaultPrompt && promptDraft.trim()) {
+        body.SystemPrompt = promptDraft;
+      }
+      // Stat sheet override — only send non-zero/non-empty fields so the
+      // runtime merges with role-defaults instead of clobbering.
+      const sheet = {};
+      if (statSheet.context_budget) sheet.context_budget = +statSheet.context_budget;
+      if (statSheet.model_tier) sheet.model_tier = statSheet.model_tier;
+      if (statSheet.discipline_weight) sheet.discipline_weight = +statSheet.discipline_weight;
+      if (statSheet.velocity_expect) sheet.velocity_expect = statSheet.velocity_expect;
+      if (statSheet.token_budget_usd) sheet.token_budget_usd = +statSheet.token_budget_usd;
+      if (Object.keys(sheet).length) body.stat_sheet = sheet;
       const r = await fetch(`${API}/sessions`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -141,7 +176,45 @@
         <label>Team <input bind:value={team} placeholder="default" /></label>
         <label>Role <select bind:value={role}>{#each ROLES as r}<option value={r}>{r}</option>{/each}</select></label>
       </div>
-      <label class="check"><input type="checkbox" bind:checked={useDefaultPrompt} /> Make the agent chepherd-aware (recommended)</label>
+      <label class="check"><input type="checkbox" bind:checked={useDefaultPrompt} /> Use default prompt for this role (recommended)</label>
+
+      {#if !useDefaultPrompt}
+        <label>System prompt (start from the role default + tweak)</label>
+        <textarea
+          class="prompt-area"
+          rows="9"
+          bind:value={promptDraft}
+          on:input={() => { promptDirty = true; }}
+          placeholder="Loading default prompt for selected role…"
+        ></textarea>
+      {/if}
+
+      <details class="advanced" bind:open={advancedOpen}>
+        <summary>⚙ Skills / stat sheet ({advancedOpen ? 'hide' : 'show'} — defaults shipped per role; override only what you want)</summary>
+        <div class="sheet-grid">
+          <label>Context budget (tokens)<input type="number" min="0" step="10000" bind:value={statSheet.context_budget} placeholder="role default" /></label>
+          <label>Model tier
+            <select bind:value={statSheet.model_tier}>
+              <option value="">(role default)</option>
+              <option value="haiku">haiku</option>
+              <option value="sonnet">sonnet</option>
+              <option value="opus">opus</option>
+              <option value="qwen">qwen</option>
+            </select>
+          </label>
+          <label>Discipline weight (0.5–2.0)<input type="number" min="0" max="3" step="0.1" bind:value={statSheet.discipline_weight} placeholder="role default" /></label>
+          <label>Velocity expectation
+            <select bind:value={statSheet.velocity_expect}>
+              <option value="">(role default)</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
+          <label>Token budget (USD/session)<input type="number" min="0" step="0.5" bind:value={statSheet.token_budget_usd} placeholder="role default" /></label>
+        </div>
+      </details>
+
       {#if error}<div class="error">{error}</div>{/if}
     </div>
     <footer>
@@ -186,4 +259,10 @@
   .resume-head .resume-cwd { color: var(--fg); flex: 1; word-break: break-all; }
   .resume-head .resume-mod { color: var(--fg-muted); }
   .resume-msg { color: var(--fg-muted); font-size: 0.8rem; margin-top: 0.25rem; font-style: italic; }
+  .prompt-area { width: 100%; padding: 0.5rem 0.65rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 0.78rem; line-height: 1.45; margin-top: 0.2rem; resize: vertical; min-height: 120px; }
+  details.advanced { margin-top: 1rem; border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.55rem 0.7rem; background: var(--bg); }
+  details.advanced summary { cursor: pointer; color: var(--fg-muted); font-size: 0.8rem; user-select: none; }
+  details.advanced summary:hover { color: var(--accent); }
+  .sheet-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.7rem; margin-top: 0.6rem; }
+  .sheet-grid label { margin-top: 0; }
 </style>

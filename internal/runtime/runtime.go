@@ -83,6 +83,15 @@ type SessionInfo struct {
 	LastVerdict       string    `json:"last_verdict,omitempty"`       // silent|praise|coach|intervene
 	LastVerdictAt     time.Time `json:"last_verdict_at,omitempty"`
 	LastVerdictMsg    string    `json:"last_verdict_msg,omitempty"`
+
+	// v0.6: operator-configurable per-agent settings.
+	// SystemPrompt is the effective prompt the agent was spawned with
+	// (either the role default from internal/prompts/*.md, or an operator
+	// override). Surfaced read-only in WidgetAgentPrompt; refining a
+	// running agent's working instructions goes through POST .../poke-prompt
+	// which writes a fresh user message and updates this field.
+	SystemPrompt string         `json:"system_prompt,omitempty"`
+	StatSheet    AgentStatSheet `json:"stat_sheet,omitempty"`
 }
 
 // Scorecard is shepherd's latest 5-axis assessment of a session.
@@ -286,6 +295,7 @@ type SpawnSpec struct {
 	Role      Role   // default worker
 	Cwd       string // optional working dir
 	SystemPrompt string // optional override for the agent's system prompt
+	StatSheet   AgentStatSheet // optional override for the default per-role stat sheet
 
 	// AgentArgs is appended to the agent CLI's default args. Useful for
 	// passing --resume <uuid> or similar.
@@ -387,15 +397,39 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		return nil, nil, fmt.Errorf("runtime.Spawn: ptyhost: %w", err)
 	}
 
+	// Resolve the effective stat sheet — operator override falls back to
+	// the per-role default when fields are zero-valued.
+	statSheet := DefaultStatSheet(string(spec.Role))
+	if spec.StatSheet.ContextBudget != 0 {
+		statSheet.ContextBudget = spec.StatSheet.ContextBudget
+	}
+	if spec.StatSheet.ModelTier != "" {
+		statSheet.ModelTier = spec.StatSheet.ModelTier
+	}
+	if spec.StatSheet.DisciplineWeight != 0 {
+		statSheet.DisciplineWeight = spec.StatSheet.DisciplineWeight
+	}
+	if spec.StatSheet.VelocityExpect != "" {
+		statSheet.VelocityExpect = spec.StatSheet.VelocityExpect
+	}
+	if spec.StatSheet.TokenBudgetUSD != 0 {
+		statSheet.TokenBudgetUSD = spec.StatSheet.TokenBudgetUSD
+	}
+	if len(spec.StatSheet.ToolAllowlist) > 0 {
+		statSheet.ToolAllowlist = spec.StatSheet.ToolAllowlist
+	}
+
 	info := &SessionInfo{
-		ID:        id,
-		Name:      spec.Name,
-		AgentSlug: spec.AgentSlug,
-		Team:      spec.Team,
-		Role:      spec.Role,
-		Cwd:       spec.Cwd,
-		CreatedAt: time.Now().UTC(),
-		PID:       s.PID(),
+		ID:           id,
+		Name:         spec.Name,
+		AgentSlug:    spec.AgentSlug,
+		Team:         spec.Team,
+		Role:         spec.Role,
+		Cwd:          spec.Cwd,
+		CreatedAt:    time.Now().UTC(),
+		PID:          s.PID(),
+		SystemPrompt: spec.SystemPrompt,
+		StatSheet:    statSheet,
 	}
 	// Extract GitHub URL once at spawn — cheap (single git config read),
 	// makes the right-pane "GitHub" link populate immediately. Branch is
@@ -760,6 +794,72 @@ func (r *Runtime) Get(name string) (*session.Session, *SessionInfo) {
 	return r.sessions[id], r.info[id]
 }
 
+// UpdateStatSheet replaces the operator-configurable stat sheet on a
+// running agent. Zero-valued fields in the patch are interpreted as
+// "leave alone" (per-field merge, not whole-sheet replace).
+func (r *Runtime) UpdateStatSheet(name string, patch AgentStatSheet) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byName[name]
+	if !ok {
+		return fmt.Errorf("runtime.UpdateStatSheet: unknown session %q", name)
+	}
+	cur := r.info[id].StatSheet
+	if patch.ContextBudget != 0 {
+		cur.ContextBudget = patch.ContextBudget
+	}
+	if patch.ModelTier != "" {
+		cur.ModelTier = patch.ModelTier
+	}
+	if patch.DisciplineWeight != 0 {
+		cur.DisciplineWeight = patch.DisciplineWeight
+	}
+	if patch.VelocityExpect != "" {
+		cur.VelocityExpect = patch.VelocityExpect
+	}
+	if patch.TokenBudgetUSD != 0 {
+		cur.TokenBudgetUSD = patch.TokenBudgetUSD
+	}
+	if patch.ToolAllowlist != nil {
+		cur.ToolAllowlist = patch.ToolAllowlist
+	}
+	r.info[id].StatSheet = cur
+	_ = r.persistInfoLocked(r.info[id])
+	return nil
+}
+
+// PokePrompt writes a refined working-instructions message to a running
+// agent's PTY and records the new effective prompt on the SessionInfo.
+// Equivalent to typing "Your updated working instructions from the
+// operator: <body>" into the agent's REPL. Uses the same kitty-kbd-safe
+// two-write pattern as the shepherd bootstrap.
+func (r *Runtime) PokePrompt(name string, body string) error {
+	r.mu.Lock()
+	id, ok := r.byName[name]
+	if !ok {
+		r.mu.Unlock()
+		return fmt.Errorf("runtime.PokePrompt: unknown session %q", name)
+	}
+	sess := r.sessions[id]
+	r.info[id].SystemPrompt = body
+	_ = r.persistInfoLocked(r.info[id])
+	r.mu.Unlock()
+	if sess == nil {
+		return fmt.Errorf("runtime.PokePrompt: session %q has no live PTY", name)
+	}
+	wrapped := "Your updated working instructions from the operator (please incorporate going forward): " + body
+	_, _ = sess.Write([]byte(wrapped))
+	time.Sleep(120 * time.Millisecond)
+	_, _ = sess.Write([]byte("\r"))
+	r.RecordEvent(Event{
+		Kind:  "prompt_poke",
+		Actor: "operator",
+		Body:  fmt.Sprintf("operator updated prompt for %q (%d chars)", name, len(body)),
+		Meta:  map[string]any{"target": name},
+	})
+	return nil
+}
+
 // Pause sets the .Paused bit on the named session. The relay watcher
 // honors this on routed messages.
 func (r *Runtime) Pause(name string, paused bool) error {
@@ -794,6 +894,45 @@ func (r *Runtime) Stop(name string) error {
 	_ = os.Remove(filepath.Join(r.stateDir, "sessions", id+".json"))
 	r.broadcast()
 	return nil
+}
+
+// Restart stops the named session + spawns a replacement with the same
+// AgentSlug, Cwd, Role, Team, SystemPrompt, and StatSheet. Used for
+// re-priming an agent after editing its prompt/skills (when poke-prompt
+// isn't strong enough). Returns the new SessionInfo on success.
+func (r *Runtime) Restart(name string) (*SessionInfo, error) {
+	r.mu.Lock()
+	id, ok := r.byName[name]
+	if !ok {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("runtime.Restart: unknown session %q", name)
+	}
+	info := r.info[id]
+	spec := SpawnSpec{
+		Name:         info.Name,
+		AgentSlug:    info.AgentSlug,
+		Team:         info.Team,
+		Role:         info.Role,
+		Cwd:          info.Cwd,
+		SystemPrompt: info.SystemPrompt,
+		StatSheet:    info.StatSheet,
+	}
+	r.mu.Unlock()
+	if err := r.Stop(name); err != nil {
+		return nil, err
+	}
+	time.Sleep(500 * time.Millisecond)
+	newInfo, _, err := r.Spawn(spec)
+	if err != nil {
+		return nil, err
+	}
+	r.RecordEvent(Event{
+		Kind:  "agent_restart",
+		Actor: "operator",
+		Body:  fmt.Sprintf("agent %q restarted (new id=%s)", name, newInfo.ID),
+		Meta:  map[string]any{"target": name},
+	})
+	return newInfo, nil
 }
 
 // Wait blocks until the runtime's state changes (used by long-poll style
@@ -1042,6 +1181,75 @@ func (r *Runtime) JoinTeam(agentName, teamName string, role MembershipRole, brie
 	r.memberships[key] = m
 	r.cond.Broadcast()
 	return m, nil
+}
+
+// DeleteTeam removes the team + all its memberships. Returns an error
+// if any agent is still actively rooted in this team (Team field on
+// SessionInfo). Refuses to delete the "default" team.
+func (r *Runtime) DeleteTeam(name string) error {
+	if name == "default" {
+		return fmt.Errorf("runtime.DeleteTeam: refusing to delete the default team")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.teams[name]; !ok {
+		return fmt.Errorf("runtime.DeleteTeam: unknown team %q", name)
+	}
+	for _, info := range r.info {
+		if info.Team == name && !info.Exited {
+			return fmt.Errorf("runtime.DeleteTeam: agent %q still rooted in team %q — move or stop the agent first", info.Name, name)
+		}
+	}
+	for key, m := range r.memberships {
+		if m.TeamName == name {
+			delete(r.memberships, key)
+		}
+	}
+	delete(r.teams, name)
+	r.cond.Broadcast()
+	return nil
+}
+
+// UpdateTeam renames a team and/or changes its topology. newName == ""
+// keeps the existing name; topology == "" keeps the existing topology.
+func (r *Runtime) UpdateTeam(name, newName string, topology Topology) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.teams[name]
+	if !ok {
+		return fmt.Errorf("runtime.UpdateTeam: unknown team %q", name)
+	}
+	if topology != "" {
+		t.Topology = topology
+	}
+	if newName != "" && newName != name {
+		if _, taken := r.teams[newName]; taken {
+			return fmt.Errorf("runtime.UpdateTeam: name %q already in use", newName)
+		}
+		t.Name = newName
+		delete(r.teams, name)
+		r.teams[newName] = t
+		// Cascade: rename in memberships + SessionInfo
+		for key, m := range r.memberships {
+			if m.TeamName == name {
+				m.TeamName = newName
+				delete(r.memberships, key)
+				r.memberships[m.AgentName+"|"+newName] = m
+			}
+		}
+		for _, info := range r.info {
+			if info.Team == name {
+				info.Team = newName
+			}
+			for i, sh := range info.Shepherding {
+				if sh == name {
+					info.Shepherding[i] = newName
+				}
+			}
+		}
+	}
+	r.cond.Broadcast()
+	return nil
 }
 
 // LeaveTeam removes a membership. Returns true if removed, false if not present.

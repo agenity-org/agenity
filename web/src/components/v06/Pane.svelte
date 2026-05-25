@@ -14,8 +14,16 @@
   import WidgetInbox from './widgets/WidgetInbox.svelte';
   import WidgetEvents from './widgets/WidgetEvents.svelte';
   import WidgetSpider from './widgets/WidgetSpider.svelte';
+  import WidgetAgentPrompt from './widgets/WidgetAgentPrompt.svelte';
+  import WidgetAgentSkills from './widgets/WidgetAgentSkills.svelte';
+  import WidgetCanon from './widgets/WidgetCanon.svelte';
+  import WidgetMCPLog from './widgets/WidgetMCPLog.svelte';
 
-  let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, changeWidget, splitPane, removePane } = $props();
+  let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, changeWidget, splitPane, removePane, refresh } = $props();
+
+  function selectedAgentObject() {
+    return sessions?.find(s => s.name === selectedAgent) || null;
+  }
 
   let containerEl;
   let dividerDragging = false;
@@ -54,7 +62,10 @@
     'shepherd-assessment-card': '✻ scorecard',
     'inbox': '✉ inbox',
     'events': '⏱ events',
+    'mcp-log': '🔧 MCP log',
     'canon-viewer': '📜 canon',
+    'agent-prompt': '✏ prompt',
+    'agent-skills': '🎮 skills',
   };
 
   const WIDGETS = Object.keys(WIDGET_LABELS);
@@ -63,21 +74,21 @@
 {#if node.kind === 'h'}
   <div class="hsplit" bind:this={containerEl}>
     <div class="hcell" style="width: {node.ratio * 100}%;">
-      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} />
+      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
     </div>
     <div class="hdivider" on:mousedown={startDrag}></div>
     <div class="hcell" style="width: {(1 - node.ratio) * 100}%;">
-      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} />
+      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
     </div>
   </div>
 {:else if node.kind === 'v'}
   <div class="vsplit" bind:this={containerEl}>
     <div class="vcell" style="height: {node.ratio * 100}%;">
-      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} />
+      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
     </div>
     <div class="vdivider" on:mousedown={startDrag}></div>
     <div class="vcell" style="height: {(1 - node.ratio) * 100}%;">
-      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} />
+      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
     </div>
   </div>
 {:else}
@@ -113,6 +124,14 @@
         <WidgetInbox {inbox} />
       {:else if node.widget === 'events'}
         <WidgetEvents {events} />
+      {:else if node.widget === 'mcp-log'}
+        <WidgetMCPLog {events} />
+      {:else if node.widget === 'agent-prompt'}
+        <WidgetAgentPrompt agent={selectedAgentObject()} />
+      {:else if node.widget === 'agent-skills'}
+        <WidgetAgentSkills agent={selectedAgentObject()} />
+      {:else if node.widget === 'canon-viewer'}
+        <WidgetCanon agent={selectedAgentObject()} {teams} />
       {:else}
         <div class="empty">widget: {node.widget}</div>
       {/if}

@@ -4,6 +4,36 @@
 -->
 <script>
   let { sessions, teams, memberships, selectedAgent, selectAgent } = $props();
+  const API = '/api-v06/v1';
+  let ctxMenu = $state(null); // { x, y, agent, currentTeam, currentRole }
+
+  function openContext(ev, agent, currentTeam, currentRole) {
+    ev.preventDefault();
+    ctxMenu = { x: ev.clientX, y: ev.clientY, agent, currentTeam, currentRole };
+  }
+  function closeContext() { ctxMenu = null; }
+  async function moveAgent(toTeam) {
+    if (!ctxMenu) return;
+    const { agent, currentTeam, currentRole } = ctxMenu;
+    if (toTeam === currentTeam) { closeContext(); return; }
+    if (currentTeam && currentTeam !== 'Unaffiliated') {
+      await fetch(`${API}/memberships?agent=${encodeURIComponent(agent)}&team=${encodeURIComponent(currentTeam)}`, { method: 'DELETE' });
+    }
+    await fetch(`${API}/memberships`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent, team: toTeam, role: currentRole || 'worker' }),
+    });
+    closeContext();
+  }
+  async function changeRole(toRole) {
+    if (!ctxMenu) return;
+    const { agent, currentTeam } = ctxMenu;
+    await fetch(`${API}/memberships`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent, team: currentTeam, role: toRole }),
+    });
+    closeContext();
+  }
 
   // Build tree: per-team sub-list of memberships, plus an Unaffiliated bucket
   let tree = $derived.by(() => {
@@ -56,7 +86,10 @@
           {@const agent = agentByName(m.agent_name)}
           {#if agent}
             {@const score = geomean(agent.scorecard)}
-            <li class:selected={selectedAgent === agent.name} on:click={() => selectAgent(agent.name)}>
+            <li class:selected={selectedAgent === agent.name}
+                on:click={() => selectAgent(agent.name)}
+                on:contextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
+                title="right-click for membership actions">
               <span class="icon" class:shepherd={m.role === 'shepherd'}>{m.role === 'shepherd' ? '✻' : '●'}</span>
               <span class="name">{agent.name}</span>
               {#if score != null}<span class="score">{score.toFixed(1)}</span>{/if}
@@ -71,6 +104,22 @@
     <p class="empty">No agents yet. Use "+ spawn" or "📦 templates".</p>
   {/if}
 </div>
+
+{#if ctxMenu}
+  <div class="ctx-backdrop" on:click={closeContext}>
+    <div class="ctx-menu" style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;" on:click|stopPropagation>
+      <div class="ctx-head">{ctxMenu.agent} <small>· {ctxMenu.currentTeam} / {ctxMenu.currentRole}</small></div>
+      <div class="ctx-section">Move to team</div>
+      {#each (teams || []).filter(t => t.name !== ctxMenu.currentTeam) as t}
+        <button on:click={() => moveAgent(t.name)}>→ {t.name} <small>({t.topology})</small></button>
+      {/each}
+      <div class="ctx-section">Change role</div>
+      {#each ['worker', 'shepherd', 'reviewer', 'tester'].filter(r => r !== ctxMenu.currentRole) as r}
+        <button on:click={() => changeRole(r)}>↔ {r}</button>
+      {/each}
+    </div>
+  </div>
+{/if}
 
 <style>
   .list { padding: 0.5rem 0.5rem; height: 100%; overflow-y: auto; background: var(--bg); }
@@ -87,4 +136,12 @@
   .team li .score { background: var(--accent); color: #000; padding: 0.05rem 0.4rem; border-radius: 8px; font-size: 0.72rem; font-weight: 600; }
   .team li .age { color: var(--fg-faint); font-size: 0.74rem; }
   .empty { color: var(--fg-faint); font-size: 0.82rem; padding: 1rem; text-align: center; }
+  .ctx-backdrop { position: fixed; inset: 0; z-index: 999; }
+  .ctx-menu { position: fixed; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.35rem; min-width: 200px; box-shadow: 0 6px 20px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 0.05rem; }
+  .ctx-head { padding: 0.3rem 0.5rem; color: var(--accent); font-weight: 600; font-size: 0.82rem; border-bottom: 1px solid var(--border); margin-bottom: 0.25rem; }
+  .ctx-head small { color: var(--fg-muted); font-weight: normal; }
+  .ctx-section { padding: 0.25rem 0.5rem; color: var(--fg-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  .ctx-menu button { padding: 0.35rem 0.6rem; background: transparent; color: var(--fg); border: none; border-radius: 4px; cursor: pointer; text-align: left; font-size: 0.82rem; }
+  .ctx-menu button:hover { background: var(--bg); color: var(--accent); }
+  .ctx-menu button small { color: var(--fg-muted); }
 </style>

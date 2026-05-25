@@ -200,10 +200,56 @@
     };
   }
 
+  // --- workspace font-size (granular, applies to ALL widgets uniformly) ---
+  // Uses a CSS variable --ws-font so every widget inherits.
+  let fontSize = $state(13);
+  function applyFontSize(n) {
+    fontSize = Math.max(9, Math.min(22, n));
+    document.documentElement.style.setProperty('--ws-font', fontSize + 'px');
+    try { localStorage.setItem('chepherd-font', String(fontSize)); } catch {}
+  }
+
+  // --- save-as named layout ---
+  let showSaveAs = $state(false);
+  let saveAsName = $state('');
+  let savedLayouts = $state([]);
+  async function listSavedLayouts() {
+    try { const r = await fetch(`${API}/workspaces`); const d = await r.json(); savedLayouts = d.workspaces || []; } catch {}
+  }
+  async function saveAs() {
+    if (!saveAsName.trim()) return;
+    await saveLayout(saveAsName.trim());
+    await listSavedLayouts();
+    showSaveAs = false;
+    saveAsName = '';
+  }
+  async function loadSaved(n) { await loadLayout(n); }
+
+  // --- agent action menu (stop/pause/restart) ---
+  let showAgentMenu = $state(false);
+  async function agentAction(act) {
+    if (!selectedAgent) return;
+    let url, method, body;
+    switch (act) {
+      case 'pause':   url = `${API}/sessions/${selectedAgent}/pause`; method = 'POST'; body = JSON.stringify({ paused: true });  break;
+      case 'unpause': url = `${API}/sessions/${selectedAgent}/pause`; method = 'POST'; body = JSON.stringify({ paused: false }); break;
+      case 'restart': url = `${API}/sessions/${selectedAgent}/restart`; method = 'POST'; body = null; break;
+      case 'stop':    url = `${API}/sessions/${selectedAgent}`; method = 'DELETE'; body = null; break;
+    }
+    try {
+      const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); alert(e.error || `HTTP ${r.status}`); }
+    } catch (e) { alert(String(e)); }
+    await refresh();
+    showAgentMenu = false;
+  }
+
   // --- mount ---
   onMount(() => {
     try { theme = localStorage.getItem('chepherd-theme') || 'dark'; document.documentElement.dataset.theme = theme; } catch {}
+    try { const f = +(localStorage.getItem('chepherd-font') || 13); applyFontSize(f); } catch { applyFontSize(13); }
     refresh();
+    listSavedLayouts();
     const intv = setInterval(refresh, 2500);
     startEventStream();
     loadLayout('current');
@@ -229,13 +275,38 @@
       <button on:click={() => applyWorkspaceTemplate('board')}>Board</button>
       <button on:click={() => applyWorkspaceTemplate('multi-team')}>Multi</button>
     </div>
+    <div class="font-knob" title="font size (applies to all widgets)">
+      <button class="icon-btn small" on:click={() => applyFontSize(fontSize - 1)} aria-label="smaller">A-</button>
+      <span class="font-num">{fontSize}px</span>
+      <button class="icon-btn small" on:click={() => applyFontSize(fontSize + 1)} aria-label="larger">A+</button>
+    </div>
+    {#if selectedAgent}
+      <div class="agent-menu">
+        <button class="secondary" on:click={() => (showAgentMenu = !showAgentMenu)} title="agent actions">⚙ {selectedAgent}</button>
+        {#if showAgentMenu}
+          <div class="dropdown">
+            <button on:click={() => agentAction('pause')}>⏸ Pause</button>
+            <button on:click={() => agentAction('unpause')}>▶ Resume</button>
+            <button on:click={() => agentAction('restart')}>↻ Restart</button>
+            <button class="danger" on:click={() => agentAction('stop')}>■ Stop</button>
+          </div>
+        {/if}
+      </div>
+    {/if}
     <button class="icon-btn" on:click={toggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
+    <button class="secondary" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">💾 save view</button>
+    {#if savedLayouts.length > 1}
+      <select class="layout-pick" on:change={(e) => loadSaved(e.target.value)} title="Load saved layout">
+        <option value="">— views —</option>
+        {#each savedLayouts as n}<option value={n}>{n}</option>{/each}
+      </select>
+    {/if}
     <button class="secondary" on:click={() => (showTemplates = true)}>📦 templates</button>
     <button class="primary" on:click={() => (showSpawn = true)}>+ spawn</button>
   </header>
 
   <div class="canvas">
-    <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} />
+    <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
   </div>
 </div>
 
@@ -244,6 +315,19 @@
 {/if}
 {#if showTemplates}
   <TemplatePicker onClose={() => (showTemplates = false)} onApplied={refresh} />
+{/if}
+{#if showSaveAs}
+  <div class="backdrop" on:click={() => (showSaveAs = false)}>
+    <div class="modal-saveas" on:click|stopPropagation>
+      <h3>Save layout as…</h3>
+      <input bind:value={saveAsName} placeholder="my-view" autofocus />
+      <p class="hint">Saved views persist on the runtime + can be switched via the dropdown in the top bar.</p>
+      <footer>
+        <button class="secondary" on:click={() => (showSaveAs = false)}>Cancel</button>
+        <button class="primary" on:click={saveAs} disabled={!saveAsName.trim()}>Save</button>
+      </footer>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -261,7 +345,13 @@
     --accent: #c97900; --accent-2: #2563eb; --danger: #c92020;
     --select-bg: #e0f2fe; --select-border: #2563eb;
   }
+  :global(html) { --ws-font: 13px; }
   :global(html), :global(body) { background: var(--bg); color: var(--fg); margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
+  /* All v0.6 widget bodies inherit --ws-font. Per-element type-scales are
+     expressed as em multiples of this so the operator's A-/A+ adjustment
+     scales the whole canvas uniformly (terminal, lists, prompt body, etc). */
+  :global(.pane-body), :global(.pane-body *) { font-size: var(--ws-font); }
+  :global(.pane-body .xterm) { font-size: var(--ws-font) !important; }
   .workspace { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--fg); }
   .topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.55rem 1rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
   .topbar .brand { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.1rem; }
@@ -273,5 +363,20 @@
   button.primary { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 0.42rem 0.95rem; font-weight: 600; cursor: pointer; font-size: 0.88rem; }
   button.secondary { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.42rem 0.85rem; cursor: pointer; font-size: 0.88rem; }
   button.icon-btn { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  button.icon-btn.small { width: 28px; height: 24px; font-size: 0.7rem; padding: 0; }
+  .font-knob { display: flex; align-items: center; gap: 0.15rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.14rem; }
+  .font-num { font-size: 0.7rem; color: var(--fg-muted); padding: 0 0.3rem; min-width: 28px; text-align: center; font-family: ui-monospace, monospace; }
+  .agent-menu { position: relative; }
+  .agent-menu .dropdown { position: absolute; top: 100%; right: 0; margin-top: 4px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.25rem; display: flex; flex-direction: column; gap: 0.1rem; z-index: 100; min-width: 140px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+  .agent-menu .dropdown button { padding: 0.4rem 0.7rem; background: transparent; color: var(--fg); border: none; border-radius: 4px; cursor: pointer; text-align: left; font-size: 0.82rem; }
+  .agent-menu .dropdown button:hover { background: var(--bg); }
+  .agent-menu .dropdown button.danger { color: var(--danger); }
+  .layout-pick { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.4rem 0.55rem; font-size: 0.82rem; cursor: pointer; max-width: 140px; }
   .canvas { flex: 1; min-height: 0; overflow: hidden; }
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
+  .modal-saveas { width: min(420px, 92vw); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 10px; padding: 1.2rem 1.3rem; }
+  .modal-saveas h3 { margin: 0 0 0.7rem 0; color: var(--accent); }
+  .modal-saveas input { width: 100%; padding: 0.5rem 0.7rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; }
+  .modal-saveas .hint { color: var(--fg-muted); font-size: 0.78rem; margin: 0.5rem 0 1rem 0; }
+  .modal-saveas footer { display: flex; justify-content: flex-end; gap: 0.6rem; }
 </style>

@@ -85,8 +85,29 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/events/stream", s.eventsStream)
 	mux.HandleFunc("/api/v1/templates", s.templatesHandler)
 	mux.HandleFunc("/api/v1/templates/", s.templateApply)
+	mux.HandleFunc("/api/v1/prompts/", s.promptsHandler) // /api/v1/prompts/{role}
 
 	return logMiddleware(mux)
+}
+
+// promptsHandler returns the default system prompt for a given role so
+// the SpawnModal can pre-fill its textarea + the operator can tweak.
+//   GET /api/v1/prompts/worker    → { role: "worker",   prompt: "..." }
+//   GET /api/v1/prompts/shepherd  → { role: "shepherd", prompt: "..." }
+func (s *Server) promptsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	role := strings.TrimPrefix(r.URL.Path, "/api/v1/prompts/")
+	var body string
+	switch role {
+	case "shepherd":
+		body = prompts.Shepherd
+	default:
+		body = prompts.Worker
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"role": role, "prompt": body})
 }
 
 // ServeOn binds to addr + serves. Returns once listen is established;
@@ -122,9 +143,10 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var req struct {
 			Name, Agent, Team, Role, Cwd, SystemPrompt string
-			AgentArgs                                   []string `json:"agent_args"`
-			ResumeUUID                                  string   `json:"resume_uuid"`
-			UseDefaultPrompt                            bool     `json:"use_default_prompt"`
+			AgentArgs                                   []string              `json:"agent_args"`
+			ResumeUUID                                  string                `json:"resume_uuid"`
+			UseDefaultPrompt                            bool                  `json:"use_default_prompt"`
+			StatSheet                                   runtime.AgentStatSheet `json:"stat_sheet"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -153,6 +175,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			Role:         role,
 			Cwd:          req.Cwd,
 			SystemPrompt: systemPrompt,
+			StatSheet:    req.StatSheet,
 			AgentArgs:    args,
 		})
 		if err == nil && req.Team != "" {
@@ -203,6 +226,40 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "paused": req.Paused})
 	case sub == "attach" && r.Method == http.MethodGet:
 		s.handleAttach(w, r, sess, name)
+	case sub == "stat-sheet" && r.Method == http.MethodPatch:
+		var patch runtime.AgentStatSheet
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := s.rt.UpdateStatSheet(name, patch); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		_, info2 := s.rt.Get(name)
+		writeJSON(w, http.StatusOK, info2)
+	case sub == "restart" && r.Method == http.MethodPost:
+		info2, err := s.rt.Restart(name)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, info2)
+	case sub == "poke-prompt" && r.Method == http.MethodPost:
+		var req struct{ Prompt string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if req.Prompt == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt required"})
+			return
+		}
+		if err := s.rt.PokePrompt(name, req.Prompt); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		http.Error(w, "method not allowed for "+sub, http.StatusMethodNotAllowed)
 	}
@@ -557,15 +614,87 @@ func (s *Server) teamsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) teamByName(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/api/v1/teams/")
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/teams/")
+	parts := strings.SplitN(path, "/", 2)
+	name := parts[0]
+	sub := ""
+	if len(parts) == 2 {
+		sub = parts[1]
+	}
 	if name == "" {
 		http.NotFound(w, r)
 		return
 	}
+
+	// Sub-resource: /api/v1/teams/{name}/canon — view + edit team CLAUDE.md.
+	if sub == "canon" {
+		var canonPath string
+		for _, t := range s.rt.ListTeams() {
+			if t.Name == name {
+				canonPath = t.CanonPath
+				break
+			}
+		}
+		if canonPath == "" {
+			// Lazily compute default location if team is in the byName
+			// map but no canonPath is set (transitional / legacy teams).
+			canonPath = filepath.Join(s.rt.StateDir(), "teams", name, "CLAUDE.md")
+		}
+		switch r.Method {
+		case http.MethodGet:
+			b, err := os.ReadFile(canonPath)
+			if err != nil && !os.IsNotExist(err) {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"team": name, "path": canonPath, "body": string(b)})
+		case http.MethodPut:
+			var req struct{ Body string }
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(canonPath), 0o700); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			if err := os.WriteFile(canonPath, []byte(req.Body), 0o600); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			s.rt.RecordEvent(runtime.Event{
+				Kind: "canon_updated", Actor: "operator",
+				Body: fmt.Sprintf("canon for team %q updated (%d bytes)", name, len(req.Body)),
+				Meta: map[string]any{"team": name, "bytes": len(req.Body)},
+			})
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
 	switch r.Method {
 	case http.MethodDelete:
-		// Not yet implemented — leaving as 405 for now
-		http.Error(w, "team deletion not implemented", http.StatusMethodNotAllowed)
+		if err := s.rt.DeleteTeam(name); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case http.MethodPatch:
+		var req struct {
+			NewName  string `json:"new_name"`
+			Topology string `json:"topology"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := s.rt.UpdateTeam(name, req.NewName, runtime.Topology(req.Topology)); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
 		// Find by name in ListTeams
 		for _, t := range s.rt.ListTeams() {
@@ -711,15 +840,94 @@ func (s *Server) templatesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // templateApply — POST /api/v1/templates/{name}/apply {team, cwd}
+//                  POST /api/v1/templates/{name}/fork {new_name}        — copy YAML to operator dir
+//                  PUT  /api/v1/templates/{name}                         — overwrite YAML in operator dir
 func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/templates/")
 	parts := strings.SplitN(path, "/", 2)
+	if len(parts) == 1 && r.Method == http.MethodPut {
+		// Save / publish operator-edited template YAML.
+		name := parts[0]
+		body, _ := io.ReadAll(r.Body)
+		opDir := filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog")
+		_ = os.MkdirAll(opDir, 0o700)
+		if err := os.WriteFile(filepath.Join(opDir, name+".yaml"), body, 0o600); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind: "template_published", Actor: "operator",
+			Body: fmt.Sprintf("operator published template %q (%d bytes)", name, len(body)),
+			Meta: map[string]any{"template": name, "bytes": len(body)},
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": filepath.Join(opDir, name+".yaml")})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "fork" && r.Method == http.MethodPost {
+		// Copy a built-in template YAML to operator dir so it's editable.
+		srcName := parts[0]
+		var req struct {
+			NewName string `json:"new_name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		newName := req.NewName
+		if newName == "" {
+			newName = srcName + "-fork"
+		}
+		dirs := []string{
+			"./catalog",
+			filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog"),
+		}
+		var srcPath string
+		for _, d := range dirs {
+			candidate := filepath.Join(d, srcName+".yaml")
+			if _, err := os.Stat(candidate); err == nil {
+				srcPath = candidate
+				break
+			}
+		}
+		if srcPath == "" {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such template: " + srcName})
+			return
+		}
+		b, err := os.ReadFile(srcPath)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		// Rewrite the leading `name:` field of the YAML (cheap regex-free
+		// scan over the first non-comment line that starts with "name:")
+		lines := strings.Split(string(b), "\n")
+		for i, ln := range lines {
+			trim := strings.TrimLeft(ln, " \t")
+			if strings.HasPrefix(trim, "name:") {
+				indent := ln[:len(ln)-len(trim)]
+				lines[i] = indent + "name: " + newName
+				break
+			}
+		}
+		out := []byte(strings.Join(lines, "\n"))
+		opDir := filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog")
+		_ = os.MkdirAll(opDir, 0o700)
+		dstPath := filepath.Join(opDir, newName+".yaml")
+		if err := os.WriteFile(dstPath, out, 0o600); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind: "template_forked", Actor: "operator",
+			Body: fmt.Sprintf("template %q forked → %q", srcName, newName),
+			Meta: map[string]any{"src": srcName, "new": newName},
+		})
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "name": newName, "path": dstPath, "body": string(out)})
+		return
+	}
 	if len(parts) != 2 || parts[1] != "apply" || r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
 	}
 	templateName := parts[0]
-	var req struct{ Team, Cwd string }
+	var req struct{ Team, Cwd, Topology string }
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	// Find the template
 	dirs := []string{
@@ -752,7 +960,11 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		cwd = os.Getenv("HOME")
 	}
 	// Spawn each member; auto-join to team
-	_, _ = s.rt.CreateTeam(team, "", p.Topology)
+	effectiveTopology := p.Topology
+	if req.Topology != "" {
+		effectiveTopology = runtime.Topology(req.Topology)
+	}
+	_, _ = s.rt.CreateTeam(team, "", effectiveTopology)
 	type spawned struct {
 		Name, Role string
 		Err        string `json:",omitempty"`
