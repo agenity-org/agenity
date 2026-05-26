@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -161,15 +162,26 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			rs.Auth = ap
 			fmt.Printf("✓ Auth provider: %s\n", ap.Mode())
 			if lp, ok := ap.(*auth.LocalProvider); ok {
-				// Issue + print a bootstrap operator token on first run so
-				// the operator has something to paste into the dashboard.
-				// Skipped on subsequent boots — the same secret signs the
-				// same tokens, so any prior token still validates.
-				if _, statErr := os.Stat(filepath.Join(stateDir, "auth.printed")); statErr != nil {
-					if tok, err := lp.IssueBootstrapToken(nil, "operator", 0); err == nil {
+				// Bootstrap token: issue once, persist, re-use on every
+				// boot so agents spawned across restarts keep working.
+				tokenPath := filepath.Join(stateDir, "auth.printed")
+				var tok string
+				if existing, err := os.ReadFile(tokenPath); err == nil && len(existing) > 0 {
+					tok = strings.TrimSpace(string(existing))
+				} else {
+					if t, err := lp.IssueBootstrapToken(nil, "operator", 0); err == nil {
+						tok = t
+						_ = os.WriteFile(tokenPath, []byte(t), 0o600)
 						fmt.Printf("\n  Bootstrap token (operator, 30d):\n  %s\n\n", tok)
-						_ = os.WriteFile(filepath.Join(stateDir, "auth.printed"), []byte(tok), 0o600)
 					}
+				}
+				if tok != "" {
+					// Wire token into MCP server (#139) + runtime spawn env
+					// (#139). Agents inherit CHEPHERD_TOKEN and present it
+					// on every WS upgrade. Dashboard requires same Bearer.
+					mcpSrv.SetAuthToken(tok)
+					rt.SetAgentEnv("CHEPHERD_TOKEN", tok)
+					rs.AuthToken = tok
 				}
 			}
 		}

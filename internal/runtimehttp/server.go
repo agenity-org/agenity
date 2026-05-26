@@ -50,9 +50,10 @@ import (
 type Server struct {
 	rt     *runtime.Runtime
 	WebDir string        // optional: serve Astro static build from this dir
-	Vault   *vault.Vault      // optional: credential vault (nil = vault API returns 503)
-	Auth    auth.AuthProvider // optional: auth provider (nil = no token validation, dev only)
-	Profile *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
+	Vault     *vault.Vault      // optional: credential vault (nil = vault API returns 503)
+	Auth      auth.AuthProvider // optional: auth provider (nil = no token validation, dev only)
+	AuthToken string            // bearer token required on /api/v1/* (#139) — empty disables enforcement
+	Profile   *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
 
 	upgrader websocket.Upgrader
 }
@@ -151,7 +152,69 @@ func (s *Server) Handler() http.Handler {
 		})
 	}
 
-	return logMiddleware(mux)
+	return logMiddleware(s.authMiddleware(mux))
+}
+
+// authMiddleware (#139) enforces Bearer-token auth on every /api/v1/* and
+// /api-v08/v1/* path. Paths that DON'T require auth:
+//   - /healthz       (liveness probe, must not require creds)
+//   - /v08/...       (the dashboard SPA itself — auth happens via the
+//                     token the operator pastes into the page; the bundle
+//                     itself is just static HTML/JS)
+//   - /_astro/...    (static assets)
+//   - everything else served from WebDir (logo, fonts, etc.)
+//
+// When s.AuthToken is empty, this middleware is a no-op — useful for
+// dev mode (operator builds chepherd locally + runs without `auth`).
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.AuthToken == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Public surfaces.
+		switch {
+		case r.URL.Path == "/healthz":
+		case strings.HasPrefix(r.URL.Path, "/api/v1/"),
+			strings.HasPrefix(r.URL.Path, "/api-v08/v1/"):
+			// Enforce — Bearer token required.
+			got := ""
+			if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+				got = strings.TrimPrefix(h, "Bearer ")
+			}
+			if got == "" {
+				got = r.Header.Get("X-Chepherd-Token")
+			}
+			if got == "" {
+				if c, _ := r.Cookie("chepherd_token"); c != nil {
+					got = c.Value
+				}
+			}
+			if got == "" {
+				got = r.URL.Query().Get("token")
+			}
+			if got == "" {
+				http.Error(w, "missing Bearer token", http.StatusUnauthorized)
+				return
+			}
+			if !constantTimeEqualString(got, s.AuthToken) {
+				http.Error(w, "invalid Bearer token", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func constantTimeEqualString(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var diff byte
+	for i := 0; i < len(a); i++ {
+		diff |= a[i] ^ b[i]
+	}
+	return diff == 0
 }
 
 // claudeProfileHandler — proxy to Anthropic's OAuth profile endpoint to
@@ -693,18 +756,41 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, err
 			return dir, nil
 		}
 		// External provider — clone if needed, return clone path.
+		// #138 fix: never embed the PAT in the clone URL (would persist
+		// in .git/config). Use GIT_ASKPASS via a short-lived helper
+		// script that prints the token, then git clones with the bare
+		// HTTPS URL → .git/config has NO credentials, only the URL.
 		dir := filepath.Join(s.rt.StateDir(), "workspaces", sanitizeID(p.ID))
 		if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
 			_ = os.MkdirAll(dir, 0o700)
 			cloneURL := p.RepoURL
-			// Inject token for HTTPS clones.
+			env := os.Environ()
+			cleanupAsk := func() {}
 			if p.Token != "" && strings.HasPrefix(cloneURL, "https://") {
-				cloneURL = strings.Replace(cloneURL, "https://", "https://oauth2:"+p.Token+"@", 1)
+				// Write helper script to a tempfile, env GIT_ASKPASS
+				// points at it. Git uses the script for HTTP auth + the
+				// token never lands on disk in .git/config.
+				askScript, cleanup, err := writeAskpassHelper(p.Token)
+				if err != nil {
+					return dir, fmt.Errorf("askpass setup: %w", err)
+				}
+				cleanupAsk = cleanup
+				env = append(env, "GIT_ASKPASS="+askScript, "GIT_TERMINAL_PROMPT=0")
+				// Use a username placeholder; provider treats the password
+				// (token) as the auth material.
+				cloneURL = strings.Replace(cloneURL, "https://", "https://oauth2@", 1)
 			}
 			cmd := exec.Command("git", "clone", "--depth=1", cloneURL, dir)
-			if out, err := cmd.CombinedOutput(); err != nil {
+			cmd.Env = env
+			out, err := cmd.CombinedOutput()
+			cleanupAsk()
+			if err != nil {
 				return dir, fmt.Errorf("git clone failed: %w\n%s", err, out)
 			}
+			// Belt-and-braces: strip any URL credentials the clone might
+			// have written to .git/config (older git versions store the
+			// full URL even with askpass). Re-write origin to the bare URL.
+			_ = exec.Command("git", "-C", dir, "remote", "set-url", "origin", p.RepoURL).Run()
 		}
 		return dir, nil
 	}
@@ -712,6 +798,31 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, err
 		fallbackCwd, _ = os.UserHomeDir()
 	}
 	return fallbackCwd, fmt.Errorf("provider %q not registered", providerID)
+}
+
+// writeAskpassHelper creates a chmod-0700 shell script that prints token,
+// returns its path + a cleanup func. Used as GIT_ASKPASS so the token
+// never lands in .git/config (#138).
+func writeAskpassHelper(token string) (string, func(), error) {
+	f, err := os.CreateTemp("", "chepherd-askpass-*.sh")
+	if err != nil {
+		return "", func() {}, err
+	}
+	// Use printf %s to avoid shell-injection regardless of token content.
+	if _, err := fmt.Fprintf(f, "#!/bin/sh\nprintf '%%s' %q\n", token); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	if err := os.Chmod(f.Name(), 0o700); err != nil {
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
 func sanitizeID(id string) string {

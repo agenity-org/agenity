@@ -41,6 +41,11 @@ type Server struct {
 	rt           *runtime.Runtime
 	httpListener net.Listener
 	httpServer   *http.Server
+	// AuthToken (#139/#153) is the shared-secret bearer token clients
+	// must present. Set via SetAuthToken before StartHTTP. Empty string
+	// disables auth (CHEPHERD_AUTH_REQUIRE=false) — only safe on
+	// 127.0.0.1 deployments.
+	authToken string
 	// lastCaller is the most-recently-identified agent name. Set per
 	// dispatch in dispatchWithAgent — handlers read it to attribute
 	// events. NOT thread-safe across concurrent dispatches; serveConn
@@ -48,6 +53,48 @@ type Server struct {
 	// per conn). Future: pass through context.Context if we need
 	// concurrent calls per conn.
 	lastCaller string
+}
+
+// SetAuthToken configures the bearer token required on every WS upgrade
+// and /mcp/rpc request. Empty string disables enforcement.
+func (s *Server) SetAuthToken(tok string) { s.authToken = tok }
+
+// requireAuth returns nil if the request carries the right bearer token
+// or auth is disabled. Otherwise returns the http status + error string
+// the caller should write back. Accepts the token via:
+//
+//   - Authorization: Bearer <tok>
+//   - ?token=<tok> query param  (WS clients that can't set headers)
+//   - X-Chepherd-Token: <tok>   (older clients)
+func (s *Server) requireAuth(r *http.Request) (int, string) {
+	if s.authToken == "" {
+		return 0, ""
+	}
+	got := ""
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		got = strings.TrimPrefix(h, "Bearer ")
+	}
+	if got == "" {
+		got = r.Header.Get("X-Chepherd-Token")
+	}
+	if got == "" {
+		got = r.URL.Query().Get("token")
+	}
+	if got == "" || !constantTimeEq(got, s.authToken) {
+		return http.StatusUnauthorized, "missing or invalid Bearer token"
+	}
+	return 0, ""
+}
+
+func constantTimeEq(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var diff byte
+	for i := 0; i < len(a); i++ {
+		diff |= a[i] ^ b[i]
+	}
+	return diff == 0
 }
 
 // CurrentCaller returns the name of the agent that made the most-recent
@@ -66,9 +113,13 @@ func New(rt *runtime.Runtime) *Server {
 	return &Server{rt: rt}
 }
 
-// DefaultListenAddr is the canonical MCP HTTP bind address. Override per
-// deployment via the chepherd run --mcp-listen flag or CHEPHERD_MCP_LISTEN.
-const DefaultListenAddr = "0.0.0.0:9090"
+// DefaultListenAddr is the canonical MCP HTTP bind address. v0.8+ defaults
+// to 127.0.0.1 so the control plane is not exposed to the LAN by default
+// (#154). Operators running chepherd inside a container that needs to be
+// reached by sibling containers on a bridge network must override via
+// CHEPHERD_MCP_LISTEN=0.0.0.0:9090 explicitly — scripts/start.sh does
+// this since the in-pod network is already isolated by podman.
+const DefaultListenAddr = "127.0.0.1:9090"
 
 // Stop closes the HTTP listener. Idempotent.
 func (s *Server) Stop() {

@@ -20,7 +20,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -81,6 +80,10 @@ func (s *Server) stopHTTP() {
 // JSON-RPC dispatch loop the legacy Unix-socket transport used. One frame
 // per message; ping/pong handled by gorilla.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.requireAuth(r); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		http.Error(w, "ws upgrade failed", http.StatusBadRequest)
@@ -125,10 +128,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 // handleRPC accepts a single JSON-RPC request via POST and returns its
 // response. Useful for ad-hoc testing with curl + for Streamable-HTTP MCP
 // clients that don't open a long-lived connection. The agent identity
-// comes from the Authorization Bearer or X-Chepherd-Agent header.
+// comes from the X-Chepherd-Agent header (Authorization carries the
+// bearer token, not the agent name).
 func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if code, msg := s.requireAuth(r); code != 0 {
+		http.Error(w, msg, code)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4*1024*1024))
@@ -142,11 +150,6 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agent := r.Header.Get("X-Chepherd-Agent")
-	if agent == "" {
-		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-			agent = strings.TrimPrefix(auth, "Bearer ")
-		}
-	}
 	resp := s.dispatchWithAgent(&req, agent)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -166,7 +169,14 @@ func BridgeStdioToHTTP(url string) error {
 		ReadBufferSize:   64 * 1024,
 		WriteBufferSize:  64 * 1024,
 	}
-	c, _, err := dialer.Dial(url, nil)
+	// Bearer-token auth (#139). The chepherd daemon injects CHEPHERD_TOKEN
+	// into every agent's env at spawn time; the bridge subprocess inherits
+	// it and presents it on the WS upgrade.
+	hdr := http.Header{}
+	if tok := os.Getenv("CHEPHERD_TOKEN"); tok != "" {
+		hdr.Set("Authorization", "Bearer "+tok)
+	}
+	c, _, err := dialer.Dial(url, hdr)
 	if err != nil {
 		return fmt.Errorf("mcp bridge: dial %s: %w", url, err)
 	}

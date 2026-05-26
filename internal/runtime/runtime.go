@@ -238,6 +238,12 @@ type Runtime struct {
 	// Set via SetVault after vault.Open succeeds in main.
 	vault VaultProvider
 
+	// extraAgentEnv is appended to every agent's spawn env. Used to
+	// inject the operator's MCP bearer token (CHEPHERD_TOKEN) so the
+	// agent's bridge subprocess can authenticate (#139).
+	extraAgentEnv map[string]string
+	extraEnvMu    sync.RWMutex
+
 	// human-inbox sink
 	humanInbox []HumanInboxEntry
 
@@ -333,6 +339,30 @@ type VaultCredMeta struct {
 // filesystem. Safe to call before or after Spawn. Pass nil to detach.
 func (r *Runtime) SetVault(v VaultProvider) {
 	r.vault = v
+}
+
+// SetAgentEnv registers a key=value pair that will be appended to
+// every subsequent agent spawn's environment. Used to propagate the
+// MCP bearer token from cmd/run.go into the runtime spawn path (#139).
+func (r *Runtime) SetAgentEnv(key, value string) {
+	r.extraEnvMu.Lock()
+	defer r.extraEnvMu.Unlock()
+	if r.extraAgentEnv == nil {
+		r.extraAgentEnv = map[string]string{}
+	}
+	r.extraAgentEnv[key] = value
+}
+
+// agentEnvOverlay returns the registered key=value strings ready to
+// concat onto a spawn's env slice. Snapshot — safe across mutations.
+func (r *Runtime) agentEnvOverlay() []string {
+	r.extraEnvMu.RLock()
+	defer r.extraEnvMu.RUnlock()
+	out := make([]string, 0, len(r.extraAgentEnv))
+	for k, v := range r.extraAgentEnv {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 // StateDir returns the root state directory for this runtime
@@ -486,6 +516,10 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		fmt.Fprintf(os.Stderr, "runtime: warning: mcp config write failed for %s: %v\n", spec.Name, err)
 	}
 	envWithMCP := append(append([]string(nil), spec.Env...), mcpEnv...)
+	// Append the operator's registered agent-env overlay (CHEPHERD_TOKEN
+	// for MCP auth, #139). Inserted before AGENT_NAME so per-spawn
+	// overrides win.
+	envWithMCP = append(envWithMCP, r.agentEnvOverlay()...)
 	// Tag the child process with its agent name so the MCP bridge can
 	// forward it as actor identity on every JSON-RPC call. Without this
 	// the server can't tell which shepherd / worker made which call
