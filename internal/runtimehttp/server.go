@@ -561,6 +561,64 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// collectVCSTokenEnv assembles the set of credential env vars to inject
+// into a freshly-spawned agent. Two sources are merged:
+//
+//  1. The git provider selected for this spawn (provider_id), if any —
+//     its token becomes GITHUB_TOKEN / GITLAB_TOKEN / GITEA_TOKEN /
+//     BITBUCKET_TOKEN based on the provider's kind. This is the "token
+//     used to clone the repo also lets the agent push back" case (R1).
+//  2. Every vault credential whose provider declares a DefaultEnv —
+//     anthropic-api → ANTHROPIC_API_KEY, github-pat → GITHUB_TOKEN, etc.
+//     Vault entries are the operator's "saved across all teams" tokens.
+//
+// Provider-supplied tokens (source 1) take precedence over vault tokens
+// (source 2) for the same env-var name. The result is a slice of
+// "KEY=VALUE" strings ready to feed into runtime.SpawnSpec.Env.
+//
+// R1 / #132.
+func (s *Server) collectVCSTokenEnv(providerID string) []string {
+	env := map[string]string{}
+
+	// 2. Vault keys — set first so step 1 can overwrite if there's a conflict.
+	if s.Vault != nil {
+		if vEnv, err := s.Vault.EnvFor(nil); err == nil {
+			for k, v := range vEnv {
+				env[k] = v
+			}
+		}
+	}
+
+	// 1. Provider token by kind.
+	if providerID != "" {
+		if ps, err := runtime.LoadGitProviders(s.rt.StateDir()); err == nil {
+			for _, p := range ps {
+				if p.ID != providerID || p.Token == "" {
+					continue
+				}
+				switch p.Kind {
+				case runtime.GitProviderGitHub:
+					env["GITHUB_TOKEN"] = p.Token
+					env["GH_TOKEN"] = p.Token
+				case runtime.GitProviderGitLab:
+					env["GITLAB_TOKEN"] = p.Token
+				case runtime.GitProviderGitea:
+					env["GITEA_TOKEN"] = p.Token
+				case runtime.GitProviderBitbucket:
+					env["BITBUCKET_TOKEN"] = p.Token
+				}
+				break
+			}
+		}
+	}
+
+	out := make([]string, 0, len(env))
+	for k, v := range env {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
 // resolveProviderCwd maps a provider_id to a working directory.
 // If provider_id is set, uses the provider's repo URL to derive a state-managed
 // clone path. If cwd is also provided, it wins (explicit override).
@@ -658,6 +716,14 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 				systemPrompt = prompts.Worker
 			}
 		}
+		// R1 (#132) — inject VCS tokens into the agent environment so
+		// `gh`, `glab`, `git push` etc. work inside the container without
+		// re-entering credentials. Sources, in priority order:
+		//   1. The selected provider's token (per-provider, set during
+		//      git-provider registration in the wizard).
+		//   2. Vault tokens matching standard provider env vars
+		//      (GITHUB_TOKEN, GITLAB_TOKEN, GITEA_TOKEN, ANTHROPIC_API_KEY).
+		spawnEnv := s.collectVCSTokenEnv(req.ProviderID)
 		info, _, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:          req.Name,
 			AgentSlug:     req.Agent,
@@ -668,6 +734,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			StatSheet:     req.StatSheet,
 			AgentArgs:     args,
 			ClaudeTokenID: req.ClaudeTokenID,
+			Env:           spawnEnv,
 		})
 		if err == nil && req.Team != "" {
 			_, _ = s.rt.JoinTeam(req.Name, req.Team, runtime.MembershipRole(req.Role), "")
