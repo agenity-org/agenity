@@ -39,13 +39,14 @@ import (
 )
 
 var (
-	runFlagAgent       string
-	runFlagCwd         string
-	runFlagNoShepherd  bool
-	runFlagStateDir    string
-	runFlagHeadless    bool
-	runFlagListen      string
-	runFlagWebDir      string
+	runFlagAgent      string
+	runFlagCwd        string
+	runFlagNoShepherd bool
+	runFlagStateDir   string
+	runFlagHeadless   bool
+	runFlagListen     string
+	runFlagWebDir     string
+	runFlagMCPListen  string
 )
 
 var runCmd = &cobra.Command{
@@ -76,6 +77,7 @@ func init() {
 	runCmd.Flags().BoolVar(&runFlagHeadless, "headless", false, "skip TUI; print runtime status + sleep (for testing / systemd)")
 	runCmd.Flags().StringVar(&runFlagListen, "listen", "127.0.0.1:8080", "HTTP/WS listen addr (set to '' to disable; for web/mobile clients)")
 	runCmd.Flags().StringVar(&runFlagWebDir, "web-dir", "", "serve Astro static build from this dir (production mode; empty = dev-proxy mode)")
+	runCmd.Flags().StringVar(&runFlagMCPListen, "mcp-listen", "", "MCP HTTP/WS listen addr (default: $CHEPHERD_MCP_LISTEN or 0.0.0.0:9090)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -110,13 +112,22 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		}
 	})
 
-	// MCP server on Unix socket — `chepherd mcp` subprocess (used by agents)
-	// dials this socket and proxies JSON-RPC. One server per runtime.
-	mcpSrv := mcpserver.New(rt, mcpserver.DefaultSockPath(stateDir))
-	if err := mcpSrv.Start(); err != nil {
+	// MCP server on HTTP/WebSocket — `chepherd mcp` subprocess (used by
+	// agents) dials this endpoint and proxies JSON-RPC over the WS. One
+	// server per runtime. Works on local Podman, multi-cluster K8s, and
+	// the OpenOva Sovereign without any code change. Closes #124.
+	mcpListen := runFlagMCPListen
+	if mcpListen == "" {
+		mcpListen = os.Getenv("CHEPHERD_MCP_LISTEN")
+	}
+	if mcpListen == "" {
+		mcpListen = mcpserver.DefaultListenAddr
+	}
+	mcpSrv := mcpserver.New(rt)
+	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
-	fmt.Printf("✓ MCP server listening on %s\n", mcpserver.DefaultSockPath(stateDir))
+	fmt.Printf("✓ MCP server (HTTP/WS) listening on http://%s/mcp/ws\n", mcpListen)
 
 	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),
 	// and remote-TUI clients. Disabled when --listen "".

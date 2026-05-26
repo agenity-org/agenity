@@ -1,10 +1,14 @@
 // Package mcpserver implements chepherd's MCP server — the control-plane
 // tool surface every chepherd-hosted agent calls into.
 //
-// Wire: MCP over stdio JSON-RPC 2.0. The chepherd binary's `mcp` subcommand
-// is the stdio bridge — it connects to chepherd's main runtime via a Unix
-// socket at $XDG_STATE/chepherd-v05/runtime.sock, then proxies the agent's
-// stdio JSON-RPC over that socket.
+// Wire: MCP over JSON-RPC 2.0 carried by HTTP + WebSocket on TCP :9090.
+// The chepherd binary's `mcp` subcommand is the stdio→WS bridge:
+// claude-code spawns it as a stdio subprocess; the subprocess opens a
+// WebSocket back to chepherd's daemon (CHEPHERD_MCP_URL env or --url
+// flag) and shuttles frames between agent stdio and the WS connection.
+//
+// The Unix-socket transport (v0.5–v0.7) has been retired — it didn't
+// survive Kubernetes node boundaries.
 //
 // Tool set (chepherd.* namespace; reserved by agreement with openova):
 //
@@ -19,25 +23,24 @@
 package mcpserver
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
+	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/chepherd/chepherd/internal/runtime"
 )
 
-// Server hosts the JSON-RPC over a Unix socket. Constructed once per
-// chepherd-run process.
+// Server hosts the chepherd MCP JSON-RPC surface. Constructed once per
+// chepherd-run process. The HTTP/WebSocket listener is started via
+// StartHTTP() and torn down via Stop().
 type Server struct {
-	rt       *runtime.Runtime
-	sockPath string
-	listener net.Listener
+	rt           *runtime.Runtime
+	httpListener net.Listener
+	httpServer   *http.Server
 	// lastCaller is the most-recently-identified agent name. Set per
 	// dispatch in dispatchWithAgent — handlers read it to attribute
 	// events. NOT thread-safe across concurrent dispatches; serveConn
@@ -57,86 +60,19 @@ func (s *Server) CurrentCaller() string {
 	return s.lastCaller
 }
 
-// New constructs a Server bound to the runtime + a Unix socket at sockPath.
-func New(rt *runtime.Runtime, sockPath string) *Server {
-	return &Server{rt: rt, sockPath: sockPath}
+// New constructs a Server bound to the runtime. Call StartHTTP(addr) to
+// begin accepting connections.
+func New(rt *runtime.Runtime) *Server {
+	return &Server{rt: rt}
 }
 
-// DefaultSockPath returns the canonical chepherd runtime socket location.
-func DefaultSockPath(stateDir string) string {
-	return filepath.Join(stateDir, "runtime.sock")
-}
+// DefaultListenAddr is the canonical MCP HTTP bind address. Override per
+// deployment via the chepherd run --mcp-listen flag or CHEPHERD_MCP_LISTEN.
+const DefaultListenAddr = "0.0.0.0:9090"
 
-// Start binds the Unix socket + serves connections in goroutines.
-// Idempotent across Stop()→Start(). Returns once listen is established;
-// the accept loop runs in a goroutine.
-func (s *Server) Start() error {
-	_ = os.MkdirAll(filepath.Dir(s.sockPath), 0o700)
-	_ = os.Remove(s.sockPath) // stale socket from prior unclean exit
-	l, err := net.Listen("unix", s.sockPath)
-	if err != nil {
-		return fmt.Errorf("mcp: listen %s: %w", s.sockPath, err)
-	}
-	// 0666 so agent processes (which may run as a different UID inside a
-	// nested container) can connect without chown.
-	_ = os.Chmod(s.sockPath, 0o666)
-	s.listener = l
-	go s.acceptLoop()
-	return nil
-}
-
-// Stop closes the listener; any in-flight connections see EOF.
+// Stop closes the HTTP listener. Idempotent.
 func (s *Server) Stop() {
-	if s.listener != nil {
-		_ = s.listener.Close()
-		_ = os.Remove(s.sockPath)
-	}
-}
-
-func (s *Server) acceptLoop() {
-	for {
-		c, err := s.listener.Accept()
-		if err != nil {
-			return // listener closed
-		}
-		go s.serveConn(c)
-	}
-}
-
-// serveConn handles one MCP client (one chepherd-mcp subprocess bridging
-// one agent). Reads newline-delimited JSON-RPC requests, dispatches to
-// tool handlers, writes responses.
-//
-// Identity: the bridge sends a non-MCP "$/chepherd/identify" first frame
-// with {agent: "<name>"} so the server can attribute every subsequent
-// tool call to the correct agent. Closes #89.
-func (s *Server) serveConn(c net.Conn) {
-	defer c.Close()
-	scanner := bufio.NewScanner(c)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	w := bufio.NewWriter(c)
-	var connAgent string
-	for scanner.Scan() {
-		var req rpcReq
-		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			s.writeErr(w, nil, -32700, "parse error: "+err.Error())
-			continue
-		}
-		// Identity frame — capture caller name + skip dispatch.
-		if req.Method == "$/chepherd/identify" {
-			var p struct {
-				Agent string `json:"agent"`
-			}
-			_ = json.Unmarshal(req.Params, &p)
-			connAgent = p.Agent
-			_ = writeJSON(w, rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"ok": true, "agent": connAgent}})
-			continue
-		}
-		resp := s.dispatchWithAgent(&req, connAgent)
-		if err := writeJSON(w, resp); err != nil {
-			return
-		}
-	}
+	s.stopHTTP()
 }
 
 // dispatchWithAgent wraps dispatch with caller identity context.
@@ -770,24 +706,6 @@ type rpcErr struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-func (s *Server) writeErr(w *bufio.Writer, id any, code int, msg string) {
-	_ = writeJSON(w, rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{Code: code, Message: msg}})
-}
-
-func writeJSON(w *bufio.Writer, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(b); err != nil {
-		return err
-	}
-	if _, err := w.Write([]byte("\n")); err != nil {
-		return err
-	}
-	return w.Flush()
-}
-
 func splitLines(s string) []string {
 	var out []string
 	start := 0
@@ -801,37 +719,4 @@ func splitLines(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
-}
-
-// BridgeStdioToSocket is the implementation of the `chepherd mcp` subcommand:
-// it bridges agent stdio (in/out) ↔ a runtime Unix socket.
-//
-// On connect, the bridge sends a non-MCP "$/chepherd/identify" frame with
-// the agent's name (read from CHEPHERD_AGENT_NAME env var set by runtime
-// at spawn). Server uses this to attribute events to the correct agent
-// instead of hardcoding "shepherd" (#89). Server eats the identify frame
-// — Claude never sees it.
-func BridgeStdioToSocket(sockPath string) error {
-	conn, err := net.Dial("unix", sockPath)
-	if err != nil {
-		return fmt.Errorf("mcp bridge: dial %s: %w", sockPath, err)
-	}
-	defer conn.Close()
-
-	// Send identify frame first, eat its reply so it doesn't leak to Claude.
-	agent := os.Getenv("CHEPHERD_AGENT_NAME")
-	if agent != "" {
-		idFrame := fmt.Sprintf(`{"jsonrpc":"2.0","id":"$id","method":"$/chepherd/identify","params":{"agent":%q}}`+"\n", agent)
-		if _, err := conn.Write([]byte(idFrame)); err == nil {
-			// Read one line (the reply) and discard.
-			rd := bufio.NewReader(conn)
-			_, _ = rd.ReadString('\n')
-		}
-	}
-
-	errCh := make(chan error, 2)
-	go func() { _, err := io.Copy(conn, os.Stdin); errCh <- err }()
-	go func() { _, err := io.Copy(os.Stdout, conn); errCh <- err }()
-	<-errCh
-	return nil
 }

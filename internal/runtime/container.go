@@ -89,7 +89,12 @@ func (r *PodmanRuntime) AgentHomeDir(agentName, stateDir string) (string, error)
 	if src := hostClaudeCredentialsPath(); src != "" {
 		if data, err := os.ReadFile(src); err == nil {
 			dst := filepath.Join(claudeDir, ".credentials.json")
-			if werr := os.WriteFile(dst, data, 0o600); werr == nil {
+			// Mode 0o644: inside rootless podman, host UID 1000 maps to container
+			// root (UID 0), so chown to agentUID=1000 makes the file root-owned
+			// inside the container. The container agent user (container UID 1000 =
+			// host UID ~100999) needs read access via the world-read bit.
+			if werr := os.WriteFile(dst, data, 0o644); werr == nil {
+				_ = os.Chmod(dst, 0o644) // override process umask
 				_ = os.Chown(dst, agentUID, agentUID)
 			}
 		}
@@ -112,6 +117,12 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []st
 		// Bridge networking — slirp4netns is rootless-only inside the container.
 		// Outside the container (dev mode), use host networking.
 		"--network", "bridge",
+		// Make host reachable from inside the container — needed so the
+		// MCP bridge subprocess (running inside the agent container) can
+		// dial back to chepherd on the host via host.containers.internal.
+		// `host-gateway` resolves to the container network's gateway at
+		// runtime; works on Podman + Docker.
+		"--add-host", "host.containers.internal:host-gateway",
 		// Per-agent persistent home (claude session files, config).
 		"-v", agentHomeDir+":/home/agent:rw",
 		// Working repo — read/write.
@@ -166,6 +177,8 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []st
 		"docker", "run", "--rm", "--interactive", "--tty",
 		"--name", "chepherd-agent-" + agentName,
 		"--network", "bridge",
+		// Reach the host (where chepherd runs) via host.containers.internal.
+		"--add-host", "host.containers.internal:host-gateway",
 		"-v", agentHomeDir + ":/home/agent:rw",
 		"-v", cwd + ":" + cwd + ":rw",
 		"--workdir", cwd,
@@ -205,11 +218,13 @@ func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // mcpMounts returns the `-v host:container:mode` strings needed to give a
-// container access to chepherd's MCP infrastructure. It reads three things
-// from the agent's env vars:
-//   - CHEPHERD_MCP_CONFIG  → the session dir (parent) mounted ro
-//   - CHEPHERD_MCP_SOCK    → the Unix socket file mounted rw
-//   - the chepherd binary  → looked up via os.Executable, mounted ro
+// container access to chepherd's MCP infrastructure. As of v0.8 the MCP
+// transport is HTTP/WS over TCP — there is no Unix socket to bind-mount,
+// so the agent reaches chepherd via DNS (host.containers.internal on
+// Podman, the chepherd Service on K8s). We still mount:
+//   - CHEPHERD_MCP_CONFIG  → the session dir containing .mcp.json (ro)
+//   - the chepherd binary  → looked up via os.Executable (ro), so the
+//     agent's stdio→WS bridge subprocess can launch
 //
 // Paths that don't exist are silently skipped.
 func mcpMounts(env []string) []string {
@@ -227,13 +242,6 @@ func mcpMounts(env []string) []string {
 		sessDir := filepath.Dir(cfgPath)
 		if _, err := os.Stat(sessDir); err == nil {
 			mounts = append(mounts, sessDir+":"+sessDir+":ro")
-		}
-	}
-
-	// Unix socket used by the MCP server.
-	if sockPath := envMap["CHEPHERD_MCP_SOCK"]; sockPath != "" {
-		if _, err := os.Stat(sockPath); err == nil {
-			mounts = append(mounts, sockPath+":"+sockPath+":rw")
 		}
 	}
 

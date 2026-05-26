@@ -440,7 +440,7 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// Tag the child process with its agent name so the MCP bridge can
 	// forward it as actor identity on every JSON-RPC call. Without this
 	// the server can't tell which shepherd / worker made which call
-	// (#89). Read by the bridge in BridgeStdioToSocket via os.Getenv.
+	// (#89). Read by the bridge in BridgeStdioToHTTP via os.Getenv.
 	envWithMCP = append(envWithMCP, "CHEPHERD_AGENT_NAME="+spec.Name)
 
 	// For Claude Code, pass the absolute mcp-config path explicitly.
@@ -1458,10 +1458,17 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// is subject to the process umask. Chmod explicitly so the container user
 	// (different UID in the user namespace) can read both.
 	_ = os.Chmod(cfgDir, 0o755)
-	sockPath := filepath.Join(r.stateDir, "runtime.sock")
+	// MCP URL the agent's bridge subprocess will dial. v0.8 default:
+	// host.containers.internal lets a Podman-rootless agent container
+	// reach the chepherd daemon running on the host. Override via
+	// CHEPHERD_MCP_URL when chepherd is in-cluster (k8s Service DNS).
+	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
+	if mcpURL == "" {
+		mcpURL = "ws://host.containers.internal:9090/mcp/ws"
+	}
 	// Use the absolute path of the currently-running chepherd binary so
 	// the MCP-bridge subprocess matches the running runtime regardless
-	// of PATH or install name (chepherd vs chepherd-v05).
+	// of PATH or install name.
 	chepBin, _ := os.Executable()
 	if chepBin == "" {
 		chepBin = "chepherd"
@@ -1470,7 +1477,7 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		"mcpServers": map[string]any{
 			"chepherd": map[string]any{
 				"command": chepBin,
-				"args":    []string{"mcp", "--sock", sockPath},
+				"args":    []string{"mcp", "--url", mcpURL},
 				"env":     map[string]string{},
 			},
 		},
@@ -1513,7 +1520,7 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// Env hint for agents that read MCP server URL directly (e.g. some
 	// experimental SDK paths). Harmless if unused.
 	return []string{
-		"CHEPHERD_MCP_SOCK=" + sockPath,
+		"CHEPHERD_MCP_URL=" + mcpURL,
 		"CHEPHERD_MCP_CONFIG=" + cfgPath,
 	}, cfgPath, nil
 }
