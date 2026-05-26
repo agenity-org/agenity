@@ -18,6 +18,24 @@ runtime:
   ringBufferBytes: 1048576      # 1 MiB per session (override via SANDBOX_RING_BUFFER_BYTES)
   agentsCatalogPath: ""         # CHEPHERD_AGENTS_PATH override; empty = builtin
 
+# v0.8 deployment profile (#129) — selects a coherent preset of spawner /
+# auth / storage / tls. Individual knobs override the preset.
+#
+#   minimal     - hobby Podman             (spawner=podman-sidecar, auth=local)
+#   standard    - generic K8s              (spawner=operator,       auth=local)
+#   enterprise  - OpenOva Sovereign         (spawner=operator,       auth=oidc)
+#
+# When deployed via this chart onto a Sovereign, "standard" is the
+# correct default; "enterprise" turns on Keycloak OIDC.
+profile:
+  name: standard
+  spawner: ""          # override: podman-sidecar | operator | direct
+  auth:
+    mode: ""           # override: local | oidc
+    oidcIssuer: ""     # required when auth.mode=oidc
+  storage: ""          # override: local-volume | pvc
+  tls: ""              # override: none | mesh
+
 # WebSocket + TUI surfaces.
 service:
   type: ClusterIP

@@ -1,0 +1,54 @@
+# Podman Kube YAML — bring up chepherd locally with one command:
+#
+#   podman play kube deploy/chepherd-pod.yaml
+#
+# This is the recommended setup for hobby users running CHEPHERD_PROFILE=minimal.
+# On Kubernetes use blueprint/chart/ (Helm chart) instead.
+#
+# Default values match v0.8 hobby-Podman expectations:
+#   - daemon listens on 8083 (web UI) + 9090 (MCP HTTP/WS)
+#   - state persisted to a named volume "chepherd-state"
+#   - agent containers spawned alongside via the host podman socket
+#
+# Override CHEPHERD_PROFILE / CHEPHERD_AUTH_MODE / etc. at the env level
+# before running podman play kube.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chepherd
+  labels:
+    app: chepherd
+spec:
+  containers:
+    - name: chepherd
+      image: localhost/chepherd:v0.8-test
+      args:
+        - run
+        - --listen=0.0.0.0:8083
+        - --web-dir=/app/web/dist
+        - --headless
+      env:
+        - name: CHEPHERD_PROFILE
+          value: minimal
+      ports:
+        - containerPort: 8083
+          hostPort: 8083
+        - containerPort: 9090
+          hostPort: 9090
+      volumeMounts:
+        - name: state
+          mountPath: /home/chepherd/.local/state/chepherd
+  volumes:
+    - name: state
+      persistentVolumeClaim:
+        claimName: chepherd-state
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chepherd-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi

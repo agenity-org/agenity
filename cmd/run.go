@@ -30,6 +30,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
+	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
@@ -93,11 +94,15 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		cwd, _ = os.Getwd()
 	}
 
-	fmt.Printf("chepherd run — v0.5 runtime\n")
+	prof := profile.Resolve()
+
+	fmt.Printf("chepherd run — v0.8 runtime\n")
 	fmt.Printf("  state-dir: %s\n", stateDir)
 	fmt.Printf("  agent:     %s\n", runFlagAgent)
 	fmt.Printf("  cwd:       %s\n", cwd)
-	fmt.Printf("  shepherd:  %v\n\n", !runFlagNoShepherd)
+	fmt.Printf("  shepherd:  %v\n", !runFlagNoShepherd)
+	fmt.Printf("  profile:   %s (spawner=%s auth=%s storage=%s tls=%s)\n\n",
+		profileNameOrDefault(prof.Name), prof.Spawner, prof.AuthMode, prof.StorageType, prof.TLSMode)
 
 	rt, err := runtime.New(stateDir)
 	if err != nil {
@@ -136,6 +141,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if runFlagListen != "" {
 		rs := runtimehttp.New(rt)
 		rs.WebDir = runFlagWebDir
+		rs.Profile = &prof
 		// Vault — open (or create) in the state directory
 		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: vault: %v (credential vault disabled)\n", err)
@@ -145,9 +151,11 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			// is sourced from the vault on every spawn (TV1 / R4).
 			rt.SetVault(newRuntimeVaultAdapter(vlt))
 		}
-		// Auth provider — local (HS256 JWT) by default; oidc when
-		// CHEPHERD_AUTH_MODE=oidc + CHEPHERD_OIDC_ISSUER set (#128).
-		if ap, err := auth.New("", stateDir, ""); err != nil {
+		// Auth provider — sourced from resolved profile (#129). The
+		// per-knob env vars are already applied by profile.Resolve, so
+		// pass the materialized values here instead of letting auth.New
+		// re-read the environment.
+		if ap, err := auth.New(prof.AuthMode, stateDir, prof.OIDCIssuer); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: auth: %v (server is unauthenticated)\n", err)
 		} else {
 			rs.Auth = ap
@@ -248,6 +256,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	err = app.Run()
 	shutdown()
 	return err
+}
+
+func profileNameOrDefault(n string) string {
+	if n == "" {
+		return "(auto)"
+	}
+	return n
 }
 
 // runtimeVaultAdapter adapts *vault.Vault to runtime.VaultProvider — the

@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chepherd-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: chepherd-operator
+    app.kubernetes.io/managed-by: helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chepherd-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: chepherd-operator
+    spec:
+      serviceAccountName: chepherd-operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          image: {{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["operator"]   # chepherd binary as a controller subcommand
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: ALLOWED_IMAGE_PREFIX
+              value: {{ .Values.kyverno.allowedImagePrefix | quote }}
+            - name: RUNBOOK_URL
+              value: {{ .Values.runbookURL | quote }}
+          ports:
+            - name: metrics
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: metrics }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

@@ -35,6 +35,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/catalog"
+	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
@@ -46,8 +47,9 @@ import (
 type Server struct {
 	rt     *runtime.Runtime
 	WebDir string        // optional: serve Astro static build from this dir
-	Vault  *vault.Vault  // optional: credential vault (nil = vault API returns 503)
-	Auth   auth.AuthProvider // optional: auth provider (nil = no token validation, dev only)
+	Vault   *vault.Vault      // optional: credential vault (nil = vault API returns 503)
+	Auth    auth.AuthProvider // optional: auth provider (nil = no token validation, dev only)
+	Profile *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
 
 	upgrader websocket.Upgrader
 }
@@ -556,11 +558,31 @@ func (s *Server) ServeOn(addr string) (*http.Server, error) {
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	resp := map[string]any{
 		"ok":       true,
 		"sessions": len(s.rt.List()),
 		"ts":       time.Now().UTC(),
-	})
+	}
+	// Deployment profile (#129) — operators + dashboard read this to
+	// know what spawner/auth/storage/tls is wired in.
+	if s.Profile != nil {
+		resp["profile"] = map[string]string{
+			"name":     profileNameOrAuto(s.Profile.Name),
+			"spawner":  s.Profile.Spawner,
+			"auth":     s.Profile.AuthMode,
+			"storage":  s.Profile.StorageType,
+			"tls":      s.Profile.TLSMode,
+			"oidc_iss": s.Profile.OIDCIssuer,
+		}
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func profileNameOrAuto(n string) string {
+	if n == "" {
+		return "auto"
+	}
+	return n
 }
 
 // collectVCSTokenEnv assembles the set of credential env vars to inject

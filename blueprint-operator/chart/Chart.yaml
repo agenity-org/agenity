@@ -1,0 +1,41 @@
+apiVersion: v2
+name: bp-chepherd-operator
+description: |
+  Chepherd Operator — small audited Kubernetes controller that reconciles
+  ChepherdAgent custom resources into agent Pods.
+
+  Architectural rationale (#127): the chepherd daemon should never carry
+  pods/create permissions itself — that's a textbook Falco-flagged
+  privilege escalation. This operator holds pods/create scoped to one
+  namespace + a Kyverno ClusterPolicy enforcing
+    image == chepherd-agent:*  AND  !privileged  AND  !hostPath  AND
+    automountServiceAccountToken: false
+
+  The chepherd daemon's ServiceAccount needs only:
+    apiGroups: ["chepherd.io"]
+    resources:  ["chepherdagents"]
+    verbs:      ["get","list","watch","create","update","delete"]
+
+  ...closing the blast-radius gap.
+
+  This chart installs the CRD + the controller Deployment + the Kyverno
+  policy. It does NOT install the chepherd daemon itself — that's
+  bp-chepherd. Both charts can be installed on the same Sovereign for the
+  enterprise profile.
+type: application
+version: 0.8.0
+appVersion: 0.8.0
+keywords:
+  - chepherd
+  - kubernetes-operator
+  - agent-runtime
+  - openova-blueprint
+maintainers:
+  - name: chepherd team
+    url: https://chepherd.io
+sources:
+  - https://github.com/chepherd/chepherd
+icon: https://chepherd.io/brand/icon.svg
+annotations:
+  category: AI/Agent Runtime
+  openova.io/blueprint-type: thirdparty
