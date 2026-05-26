@@ -19,6 +19,7 @@
   import WidgetAgentDetails from './widgets/WidgetAgentDetails.svelte';
   import WidgetCanon from './widgets/WidgetCanon.svelte';
   import WidgetMCPLog from './widgets/WidgetMCPLog.svelte';
+  import WidgetKanban from './widgets/WidgetKanban.svelte';
 
   let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, changeWidget, splitPane, removePane, refresh } = $props();
 
@@ -65,6 +66,7 @@
     'canon-viewer': '📜 canon',
     'agent-prompt': '✏ prompt',
     'agent-skills': '🎮 skills',
+    'kanban': '⊞ kanban',
     // Legacy single-purpose cards kept for back-compat (saved layouts).
     'identity-card': 'ⓘ identity (legacy)',
     'location-card': '📍 location (legacy)',
@@ -189,6 +191,8 @@
         <WidgetAgentSkills agent={selectedAgentObject()} />
       {:else if node.widget === 'canon-viewer'}
         <WidgetCanon agent={selectedAgentObject()} {teams} />
+      {:else if node.widget === 'kanban'}
+        <WidgetKanban agent={selectedAgentObject()} {sessions} />
       {:else}
         <div class="empty">widget: {node.widget}</div>
       {/if}

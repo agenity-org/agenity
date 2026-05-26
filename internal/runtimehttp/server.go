@@ -92,6 +92,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/folders/git-info", s.gitInfoHandler)
 	mux.HandleFunc("/api/v1/folders/git-setup", s.gitSetupHandler)
 	mux.HandleFunc("/api/v1/teams/saved", s.savedTeamsHandler)
+	mux.HandleFunc("/api/v1/kanban", s.kanbanIssues)
+	mux.HandleFunc("/api/v1/kanban/move", s.kanbanMove)
 
 	return logMiddleware(mux)
 }
@@ -1656,6 +1658,161 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// ─── Kanban proxy ────────────────────────────────────────────────────────────
+
+// kanbanIssues proxies GET /api/v1/kanban?repo=<github-url>&state=open&per_page=100
+// to the GitHub REST API. Uses GITHUB_TOKEN from env if available for auth.
+func (s *Server) kanbanIssues(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	repoURL := r.URL.Query().Get("repo")
+	if repoURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "repo required"})
+		return
+	}
+	// Convert github.com/org/repo → api.github.com/repos/org/repo/issues
+	apiURL, err := githubAPIURL(repoURL, "/issues")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	state := r.URL.Query().Get("state")
+	if state == "" {
+		state = "open"
+	}
+	apiURL += "?state=" + state + "&per_page=100"
+	body, status, err := githubAPIGet(apiURL)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	if status != http.StatusOK {
+		w.WriteHeader(status)
+		_, _ = w.Write(body)
+		return
+	}
+	var raw []any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "invalid JSON from GitHub"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"issues": raw})
+}
+
+// kanbanMove updates the status label on a GitHub issue via the API.
+// POST /api/v1/kanban/move  body: {repo, issue_number, status_label, remove_labels}
+func (s *Server) kanbanMove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Repo         string   `json:"repo"`
+		IssueNumber  int      `json:"issue_number"`
+		StatusLabel  string   `json:"status_label"`   // "" = backlog (no status label)
+		RemoveLabels []string `json:"remove_labels"`  // existing status labels to strip
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	// First: remove old status labels one by one.
+	for _, lbl := range req.RemoveLabels {
+		apiURL, err := githubAPIURL(req.Repo, fmt.Sprintf("/issues/%d/labels/%s", req.IssueNumber, lbl))
+		if err != nil {
+			continue
+		}
+		_, _, _ = githubAPIDelete(apiURL)
+	}
+	// Then: add new status label (if not backlog).
+	if req.StatusLabel != "" {
+		apiURL, err := githubAPIURL(req.Repo, fmt.Sprintf("/issues/%d/labels", req.IssueNumber))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		body, _ := json.Marshal(map[string]any{"labels": []string{req.StatusLabel}})
+		if _, _, err := githubAPIPost(apiURL, body); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// githubAPIURL converts a github.com/org/repo URL to an api.github.com path.
+func githubAPIURL(repoURL, suffix string) (string, error) {
+	repoURL = strings.TrimRight(repoURL, "/")
+	repoURL = strings.TrimSuffix(repoURL, ".git")
+	for _, prefix := range []string{"https://github.com/", "http://github.com/", "git@github.com:"} {
+		if strings.HasPrefix(repoURL, prefix) {
+			slug := strings.TrimPrefix(repoURL, prefix)
+			return "https://api.github.com/repos/" + slug + suffix, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported repo URL format: %s", repoURL)
+}
+
+func githubAPIGet(url string) ([]byte, int, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return body, resp.StatusCode, nil
+}
+
+func githubAPIPost(url string, body []byte) ([]byte, int, error) {
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return b, resp.StatusCode, nil
+}
+
+func githubAPIDelete(url string) ([]byte, int, error) {
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return b, resp.StatusCode, nil
 }
 
 func logMiddleware(h http.Handler) http.Handler {
