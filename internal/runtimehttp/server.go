@@ -517,6 +517,19 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 		}
 		_, info2 := s.rt.Get(name)
 		writeJSON(w, http.StatusOK, info2)
+	case sub == "rename" && r.Method == http.MethodPost:
+		var req struct {
+			NewName string `json:"new_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := s.rt.Rename(name, req.NewName); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": req.NewName})
 	case sub == "restart" && r.Method == http.MethodPost:
 		info2, err := s.rt.Restart(name)
 		if err != nil {

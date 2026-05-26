@@ -360,6 +360,16 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 			extraArgs = append(extraArgs, "--system-prompt", spec.SystemPrompt)
 		}
 	}
+	// Pass model_tier through to the CLI so the operator's pick in
+	// AgentSettings → Skills actually changes which model the agent runs on.
+	if spec.StatSheet.ModelTier != "" {
+		switch spec.AgentSlug {
+		case "claude-code":
+			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+		case "qwen-code":
+			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+		}
+	}
 
 	// Write per-session MCP config so the agent discovers chepherd's MCP
 	// server. Writes a project-scoped .mcp.json next to the agent's cwd
@@ -1138,6 +1148,44 @@ func contextSizeFor(model string) int {
 		return 200_000
 	}
 	return 0
+}
+
+// Rename changes the @-address of a live session. Cascades through
+// byName index, memberships, and any in-flight scorecards / verdicts.
+// The underlying PTY process is unaffected.
+func (r *Runtime) Rename(oldName, newName string) error {
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("runtime.Rename: oldName and newName required")
+	}
+	if oldName == newName {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byName[oldName]
+	if !ok {
+		return fmt.Errorf("runtime.Rename: unknown session %q", oldName)
+	}
+	if _, taken := r.byName[newName]; taken {
+		return fmt.Errorf("runtime.Rename: name %q already in use", newName)
+	}
+	r.info[id].Name = newName
+	delete(r.byName, oldName)
+	r.byName[newName] = id
+	// Cascade through memberships keyed by agent name
+	for key, m := range r.memberships {
+		if m.AgentName == oldName {
+			m.AgentName = newName
+			delete(r.memberships, key)
+			r.memberships[newName+"|"+m.TeamName] = m
+		}
+	}
+	r.cond.Broadcast()
+	r.RecordEvent(Event{
+		Kind: "agent_renamed", Actor: "operator",
+		Body: fmt.Sprintf("agent %q renamed → %q", oldName, newName),
+	})
+	return nil
 }
 
 // Restart stops the named session + spawns a replacement with the same
