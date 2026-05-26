@@ -45,11 +45,17 @@
   // Claude OAuth tokens (R5 / #136) — vault entries + host fallback
   let claudeTokens = $state([]);
   let selectedClaudeTokenId = $state('');   // default: empty → pick newest claude-oauth at spawn
-  let pasteMode = $state(false);
-  let pasteText = $state('');
-  let pasteLabel = $state('');
-  let pasteBusy = $state(false);
-  let pasteError = $state('');
+
+  // Live OAuth-capture flow state
+  let oauthMode = $state(false);           // true while a login capture is in progress
+  let oauthAgentName = $state('');         // ephemeral agent name backing this capture
+  let oauthURL = $state('');               // captured OAuth URL once visible
+  let oauthCode = $state('');              // user-pasted auth code
+  let oauthLabel = $state('');             // optional vault-entry label
+  let oauthBusy = $state(false);           // network in flight
+  let oauthError = $state('');
+  let oauthStatus = $state('');            // human-readable progress line
+  let oauthPollHandle = null;
 
   const SHAPES = [
     { id: 'solo',            icon: '🧑',  title: 'Solo',             blurb: 'One agent, no shepherd. Quick exploration.' },
@@ -109,20 +115,84 @@
     } catch { claudeTokens = []; }
   }
 
-  async function savePastedClaudeToken() {
-    pasteBusy = true; pasteError = '';
+  // ── OAuth-capture flow ────────────────────────────────────────────────────
+  // 1. POST /claude-tokens/login-begin → spawn ephemeral agent
+  // 2. Poll GET  /claude-tokens/login-url/<name>  → returns {url} once visible
+  // 3. User clicks URL → authorises in their browser → gets redirected to a page
+  //    showing an authorisation code
+  // 4. User pastes that code → POST /claude-tokens/login-submit/<name>
+  // 5. Server injects code into agent PTY, harvests credentials.json,
+  //    upserts vault, terminates ephemeral agent → returns new token id.
+  async function beginOAuthLogin() {
+    oauthBusy = true; oauthError = ''; oauthURL = ''; oauthCode = '';
+    oauthStatus = 'Spawning capture agent…';
     try {
-      const r = await fetch(`${API}/claude-tokens/paste`, {
+      const r = await fetch(`${API}/claude-tokens/login-begin`, { method: 'POST' });
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      oauthAgentName = d.name;
+      oauthMode = true;
+      oauthStatus = 'Waiting for Claude to print the login URL…';
+      pollForOAuthURL();
+    } catch (e) {
+      oauthError = e.message || String(e);
+      oauthBusy = false;
+    }
+  }
+
+  function pollForOAuthURL() {
+    let attempts = 0;
+    const tick = async () => {
+      if (!oauthMode || !oauthAgentName) return;
+      attempts++;
+      try {
+        const r = await fetch(`${API}/claude-tokens/login-url/${oauthAgentName}`);
+        if (r.status === 200) {
+          const d = await r.json();
+          oauthURL = d.url;
+          oauthStatus = 'Click the link below to authorise, then paste the code that Claude shows you.';
+          oauthBusy = false;
+          return;
+        }
+      } catch {}
+      if (attempts > 60) {  // 60 * 1s = 60s
+        oauthError = 'Capture agent never printed a Claude login URL. Cancel and retry.';
+        oauthBusy = false;
+        return;
+      }
+      oauthPollHandle = setTimeout(tick, 1000);
+    };
+    tick();
+  }
+
+  async function submitOAuthCode() {
+    if (!oauthCode) { oauthError = 'Paste the code Claude showed you after authorising.'; return; }
+    oauthBusy = true; oauthError = '';
+    oauthStatus = 'Submitting code to capture agent…';
+    try {
+      const r = await fetch(`${API}/claude-tokens/login-submit/${oauthAgentName}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: pasteLabel || '', value: pasteText }),
+        body: JSON.stringify({ code: oauthCode.trim(), label: oauthLabel || '' }),
       });
-      if (!r.ok) { const e = await r.text(); throw new Error(e || `HTTP ${r.status}`); }
+      if (!r.ok) throw new Error(await r.text());
       const d = await r.json();
       await loadClaudeTokens();
       selectedClaudeTokenId = d.id;
-      pasteMode = false; pasteText = ''; pasteLabel = '';
-    } catch (e) { pasteError = e.message || String(e); }
-    pasteBusy = false;
+      oauthMode = false; oauthAgentName = ''; oauthURL = ''; oauthCode = ''; oauthLabel = '';
+      oauthStatus = '';
+    } catch (e) {
+      oauthError = e.message || String(e);
+    }
+    oauthBusy = false;
+  }
+
+  async function cancelOAuthLogin() {
+    if (oauthPollHandle) { clearTimeout(oauthPollHandle); oauthPollHandle = null; }
+    if (oauthAgentName) {
+      try { await fetch(`${API}/claude-tokens/login-cancel/${oauthAgentName}`, { method: 'POST' }); } catch {}
+    }
+    oauthMode = false; oauthAgentName = ''; oauthURL = ''; oauthCode = ''; oauthLabel = '';
+    oauthBusy = false; oauthError = ''; oauthStatus = '';
   }
 
   async function loadProviders() {
@@ -456,7 +526,7 @@
           <p class="prose">One Claude credential available — selected automatically. Add more if you want to switch accounts per agent.</p>
         {/if}
 
-        {#if !pasteMode}
+        {#if !oauthMode}
           <div class="provider-grid">
             {#each claudeTokens as t}
               <button class="provider-card" class:active={selectedClaudeTokenId===t.id}
@@ -469,26 +539,39 @@
               </button>
             {/each}
           </div>
-          <button class="add-repo-btn" on:click={() => { pasteMode = true; pasteError = ''; }}>
-            + Paste credentials.json
+          <button class="add-repo-btn" on:click={beginOAuthLogin}>
+            + Log in to Claude
           </button>
         {:else}
           <div class="register-form">
             <p class="prose" style="margin-top:0">
-              Paste the contents of <code>~/.claude/.credentials.json</code> from a machine where you've already run <code>claude</code> and logged in. Or run <code>claude</code> once on this machine first.
+              <strong>Step 1.</strong> Click the link below to open Claude's login page in a new tab. Authorise chepherd. Claude will redirect you to a page that shows an <em>authorisation code</em>.
             </p>
-            <label class="field-label">Label <small>(optional)</small>
-              <input bind:value={pasteLabel} placeholder="e.g. work-claude-max" />
-            </label>
-            <label class="field-label">credentials.json content
-              <textarea bind:value={pasteText} rows="6" placeholder={'{"claudeAiOauth": {"accessToken": "..."}}'}></textarea>
-            </label>
-            {#if pasteError}<div class="error">{pasteError}</div>{/if}
+            {#if oauthBusy && !oauthURL}
+              <div class="login-status">{oauthStatus}</div>
+              <div class="spinner-row"><div class="spinner"></div></div>
+            {:else if oauthURL}
+              <a class="oauth-link" href={oauthURL} target="_blank" rel="noopener">
+                🔑 Open Claude login →
+              </a>
+              <p class="prose" style="margin-top:1rem">
+                <strong>Step 2.</strong> Paste the code Claude shows you after authorising.
+              </p>
+              <label class="field-label">Authorisation code
+                <input bind:value={oauthCode} placeholder="(paste the code from Claude's page)" autofocus />
+              </label>
+              <label class="field-label">Label this account <small>(optional)</small>
+                <input bind:value={oauthLabel} placeholder="e.g. work-claude-max" />
+              </label>
+            {/if}
+            {#if oauthError}<div class="error">{oauthError}</div>{/if}
             <div class="reg-actions">
-              <button class="ghost" on:click={() => { pasteMode = false; pasteError = ''; }}>Cancel</button>
-              <button class="primary" on:click={savePastedClaudeToken} disabled={pasteBusy || !pasteText}>
-                {pasteBusy ? 'Saving…' : 'Save credential'}
-              </button>
+              <button class="ghost" on:click={cancelOAuthLogin} disabled={oauthBusy && !oauthURL}>Cancel</button>
+              {#if oauthURL}
+                <button class="primary" on:click={submitOAuthCode} disabled={oauthBusy || !oauthCode}>
+                  {oauthBusy ? 'Capturing…' : 'Save & continue'}
+                </button>
+              {/if}
             </div>
           </div>
         {/if}
@@ -605,4 +688,11 @@
   button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
   button.ghost { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.45rem 0.95rem; cursor: pointer; font-size: 0.9rem; }
   button.ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* OAuth flow */
+  .login-status { color: var(--fg-muted); font-size: 0.88rem; margin: 0.4rem 0; }
+  .spinner-row { display: flex; justify-content: center; padding: 0.5rem; }
+  .spinner { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: chep-spin 0.8s linear infinite; }
+  @keyframes chep-spin { to { transform: rotate(360deg); } }
+  .oauth-link { display: inline-block; padding: 0.6rem 1.1rem; background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; text-decoration: none; font-weight: 600; margin: 0.4rem 0; word-break: break-all; }
+  .oauth-link:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 </style>

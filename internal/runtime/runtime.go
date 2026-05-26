@@ -1619,16 +1619,31 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 // The agent image's entrypoint script links the file into
 // ~/.claude/.credentials.json on container start (see scripts/agent-entrypoint.sh).
 func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
-	dir, err := agentSecretsDirPath(spec.Name, r.stateDir)
+	// Per-spawn UNIQUE secrets dir. The previous spawn's :U mount option
+	// chowns the host-side directory into the container's user namespace
+	// (~UID 100999), which means the host chepherd process can no longer
+	// write to it. Solution: each spawn gets a fresh timestamped dir.
+	// Old dirs are cleaned up by container teardown via `podman unshare`
+	// in a future commit; for now they linger harmlessly under
+	// agents/<name>/secrets-*.
+	parent, err := agentSecretsDirPath(spec.Name, r.stateDir)
 	if err != nil {
 		return "", err
 	}
+	dir := filepath.Join(parent, fmt.Sprintf("spawn-%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
 	dst := filepath.Join(dir, "claude-credentials")
-	// Best-effort: rotate prior content first so a stale token doesn't
-	// leak from a previous spawn under a different account.
-	_ = os.Remove(dst)
 
 	var payload string
+	// __none__ is a sentinel set by the OAuth login-capture flow (R5):
+	// the ephemeral agent must have NO credentials so claude-code falls
+	// into its OAuth prompt and prints the URL we'll capture. Skip both
+	// vault and host fallbacks in that case.
+	if spec.ClaudeTokenID == "__none__" {
+		return dir, nil
+	}
 	if r.vault != nil {
 		if spec.ClaudeTokenID != "" {
 			if v, err := r.vault.GetValue(spec.ClaudeTokenID); err == nil {
@@ -1661,7 +1676,36 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 			return "", err
 		}
 	}
+	// Best-effort GC: nuke prior per-spawn dirs whose contents are now
+	// owned by a container-namespace UID. `podman unshare` enters the
+	// rootless user-namespace where the container-UID maps to UID 0.
+	go cleanupStaleSecretsDirs(parent, dir)
 	return dir, nil
+}
+
+// cleanupStaleSecretsDirs removes spawn-* subdirectories of parent
+// except the one we just wrote. Uses `podman unshare rm -rf` so files
+// chowned into the container's user namespace by a previous :U mount
+// are reachable. Failures are swallowed — this is best-effort cleanup.
+func cleanupStaleSecretsDirs(parent, keep string) {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "spawn-") {
+			continue
+		}
+		full := filepath.Join(parent, e.Name())
+		if full == keep {
+			continue
+		}
+		// Try host first; if EACCES, fall back to podman unshare.
+		if err := os.RemoveAll(full); err == nil {
+			continue
+		}
+		_ = exec.Command("podman", "unshare", "rm", "-rf", full).Run()
+	}
 }
 
 // readGitContext runs `git -C <cwd>` twice to extract the remote-origin

@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -114,6 +115,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
 	mux.HandleFunc("/api/v1/claude-tokens/paste", s.claudeTokensPaste)
 	mux.HandleFunc("/api/v1/claude-tokens/harvest", s.claudeTokensHarvest)
+	// R5 redo (#136): full OAuth capture flow — spawn ephemeral agent,
+	// expose its OAuth URL, accept the auth code, harvest credentials.
+	mux.HandleFunc("/api/v1/claude-tokens/login-begin", s.claudeLoginBegin)
+	mux.HandleFunc("/api/v1/claude-tokens/login-url/", s.claudeLoginURL)
+	mux.HandleFunc("/api/v1/claude-tokens/login-submit/", s.claudeLoginSubmit)
+	mux.HandleFunc("/api/v1/claude-tokens/login-cancel/", s.claudeLoginCancel)
 
 	// /api-v08/ prefix alias — strips to /api/ so the Astro static build
 	// (which uses the versioned dev-proxy path) works against this server
@@ -2343,6 +2350,206 @@ func (s *Server) claudeTokensHarvest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "label": label})
+}
+
+// ─── Claude OAuth login-capture flow (R5 redo / #136) ───────────────────────
+//
+// Spawns an ephemeral agent with NO claude credentials in the vault path.
+// claude-code's first-run logic prints an OAuth URL; chepherd reads it
+// off the agent's ring buffer and surfaces it to the operator as a
+// clickable link. After the operator authenticates in their browser and
+// pastes the code, chepherd injects the code into the agent's PTY stdin
+// and harvests the credentials.json claude-code writes to ~/.claude/
+// into the vault. The ephemeral agent is then terminated.
+
+// claudeOAuthURLRegex captures the canonical claude.com/cai/oauth login
+// URL claude-code prints (longest match wins — claude-code first prints
+// a shorter claude.ai link then overwrites with the full one via \r).
+var claudeOAuthURLRegex = regexp.MustCompile(`https://claude\.(?:ai|com)/[^\s"'<>\x1b\r\n]+`)
+
+// ansiAndCRStrip is the same scrubber the terminal widget uses to
+// reassemble PTY-wrapped URLs into one matchable string.
+var ansiAndCRStrip = regexp.MustCompile(`\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))`)
+
+func scanForClaudeOAuthURL(data []byte) string {
+	// Strip ANSI escapes, then \r and \n, so wrapped URLs reassemble.
+	clean := ansiAndCRStrip.ReplaceAll(data, nil)
+	clean = []byte(strings.ReplaceAll(strings.ReplaceAll(string(clean), "\r", ""), "\n", ""))
+	all := claudeOAuthURLRegex.FindAll(clean, -1)
+	if len(all) == 0 {
+		return ""
+	}
+	best := all[0]
+	for _, m := range all[1:] {
+		if len(m) > len(best) {
+			best = m
+		}
+	}
+	return string(best)
+}
+
+// claudeLoginBegin spawns an ephemeral agent with NO Claude credentials
+// in its secrets dir. claude-code's first-run prompt prints the OAuth
+// URL within seconds; the URL is captured via /login-url polling.
+func (s *Server) claudeLoginBegin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Vault == nil {
+		http.Error(w, "vault not initialised", http.StatusServiceUnavailable)
+		return
+	}
+	name := fmt.Sprintf("oauth-capture-%d", time.Now().UnixNano())
+	// Pass an unresolvable ClaudeTokenID to force materializeAgentSecrets
+	// to skip both vault + host fallback.
+	// Use a small dedicated cwd to avoid mounting the operator's full
+	// home dir + interfering with their .mcp.json symlink.
+	cwd := filepath.Join(s.rt.StateDir(), "oauth-cwd")
+	_ = os.MkdirAll(cwd, 0o755)
+	_, sess, err := s.rt.Spawn(runtime.SpawnSpec{
+		Name:          name,
+		AgentSlug:     "claude-code",
+		Team:          "default",
+		Role:          runtime.RoleWorker,
+		Cwd:           cwd,
+		ClaudeTokenID: "__none__",
+	})
+	if err != nil {
+		http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// claude-code on first run shows a theme picker BEFORE the OAuth URL.
+	// Auto-dismiss it (and any subsequent simple prompts) by sending a
+	// handful of Enter keys spaced out so the URL flow surfaces without
+	// operator input. Each Enter is ~1s apart so any TUI animation lands.
+	if sess != nil {
+		go func() {
+			for i := 0; i < 6; i++ {
+				time.Sleep(2 * time.Second)
+				_, err := sess.Inject([]byte("\r"))
+				if err != nil {
+					return
+				}
+			}
+		}()
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"name": name})
+}
+
+// claudeLoginURL polls the ephemeral agent's ring buffer for the OAuth URL.
+// Returns 202 with {} if not yet visible; 200 with {url} once seen.
+func (s *Server) claudeLoginURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/claude-tokens/login-url/")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	sess, _ := s.rt.Get(name)
+	if sess == nil {
+		http.Error(w, "no such session", http.StatusNotFound)
+		return
+	}
+	sub, replay, err := sess.Subscribe(1)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sess.Unsubscribe(sub)
+	url := scanForClaudeOAuthURL(replay)
+	if url == "" {
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "pending"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": url})
+}
+
+// claudeLoginSubmit accepts the auth code the operator pasted, injects
+// it into the ephemeral agent's PTY stdin, polls for the credentials
+// file to appear, harvests it into the vault, and terminates the agent.
+//
+// Body: {"code": "...", "label": "optional vault label"}
+func (s *Server) claudeLoginSubmit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/claude-tokens/login-submit/")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Code  string `json:"code"`
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.Code == "" {
+		http.Error(w, "code required", http.StatusBadRequest)
+		return
+	}
+	sess, _ := s.rt.Get(name)
+	if sess == nil {
+		http.Error(w, "no such session", http.StatusNotFound)
+		return
+	}
+	// Inject the auth code into the agent's stdin + Enter.
+	_, _ = sess.Inject([]byte(body.Code))
+	time.Sleep(150 * time.Millisecond)
+	_, _ = sess.Inject([]byte("\r"))
+
+	// Poll for ~/.claude/.credentials.json inside the agent's home dir
+	// (host path: agents/<name>/home/.claude/.credentials.json).
+	credPath := filepath.Join(s.rt.StateDir(), "agents", name, "home", ".claude", ".credentials.json")
+	deadline := time.Now().Add(20 * time.Second)
+	var data []byte
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(credPath)
+		if err == nil && len(b) > 0 {
+			data = b
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if data == nil {
+		http.Error(w, "credentials never appeared at "+credPath+" — did the auth code work?", http.StatusGatewayTimeout)
+		return
+	}
+	label := body.Label
+	if label == "" {
+		label = "oauth-captured-" + time.Now().UTC().Format("2006-01-02-15:04")
+	}
+	id, err := s.Vault.Set("", "claude-oauth", label, "", string(data))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Terminate the ephemeral agent — its job is done.
+	_ = s.rt.Stop(name)
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "label": label})
+}
+
+// claudeLoginCancel terminates an in-progress login-capture agent
+// without saving anything. Idempotent.
+func (s *Server) claudeLoginCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/claude-tokens/login-cancel/")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	_ = s.rt.Stop(name)
+	writeJSON(w, http.StatusOK, map[string]string{"cancelled": name})
 }
 
 func logMiddleware(h http.Handler) http.Handler {
