@@ -38,6 +38,13 @@
   let renaming = $state(false);
   let renameDraft = $state(agent?.name || '');
 
+  // Vault / Accounts state
+  let vaultCreds = $state([]);
+  let vaultProviders = $state([]);
+  let vaultAdding = $state(false);
+  let vaultForm = $state({ provider: 'anthropic-api', label: '', env_var: '', value: '' });
+  let vaultSaving = $state(false);
+
   onMount(() => {
     promptDraft = agent?.system_prompt || '';
     renameDraft = agent?.name || '';
@@ -52,6 +59,7 @@
     loadCanon();
     loadMemberships();
     loadGlobalMD();
+    loadVault();
   });
 
   async function loadGlobalMD() {
@@ -60,6 +68,35 @@
       const d = await r.json();
       globalMD = d.body || '';
     } catch {}
+  }
+  async function loadVault() {
+    try {
+      const [cr, pr] = await Promise.all([
+        fetch(`${API}/vault`).then(r => r.ok ? r.json() : []),
+        fetch(`${API}/vault/providers`).then(r => r.ok ? r.json() : []),
+      ]);
+      vaultCreds = Array.isArray(cr) ? cr : [];
+      vaultProviders = Array.isArray(pr) ? pr : [];
+    } catch {}
+  }
+  async function saveVaultCred() {
+    if (!vaultForm.provider || !vaultForm.value) return;
+    vaultSaving = true;
+    try {
+      const r = await fetch(`${API}/vault`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(vaultForm),
+      });
+      if (r.ok) {
+        vaultForm = { provider: 'anthropic-api', label: '', env_var: '', value: '' };
+        vaultAdding = false;
+        await loadVault();
+      }
+    } finally { vaultSaving = false; }
+  }
+  async function deleteVaultCred(id) {
+    await fetch(`${API}/vault/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await loadVault();
   }
   async function loadMemberships() {
     try {
@@ -206,6 +243,7 @@
       <button class:active={tab==='canon'} on:click={() => tab='canon'}>📜 Canon</button>
       <button class:active={tab==='membership'} on:click={() => tab='membership'}>🧩 Membership</button>
       <button class:active={tab==='actions'} on:click={() => tab='actions'}>✎ Rename</button>
+      <button class:active={tab==='accounts'} on:click={() => tab='accounts'}>🔑 Accounts</button>
     </nav>
     <div class="body">
       {#if tab === 'prompt'}
@@ -310,6 +348,47 @@
         <p class="hint">Change the agent's @-address (name). The session, cwd, role, and history remain unchanged. Pause / Resume / Restart / Stop are in the right-click menu on the session list.</p>
         <label>New name <input bind:value={renameDraft} placeholder={agent?.name} /></label>
         <div class="row"><button class="primary" on:click={doRename} disabled={renaming || !renameDraft || renameDraft === agent?.name}>{renaming ? 'Renaming…' : 'Rename'}</button></div>
+      {:else if tab === 'accounts'}
+        <p class="hint">Encrypted credential vault — values are AES-256-GCM encrypted at rest, injected as env vars into agents at spawn. No values are displayed after save.</p>
+        {#if vaultCreds.length}
+        <table class="vault-table">
+          <thead><tr><th>Provider</th><th>Label</th><th>Env var</th><th>Added</th><th></th></tr></thead>
+          <tbody>
+            {#each vaultCreds as c (c.id)}
+            <tr>
+              <td><span class="vault-provider">{c.provider_label || c.provider}</span></td>
+              <td>{c.label || '—'}</td>
+              <td><code>{c.env_var}</code></td>
+              <td class="muted">{new Date(c.created_at).toLocaleDateString()}</td>
+              <td><button class="danger" on:click={() => deleteVaultCred(c.id)}>✕</button></td>
+            </tr>
+            {/each}
+          </tbody>
+        </table>
+        {:else}
+        <p class="hint muted">No credentials stored yet.</p>
+        {/if}
+        {#if vaultAdding}
+        <div class="vault-form">
+          <label>Provider
+            <select bind:value={vaultForm.provider} on:change={() => {
+              const p = vaultProviders.find(x => x.id === vaultForm.provider);
+              if (p && !vaultForm.env_var) vaultForm.env_var = p.default_env;
+            }}>
+              {#each vaultProviders as p}<option value={p.id}>{p.label}</option>{/each}
+            </select>
+          </label>
+          <label>Label (optional) <input bind:value={vaultForm.label} placeholder="e.g. work claude max" /></label>
+          <label>Env var <input bind:value={vaultForm.env_var} placeholder="e.g. ANTHROPIC_API_KEY" /></label>
+          <label>Value (secret) <input type="password" bind:value={vaultForm.value} placeholder="sk-ant-..." /></label>
+          <div class="row">
+            <button class="ghost" on:click={() => { vaultAdding = false; vaultForm = { provider: 'anthropic-api', label: '', env_var: '', value: '' }; }}>Cancel</button>
+            <button class="primary" on:click={saveVaultCred} disabled={vaultSaving || !vaultForm.value}>{vaultSaving ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+        {:else}
+        <div class="row"><button class="ghost" on:click={() => vaultAdding = true}>+ Add credential</button></div>
+        {/if}
       {/if}
     </div>
   </div>
@@ -358,4 +437,14 @@
   button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
   button.ghost { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.45rem 0.95rem; cursor: pointer; }
   .err { color: var(--danger); margin-top: 0.6rem; }
+  .vault-table { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; }
+  .vault-table th { text-align: left; padding: 0.4rem 0.5rem; color: var(--fg-muted); border-bottom: 1px solid var(--border); font-size: 0.78rem; }
+  .vault-table td { padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); font-size: 0.83rem; }
+  .vault-table td.muted { color: var(--fg-muted); font-size: 0.75rem; }
+  .vault-table button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 4px; padding: 0.2rem 0.5rem; cursor: pointer; font-size: 0.78rem; }
+  .vault-provider { font-size: 0.8rem; background: var(--bg-input); border-radius: 4px; padding: 0.1rem 0.4rem; }
+  .vault-form { display: flex; flex-direction: column; gap: 0.6rem; padding: 0.8rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; margin-top: 0.6rem; }
+  .vault-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.82rem; color: var(--fg-muted); }
+  .vault-form input, .vault-form select { width: 100%; box-sizing: border-box; }
+  .muted { color: var(--fg-muted); }
 </style>

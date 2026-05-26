@@ -35,6 +35,7 @@ import (
 	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/runtimehttp"
 	"github.com/chepherd/chepherd/internal/runtimetui"
+	"github.com/chepherd/chepherd/internal/vault"
 )
 
 var (
@@ -123,6 +124,12 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if runFlagListen != "" {
 		rs := runtimehttp.New(rt)
 		rs.WebDir = runFlagWebDir
+		// Vault — open (or create) in the state directory
+		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: vault: %v (credential vault disabled)\n", err)
+		} else {
+			rs.Vault = vlt
+		}
 		hs, err := rs.ServeOn(runFlagListen)
 		if err != nil {
 			return fmt.Errorf("http server: %w", err)

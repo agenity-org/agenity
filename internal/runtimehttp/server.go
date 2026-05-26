@@ -37,13 +37,15 @@ import (
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/chepherd/chepherd/internal/vault"
 )
 
 // Server hosts chepherd runtime endpoints. Caller is responsible for
 // listening on a port + calling http.Serve(listener, server.Handler()).
 type Server struct {
 	rt     *runtime.Runtime
-	WebDir string // optional: serve static Astro build from this dir
+	WebDir string        // optional: serve Astro static build from this dir
+	Vault  *vault.Vault  // optional: credential vault (nil = vault API returns 503)
 
 	upgrader websocket.Upgrader
 }
@@ -96,6 +98,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/teams/saved", s.savedTeamsHandler)
 	mux.HandleFunc("/api/v1/kanban", s.kanbanIssues)
 	mux.HandleFunc("/api/v1/kanban/move", s.kanbanMove)
+
+	// Credential vault
+	mux.HandleFunc("/api/v1/vault", s.vaultRoot)
+	mux.HandleFunc("/api/v1/vault/", s.vaultByID)
+	mux.HandleFunc("/api/v1/vault/providers", s.vaultProviders)
 
 	// /api-v08/ prefix alias — strips to /api/ so the Astro static build
 	// (which uses the versioned dev-proxy path) works against this server
@@ -1862,6 +1869,84 @@ func (s *Server) globalMDHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"body": string(data)})
+}
+
+// ─── vault handlers ──────────────────────────────────────────────────────────
+
+func (s *Server) vaultRoot(w http.ResponseWriter, r *http.Request) {
+	if s.Vault == nil {
+		http.Error(w, "vault not initialised", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.Vault.List())
+	case http.MethodPost:
+		var body struct {
+			ID       string `json:"id"`
+			Provider string `json:"provider"`
+			Label    string `json:"label"`
+			EnvVar   string `json:"env_var"`
+			Value    string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if body.Provider == "" || body.Value == "" {
+			http.Error(w, "provider and value required", http.StatusBadRequest)
+			return
+		}
+		id, err := s.Vault.Set(body.ID, body.Provider, body.Label, body.EnvVar, body.Value)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": id})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) vaultByID(w http.ResponseWriter, r *http.Request) {
+	if s.Vault == nil {
+		http.Error(w, "vault not initialised", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/vault/")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if err := s.Vault.Delete(id); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"deleted": id})
+}
+
+func (s *Server) vaultProviders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	type providerResp struct {
+		ID          string `json:"id"`
+		Label       string `json:"label"`
+		DefaultEnv  string `json:"default_env"`
+		Description string `json:"description"`
+	}
+	out := make([]providerResp, 0, len(vault.KnownProviders))
+	order := []string{"anthropic-api", "openrouter", "newapi", "github-pat", "gitlab-pat", "gitea", "custom"}
+	for _, id := range order {
+		pm := vault.KnownProviders[id]
+		out = append(out, providerResp{ID: id, Label: pm.Label, DefaultEnv: pm.DefaultEnv, Description: pm.Description})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func logMiddleware(h http.Handler) http.Handler {
