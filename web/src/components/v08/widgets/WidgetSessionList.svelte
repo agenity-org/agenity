@@ -125,7 +125,7 @@
 <style>
   .list { padding: 0.5rem 0.5rem; height: 100%; overflow-y: auto; background: var(--bg); }
   .team { margin-bottom: 0.8rem; }
-  .team h3 { font-size: 0.74rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.3rem 0.2rem; font-weight: 600; }
+  .team h3 { font-size: 0.82rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 0.3rem 0.2rem; font-weight: 600; }
   .team-head { cursor: pointer; }
   .team-head:hover { color: var(--accent); }
   .team-meta { color: var(--fg-faint); font-weight: normal; text-transform: none; letter-spacing: 0; }

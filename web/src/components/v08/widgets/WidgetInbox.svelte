@@ -40,7 +40,7 @@
 
 <style>
   .inbox { padding: 0.75rem 0.85rem; height: 100%; overflow-y: auto; background: var(--bg); }
-  h4 { font-size: 0.74rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.55rem 0; font-weight: 600; display: flex; align-items: center; gap: 0.45rem; }
+  h4 { font-size: 0.82rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 0.55rem 0; font-weight: 600; display: flex; align-items: center; gap: 0.45rem; }
   .badge { background: var(--accent); color: #000; border-radius: 9px; padding: 0.04rem 0.45rem; font-size: 0.7rem; font-weight: 700; text-transform: none; }
   .link { margin-left: auto; background: transparent; border: none; color: var(--accent-2); cursor: pointer; font-size: 0.72rem; text-decoration: underline; }
   .hint { color: var(--fg-faint); font-size: 0.82rem; }

@@ -99,6 +99,9 @@
   }
 
   const WIDGETS = Object.keys(WIDGET_LABELS);
+
+  let fullscreen = $state(false);
+  function toggleFullscreen() { fullscreen = !fullscreen; }
 </script>
 
 {#if node.kind === 'h'}
@@ -123,7 +126,7 @@
   </div>
 {:else}
   <!-- leaf pane: widget container -->
-  <div class="pane">
+  <div class="pane" class:fullscreen>
     <header class="pane-header">
       <select class="widget-pick" value={node.widget} on:change={(e) => changeWidget(node.id, e.target.value)}>
         {#each WIDGETS as w}
@@ -154,6 +157,7 @@
       <div class="spacer"></div>
       <button title="split horizontally (add right)" on:click={() => splitPane(node.id, 'h')}>⬌</button>
       <button title="split vertically (add below)" on:click={() => splitPane(node.id, 'v')}>⬍</button>
+      <button title={fullscreen ? 'exit fullscreen' : 'fullscreen'} on:click={toggleFullscreen} class:active={fullscreen}>{fullscreen ? '⊠' : '⊞'}</button>
       <button title="close" on:click={() => removePane(node.id)}>×</button>
     </header>
     <div class="pane-body">
@@ -200,6 +204,8 @@
   .vdivider { height: 6px; cursor: row-resize; background: var(--border); transition: background 0.1s; }
   .hdivider:hover, .vdivider:hover { background: var(--accent); }
   .pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .pane.fullscreen { position: fixed; inset: 0; z-index: 900; border-radius: 0; border: none; }
+  .pane-header button.active { color: var(--accent); }
   .pane-header { display: flex; align-items: center; padding: 0.25rem 0.4rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); font-size: 0.78rem; gap: 0.3rem; }
   .pane-header .spacer { flex: 1; }
   .pane-header button { background: transparent; color: var(--fg-muted); border: none; padding: 0 0.3rem; cursor: pointer; font-size: 0.85rem; }

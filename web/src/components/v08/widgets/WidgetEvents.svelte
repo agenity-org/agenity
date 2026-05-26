@@ -52,7 +52,7 @@
 <style>
   .events { padding: 0.4rem 0.5rem; height: 100%; display: flex; flex-direction: column; background: var(--bg); }
   header { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.3rem; }
-  h4 { font-size: 0.74rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0; font-weight: 600; }
+  h4 { font-size: 0.82rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0; font-weight: 600; }
   input { flex: 1; padding: 0.2rem 0.4rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; font-size: 0.78rem; font-family: ui-monospace, monospace; }
   .count { color: var(--fg-faint); font-size: 0.72rem; }
   ul { list-style: none; padding: 0; margin: 0; flex: 1; overflow-y: auto; }

@@ -42,7 +42,7 @@
 
 <style>
   .spider-card { padding: 0.75rem 0.85rem; height: 100%; overflow-y: auto; background: var(--bg); }
-  h4 { font-size: 0.74rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.55rem 0; font-weight: 600; }
+  h4 { font-size: 0.82rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 0.55rem 0; font-weight: 600; }
   .hint { color: var(--fg-faint); font-size: 0.85rem; }
   .meta { display: grid; grid-template-columns: minmax(70px, auto) 1fr; column-gap: 0.6rem; row-gap: 0.25rem; margin-top: 0.7rem; }
   .meta .k { color: var(--fg-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }

@@ -64,7 +64,7 @@
 
 <style>
   .card { padding: 0.75rem 0.85rem; height: 100%; overflow-y: auto; background: var(--bg); }
-  h4 { font-size: 0.74rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.55rem 0; font-weight: 600; }
+  h4 { font-size: 0.82rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 0.55rem 0; font-weight: 600; }
   .kv { display: grid; grid-template-columns: minmax(60px, auto) 1fr; column-gap: 0.6rem; row-gap: 0.32rem; align-items: baseline; }
   .kv .k { color: var(--fg-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
   .kv .v { color: var(--fg); font-size: 0.86rem; word-break: break-word; }
