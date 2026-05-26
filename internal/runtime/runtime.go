@@ -8,6 +8,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -230,6 +231,7 @@ type Runtime struct {
 	// configuration
 	stateDir         string           // ~/.local/state/chepherd
 	containerRuntime ContainerRuntime // podman | docker | bare
+	spawner          AgentSpawner     // podman-sidecar | operator | direct (#127)
 
 	// vault is the token vault used to materialize /run/secrets/
 	// for agent containers. Nil → fall back to host ~/.claude/.credentials.json.
@@ -369,6 +371,14 @@ func New(stateDir string) (*Runtime, error) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "agents"), 0o700); err != nil {
 		return nil, err
 	}
+	// AgentSpawner is the pluggable strategy that decides how the agent
+	// container/Pod is brought up (#127). Today's default is the local
+	// container runtime; setting CHEPHERD_SPAWNER=operator switches to
+	// the K8s CRD path when bp-chepherd-operator is installed.
+	spawner, err := NewAgentSpawner(DefaultSpawnerMode(), cr)
+	if err != nil {
+		return nil, fmt.Errorf("spawner init: %w", err)
+	}
 	r := &Runtime{
 		sessions:         make(map[string]*session.Session),
 		byName:           make(map[string]string),
@@ -380,6 +390,7 @@ func New(stateDir string) (*Runtime, error) {
 		axisReviews:      make(map[string]map[string]*AxisReview),
 		events:           newEventBuffer(1000),
 		containerRuntime: cr,
+		spawner:          spawner,
 	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
@@ -511,7 +522,24 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime.Spawn: agent secrets: %w", err)
 	}
-	spawnArgv, spawnEnv := r.containerRuntime.SpawnArgs(spec.Name, agentHomeDir, agentSecretsDir, spec.Cwd, argv, env)
+	// Delegate to the configured AgentSpawner (#127). The local path
+	// returns argv ready for ptyhost to exec; future K8s paths return a
+	// PodName instead and the ptyhost streams from there.
+	artifact, err := r.spawner.Spawn(context.Background(), SpawnRequest{
+		Name:         spec.Name,
+		AgentHomeDir: agentHomeDir,
+		SecretsDir:   agentSecretsDir,
+		Cwd:          spec.Cwd,
+		Argv:         argv,
+		Env:          env,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime.Spawn: %w", err)
+	}
+	if artifact.PodName != "" {
+		return nil, nil, fmt.Errorf("runtime.Spawn: PodName attach path not yet implemented (set CHEPHERD_SPAWNER=podman-sidecar)")
+	}
+	spawnArgv, spawnEnv := artifact.LocalArgv, artifact.LocalEnv
 
 	// Spawn the PTY child via ptyhost
 	id := newSessionID(spec.Name)
