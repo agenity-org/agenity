@@ -86,7 +86,7 @@ var Builtin = []Agent{
 		DefaultArgs: []string{"--dangerously-skip-permissions"},
 		DefaultCwd:  "/workspace",
 		RequiredEnv: []string{"LLM_GATEWAY_URL"},
-		Notes:       "Anthropic Claude Code CLI. --dangerously-skip-permissions is safe inside the sandbox PTY (single attack surface).",
+		Notes:       "Anthropic Claude Code CLI. The Bypass-permissions confirmation dialog is suppressed via autoPermissionsNotificationCount=99 written into the agent's ~/.claude.json by chepherd's secrets materializer.",
 	},
 	{
 		Slug:        "cursor-agent",

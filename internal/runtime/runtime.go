@@ -1675,12 +1675,90 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
 			return "", err
 		}
+		// Also write the onboarding stub claude-code v2.1.150 requires
+		// in ~/.claude.json. Without hasCompletedOnboarding: true +
+		// userID + oauthAccount, claude-code re-runs the welcome /
+		// login-method flow even with a valid credentials.json — that
+		// was the "4× Enter" bug operators kept hitting.
+		onboarding := buildClaudeOnboardingStub()
+		if onboarding != "" {
+			_ = os.WriteFile(filepath.Join(dir, "claude-onboarding"), []byte(onboarding), 0o644)
+		}
 	}
 	// Best-effort GC: nuke prior per-spawn dirs whose contents are now
 	// owned by a container-namespace UID. `podman unshare` enters the
 	// rootless user-namespace where the container-UID maps to UID 0.
 	go cleanupStaleSecretsDirs(parent, dir)
 	return dir, nil
+}
+
+// buildClaudeOnboardingStub returns the bytes that should go to
+// /run/secrets/claude-onboarding (→ ~/.claude.json inside the agent
+// container). Sourced from the operator's host ~/.claude.json, filtered
+// to just the identity + first-run-suppression keys claude-code needs:
+//
+//	hasCompletedOnboarding, userID, oauthAccount, firstStartTime,
+//	changelogLastFetched, migrationVersion, opusProMigrationComplete,
+//	sonnet1m45MigrationComplete, tipsHistory, theme
+//
+// Everything else (project-history, per-cwd state, MCP server registry
+// for the host machine, etc.) is NOT propagated — it'd leak operator
+// project state into every agent and bloat the file.
+//
+// Returns "" if no host file exists; callers skip writing the stub and
+// the agent runs through the onboarding flow as before (only useful for
+// the very-first OAuth-capture, which is acceptable).
+func buildClaudeOnboardingStub() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		return ""
+	}
+	var host map[string]any
+	if err := json.Unmarshal(raw, &host); err != nil {
+		return ""
+	}
+	allow := []string{
+		"hasCompletedOnboarding",
+		"userID",
+		"oauthAccount",
+		"firstStartTime",
+		"changelogLastFetched",
+		"migrationVersion",
+		"opusProMigrationComplete",
+		"sonnet1m45MigrationComplete",
+		"tipsHistory",
+		"theme",
+		"installMethod",
+		"isQualifiedForDataSharing",
+		"autoPermissionsNotificationCount", // suppresses Bypass-permissions warning prompt
+		"lastOnboardingVersion",
+		"numStartups",
+		"claudeCodeFirstTokenDate",
+		"opus47LaunchSeenCount",
+		"remoteControlUpsellSeenCount",
+		"remoteDialogSeen",
+		"officialMarketplaceAutoInstallAttempted",
+		"officialMarketplaceAutoInstalled",
+	}
+	stub := map[string]any{}
+	for _, k := range allow {
+		if v, ok := host[k]; ok {
+			stub[k] = v
+		}
+	}
+	// Sane defaults if host lacked anything load-bearing.
+	if _, ok := stub["hasCompletedOnboarding"]; !ok {
+		stub["hasCompletedOnboarding"] = true
+	}
+	b, err := json.Marshal(stub)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // cleanupStaleSecretsDirs removes spawn-* subdirectories of parent

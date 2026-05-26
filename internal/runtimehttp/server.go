@@ -19,6 +19,7 @@ package runtimehttp
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -764,7 +765,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		// the agent would request via env later, not the auto flow).
 		spawnEnv := s.collectVCSTokenEnv(req.ProviderID)
 		spawnEnv = stripEnvKey(spawnEnv, "ANTHROPIC_API_KEY")
-		info, _, err := s.rt.Spawn(runtime.SpawnSpec{
+		info, sess, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:          req.Name,
 			AgentSlug:     req.Agent,
 			Team:          req.Team,
@@ -782,6 +783,9 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
+		}
+		if sess != nil && (req.Agent == "" || req.Agent == "claude-code") {
+			go autoDismissClaudeFirstRunPrompts(sess)
 		}
 		writeJSON(w, http.StatusCreated, info)
 	default:
@@ -2462,21 +2466,45 @@ func autoDismissClaudeFirstRunPrompts(sess *session.Session) {
 	steps := []step{
 		// 1. Theme picker. Default highlight "Dark mode ✔" — Enter accepts.
 		{marker: "Choosethetextstyle", reply: []byte("\r"), pause: 1200 * time.Millisecond},
-		// 2. "Select login method" — default option 1 is "Claude account with
-		//    subscription". Enter accepts. (This prompt appears AFTER the
-		//    theme picker for fresh installs; ANTHROPIC_API_KEY env was
-		//    stripped before spawn so the API-key conflict prompt is gone.)
+		// 2. "Select login method" — default option 1 is "Claude account
+		//    with subscription". Enter accepts. (Only fires when there's
+		//    no usable .credentials.json + .claude.json in agent home.)
 		{marker: "Selectloginmethod", reply: []byte("\r"), pause: 1200 * time.Millisecond},
 		// 3. Legacy/alternate API-key conflict prompt (safety net — only
 		//    fires if ANTHROPIC_API_KEY somehow leaked into env).
 		{marker: "DoyouwanttousethisAPIkey", reply: []byte("2\r"), pause: 1000 * time.Millisecond},
-		// 4. Intro "Press Enter to continue" (some claude-code versions
-		//    show this between login-method pick and the OAuth URL).
+		// 4. "Do you trust the files in this folder?" — fires on every
+		//    fresh container the first time it cd's into the workspace.
+		//    Default is "Yes, I trust this folder" highlighted → Enter
+		//    accepts. We mount the repo and let claude-code at it.
+		{marker: "Yes,Itrustthisfolder", reply: []byte("\r"), pause: 1200 * time.Millisecond},
+		// 5. MCP server approval — chepherd injects its own MCP server
+		//    via .mcp.json into every workspace. Default is "Use this
+		//    and all future MCP servers in this project". Enter accepts.
+		{marker: "UsethisandallfutureMCPserversinthisproject", reply: []byte("\r"), pause: 1200 * time.Millisecond},
+		// 6. Bypass-permissions warning (because we pass --dangerously-skip-permissions).
+		//    Options are "1. No, exit" (default highlight) and "2. Yes, I accept".
+		//    Special-case sentinel — handled in the loop below with split
+		//    Down-arrow + 800ms wait + Enter so claude-code's Ink TUI
+		//    has time to process the selection-change before the confirm.
+		{marker: "BypassPermissionsmode", reply: []byte("__BYPASS_PROMPT__"), pause: 2000 * time.Millisecond},
+		// 7. Intro "Press Enter to continue" (some claude-code versions
+		//    show this between login-method pick and the welcome screen).
 		{marker: "PressEntertocontinue", reply: []byte("\r"), pause: 1000 * time.Millisecond},
 	}
 
+	// Only look at the TAIL of the cleaned buffer — the cumulative buffer
+	// contains every screen claude-code has ever drawn, including the
+	// option labels of already-dismissed prompts. If we matched against
+	// the whole buffer, e.g. "Yes,Itrustthisfolder" (the option label of
+	// the trust prompt) would still appear minutes after it was
+	// dismissed, and step 6 ("BypassPermissionsmode" → "2\r") could fire
+	// during the trust screen with disastrous side effects (selecting
+	// "No, exit" on the trust prompt, killing the container).
+	const tailWindow = 1500
+	fired := make([]bool, len(steps))
 	deadline := time.Now().Add(60 * time.Second)
-	stepIdx := 0
+	idleTicks := 0
 	for time.Now().Before(deadline) {
 		sub, replay, err := sess.Subscribe(1)
 		if err != nil {
@@ -2485,26 +2513,53 @@ func autoDismissClaudeFirstRunPrompts(sess *session.Session) {
 		sess.Unsubscribe(sub)
 		clean := ansiAndCRStrip.ReplaceAll(replay, nil)
 		text := strings.ReplaceAll(strings.ReplaceAll(string(clean), "\r", ""), "\n", "")
-		text = strings.ReplaceAll(text, " ", "") // strip ALL spaces too — TUI rendering eliminates real ones
-		// OAuth URL already visible → done.
-		if strings.Contains(text, "claude.com/cai/oauth") || strings.Contains(text, "claude.ai/oauth") {
-			return
+		text = strings.ReplaceAll(text, " ", "") // TUI strips real spaces
+		// Match only against the most recent window.
+		tail := text
+		if len(text) > tailWindow {
+			tail = text[len(text)-tailWindow:]
 		}
-		// Advance through any markers visible in current buffer.
-		advanced := false
-		for stepIdx < len(steps) {
-			if strings.Contains(text, steps[stepIdx].marker) {
-				_, _ = sess.Inject(steps[stepIdx].reply)
-				time.Sleep(steps[stepIdx].pause)
-				stepIdx++
-				advanced = true
-			} else {
+
+		// Fire AT MOST ONE step per iteration so we don't pile inputs
+		// onto a screen that hasn't transitioned yet.
+		fireIdx := -1
+		for i, st := range steps {
+			if fired[i] {
+				continue
+			}
+			if strings.Contains(tail, st.marker) {
+				fireIdx = i
 				break
 			}
 		}
-		if !advanced {
-			time.Sleep(500 * time.Millisecond)
+		if fireIdx >= 0 {
+			reply := steps[fireIdx].reply
+			if string(reply) == "__BYPASS_PROMPT__" {
+				// Special-case: Bypass-permissions menu. Send Down,
+				// wait for the highlight to move, then Enter.
+				_, _ = sess.Inject([]byte("\x1b[B"))
+				time.Sleep(800 * time.Millisecond)
+				_, _ = sess.Inject([]byte("\r"))
+			} else {
+				_, _ = sess.Inject(reply)
+			}
+			fired[fireIdx] = true
+			time.Sleep(steps[fireIdx].pause)
+			idleTicks = 0
+			continue
 		}
+		// Exit early once OAuth URL is in tail and no remaining steps
+		// to fire — this is the OAuth-capture exit path.
+		if strings.Contains(tail, "claude.com/cai/oauth") || strings.Contains(tail, "claude.ai/oauth") {
+			return
+		}
+		idleTicks++
+		// 8 idle ticks * 500ms = 4s with no marker hit + no OAuth URL
+		// → agent has reached the welcome screen, our job is done.
+		if idleTicks > 8 {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -2576,21 +2631,37 @@ func (s *Server) claudeLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(150 * time.Millisecond)
 	_, _ = sess.Inject([]byte("\r"))
 
-	// Poll for ~/.claude/.credentials.json inside the agent's home dir
-	// (host path: agents/<name>/home/.claude/.credentials.json).
-	credPath := filepath.Join(s.rt.StateDir(), "agents", name, "home", ".claude", ".credentials.json")
-	deadline := time.Now().Add(20 * time.Second)
+	// Poll for the credentials. The agent home dir is bind-mounted with
+	// :U into a UID-remapped namespace, so chepherd (UID 1000 on host)
+	// can't read files claude-code (UID 1000 in container = host UID
+	// ~100999) writes inside that namespace. Use `podman exec` so the
+	// read runs INSIDE the container's namespace where the file is
+	// readable. Fallback: try the host path in case the runtime mode is
+	// bare-exec or :U remapping didn't kick in.
+	credPathHost := filepath.Join(s.rt.StateDir(), "agents", name, "home", ".claude", ".credentials.json")
+	containerName := "chepherd-agent-" + name
+	deadline := time.Now().Add(40 * time.Second)
 	var data []byte
+	var lastErr string
 	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(credPath)
-		if err == nil && len(b) > 0 {
+		// First try `podman exec` — works regardless of UID remapping.
+		out, err := exec.Command("podman", "exec", containerName, "cat", "/home/agent/.claude/.credentials.json").Output()
+		if err == nil && len(out) > 0 && bytes.HasPrefix(bytes.TrimSpace(out), []byte("{")) {
+			data = out
+			break
+		}
+		if err != nil {
+			lastErr = "podman exec: " + err.Error()
+		}
+		// Fallback: try the bind-mounted host path (works on BareExec).
+		if b, err := os.ReadFile(credPathHost); err == nil && len(b) > 0 {
 			data = b
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if data == nil {
-		http.Error(w, "credentials never appeared at "+credPath+" — did the auth code work?", http.StatusGatewayTimeout)
+		http.Error(w, "credentials never appeared — did the auth code work? "+lastErr, http.StatusGatewayTimeout)
 		return
 	}
 	label := body.Label
