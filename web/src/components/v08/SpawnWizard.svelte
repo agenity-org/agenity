@@ -54,6 +54,30 @@
     { id: 'embedded',  label: 'Embedded Gitea (local pod)' },
   ];
 
+  // Auto-detect provider kind from a repo URL.
+  function detectKind(url) {
+    if (!url) return 'github';
+    if (url.includes('github.com')) return 'github';
+    if (url.includes('gitlab.com') || /gitlab\.[a-z]/.test(url)) return 'gitlab';
+    if (url.includes('bitbucket.org')) return 'bitbucket';
+    return 'gitea';
+  }
+  // Return a "get token" link for a given kind.
+  function tokenLink(kind) {
+    switch (kind) {
+      case 'github':    return { url: 'https://github.com/settings/tokens/new?scopes=repo', label: 'GitHub → Settings → Personal Access Tokens' };
+      case 'gitlab':    return { url: 'https://gitlab.com/-/user_settings/personal_access_tokens', label: 'GitLab → Preferences → Access Tokens' };
+      case 'bitbucket': return { url: 'https://bitbucket.org/account/settings/app-passwords/', label: 'Bitbucket → Account → App Passwords' };
+      default:          return null;
+    }
+  }
+
+  // Reactive: auto-update regKind whenever regUrl changes.
+  $effect(() => { if (regUrl) regKind = detectKind(regUrl); });
+
+  let detectedKind = $derived(detectKind(regUrl));
+  let tLink = $derived(tokenLink(detectedKind));
+
   onMount(async () => {
     try { const r = await fetch(`${API}/templates`); templates = (await r.json()).templates || []; } catch {}
     try { const r = await fetch(`${API}/teams/saved`); savedTeams = ((await r.json()).teams || []).filter(t => !t.live); } catch {}
@@ -270,30 +294,33 @@
             <p class="prose">No repos registered yet. Connect one to get started.</p>
           {/if}
           <div class="register-form">
-            <div class="kind-tabs">
-              {#each PROVIDER_KINDS as k}
-                <button class="kind-tab" class:active={regKind===k.id} on:click={() => regKind = k.id}>{k.label}</button>
-              {/each}
-            </div>
-            {#if regKind !== 'embedded'}
-              <label class="field-label">Repo URL
-                <input bind:value={regUrl} placeholder="https://github.com/org/repo" />
-              </label>
+            <label class="field-label">Repo URL
+              <input bind:value={regUrl} placeholder="https://github.com/org/repo" autofocus />
+              {#if regUrl}
+                <div class="detected-kind">
+                  <span class="kind-badge">{detectedKind}</span> detected
+                  {#if tLink}<span class="sep">·</span><a class="token-link" href={tLink.url} target="_blank" rel="noopener">{tLink.label} ↗</a>{/if}
+                </div>
+              {:else}
+                <div class="detected-kind muted">Paste a URL — provider type is auto-detected</div>
+              {/if}
+            </label>
+            {#if detectedKind !== 'embedded'}
               <label class="field-label">Access token
                 <input type="password" bind:value={regToken} placeholder="ghp_… or similar" />
-              </label>
-              <label class="field-label">Label <small>(optional)</small>
-                <input bind:value={regName} placeholder="{regUrl || 'my-repo'}" />
               </label>
             {:else}
               <p class="prose">chepherd will spin up an embedded Gitea container. No external account needed.</p>
             {/if}
+            <label class="field-label">Label <small>(optional — shown in provider list)</small>
+              <input bind:value={regName} placeholder="{regUrl || 'my-repo'}" />
+            </label>
             {#if regError}<div class="error">{regError}</div>{/if}
             <div class="reg-actions">
               {#if showRegisterForm && providers.length > 0}
                 <button class="ghost" on:click={() => { showRegisterForm = false; regError = ''; }}>Cancel</button>
               {/if}
-              <button class="primary" on:click={registerProvider} disabled={regBusy || (regKind !== 'embedded' && !regUrl)}>
+              <button class="primary" on:click={registerProvider} disabled={regBusy || (detectedKind !== 'embedded' && !regUrl)}>
                 {regBusy ? 'Registering…' : 'Register repo'}
               </button>
             </div>
@@ -405,14 +432,17 @@
   .add-repo-btn:hover { border-color: var(--accent); color: var(--accent); }
   /* Register form */
   .register-form { background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; padding: 0.9rem 1rem; }
-  .kind-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.85rem; }
-  .kind-tab { padding: 0.3rem 0.75rem; background: transparent; border: 1px solid var(--border-strong); border-radius: 6px; cursor: pointer; color: var(--fg-muted); font-size: 0.82rem; }
-  .kind-tab:hover { border-color: var(--accent-2); color: var(--fg); }
-  .kind-tab.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .field-label { display: block; color: var(--fg-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.65rem; }
   .field-label input, .field-label select { display: block; width: 100%; margin-top: 0.25rem; padding: 0.45rem 0.6rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-size: 0.9rem; box-sizing: border-box; }
   .field-label small { text-transform: none; letter-spacing: normal; color: var(--fg-faint); }
   .reg-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.85rem; }
+  /* Auto-detected kind hint + token link */
+  .detected-kind { margin-top: 0.3rem; font-size: 0.78rem; color: var(--fg-muted); text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+  .detected-kind.muted { color: var(--fg-faint); font-style: italic; }
+  .kind-badge { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); border-radius: 4px; padding: 0.1rem 0.4rem; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .sep { color: var(--fg-faint); }
+  .token-link { color: var(--accent-2); text-decoration: none; }
+  .token-link:hover { text-decoration: underline; }
   /* Saved teams */
   .saved-teams { display: flex; flex-direction: column; gap: 0.5rem; max-height: 360px; overflow-y: auto; }
   .saved-team { padding: 0.7rem 0.85rem; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; cursor: pointer; text-align: left; color: var(--fg); }

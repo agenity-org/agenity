@@ -98,23 +98,26 @@ func (r *PodmanRuntime) AgentHomeDir(agentName, stateDir string) (string, error)
 }
 
 func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []string, env []string) ([]string, []string) {
-	// Inner podman runs as root inside the --privileged chepherd container.
-	// Explicit --root / --runroot point to the pre-populated agent storage
-	// (written by skopeo on the host before chepherd starts).
-	podArgs := []string{
-		"podman",
-		"--root", agentStorageRoot,
-		"--runroot", agentRunRoot,
+	// When running inside the chepherd container, explicit --root / --runroot
+	// point to the pre-populated agent storage (written by skopeo). Outside the
+	// container (dev mode), those paths don't exist — omit them so podman uses
+	// its default storage on the host.
+	podArgs := []string{"podman"}
+	if _, err := os.Stat(agentStorageRoot); err == nil {
+		podArgs = append(podArgs, "--root", agentStorageRoot, "--runroot", agentRunRoot)
+	}
+	podArgs = append(podArgs,
 		"run", "--rm", "--interactive", "--tty",
-		"--name", "chepherd-agent-" + agentName,
-		// Bridge networking — slirp4netns is rootless-only.
+		"--name", "chepherd-agent-"+agentName,
+		// Bridge networking — slirp4netns is rootless-only inside the container.
+		// Outside the container (dev mode), use host networking.
 		"--network", "bridge",
 		// Per-agent persistent home (claude session files, config).
-		"-v", agentHomeDir + ":/home/agent:rw",
+		"-v", agentHomeDir+":/home/agent:rw",
 		// Working repo — read/write.
-		"-v", cwd + ":" + cwd + ":rw",
+		"-v", cwd+":"+cwd+":rw",
 		"--workdir", cwd,
-	}
+	)
 
 	// Mount MCP infrastructure: the session dir (contains .mcp.json), the
 	// chepherd binary (run as subprocess by claude-code), and the Unix socket.

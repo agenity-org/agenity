@@ -386,7 +386,7 @@
     </div>
     {#if selectedAgent}
       <div class="agent-menu">
-        <button class="secondary" on:click={() => (showAgentMenu = !showAgentMenu)} title="agent actions">⚙ {selectedAgent}</button>
+        <button class="secondary" on:click={() => (showAgentMenu = !showAgentMenu)} title="agent actions">{selectedAgent} ▾</button>
         {#if showAgentMenu}
           <div class="dropdown">
             <button on:click={() => { showAgentSettings = true; showAgentMenu = false; }}>⚙ Settings…</button>
@@ -488,6 +488,9 @@
   :global(.xterm-viewport::-webkit-scrollbar-thumb:hover) { background: var(--scrollbar-thumb-hover); }
   :global(html) { --ws-font: 14px; }
   :global(html), :global(body) { background: var(--bg); color: var(--fg); margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
+  /* Force all form controls to inherit the base font — browsers default
+     buttons/inputs/selects to a system UI font that can differ on some platforms. */
+  :global(button), :global(input), :global(select), :global(textarea) { font-family: inherit; }
   /* Single source of truth: every body-text descendant of a .pane-body
      uses var(--ws-font). Chrome elements (chips, badges, small notes)
      are em-scaled relative to ws-font so they always feel proportional

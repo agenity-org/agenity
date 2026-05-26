@@ -1,6 +1,8 @@
 <!--
-  WidgetAgentDetails — flat single-block KV view. No sub-sections,
-  no extra spacing dividers. Every value gets ellipsis on overflow.
+  WidgetAgentDetails — two cards:
+    1. Identity (static): agent, role, team, repo/branch, account info, model
+    2. Runtime (dynamic): status, uptime, pid, throughput, context, limits
+  Fields removed per operator feedback: cwd, uuid, claude-session.
 -->
 <script>
   import { onMount } from 'svelte';
@@ -61,72 +63,96 @@
     if (agent.context_size === 1_000_000 && !agent.model.includes('[1m]')) return `${agent.model}[1m]`;
     return agent.model;
   }
+  // Session limit + weekly limit come from claudeStatus when available.
+  // Anthropic doesn't expose these in the credentials JSON directly, so
+  // we surface the rate_tier which encodes the tier bucket instead.
+  function limitHint() {
+    if (!claudeStatus?.logged_in) return null;
+    const tier = claudeStatus?.rate_tier;
+    const sub = claudeStatus?.subscription;
+    if (!tier && !sub) return null;
+    return `${sub ?? ''}${tier ? ' · tier ' + tier : ''}`;
+  }
 
   let [statusText, statusKind] = $derived.by(statusChip);
   let ctx = $derived(ctxPct());
 </script>
 
 <div class="wrap">
-  <header>
-    <h4>Agent Details</h4>
-    {#if agent}<small>{agent.name}</small>{/if}
-  </header>
   {#if !agent}
     <p class="empty">No agent selected.</p>
   {:else}
-    <dl>
-      <dt>status</dt><dd><span class="chip {statusKind}">● {statusText}</span></dd>
-      <dt>started</dt><dd>{ageString(agent.created_at)}</dd>
-      <dt>role</dt><dd>{agent.role}</dd>
-      <dt>team</dt><dd>{agent.team}</dd>
-      <dt>cwd</dt><dd class="mono" title={agent.cwd}>{agent.cwd || '—'}</dd>
-      <dt>repo</dt><dd>{#if agent.github_url}<a href={agent.github_url} target="_blank" title={agent.github_url}>{ghRepoShort(agent.github_url)} ↗</a>{:else}—{/if}</dd>
-      <dt>branch</dt><dd>{agent.branch || '—'}</dd>
-      <dt>agent</dt><dd>{agent.agent}</dd>
-      {#if agent.container_runtime}<dt>runtime</dt><dd class="mono">{agent.container_runtime}</dd>{/if}
-      {#if agent.trust_band}<dt>trust band</dt><dd class="mono">{agent.trust_band}</dd>{/if}
-      <dt>login</dt><dd>{claudeStatus?.login_method ?? '—'}</dd>
-      <dt>email</dt><dd title="Anthropic profile API didn't return this — likely requires elevated OAuth scope">{claudeProfile?.email || '—'}</dd>
-      <dt>subscription</dt><dd>{claudeStatus?.subscription ?? '—'}</dd>
-      <dt>model</dt><dd class="mono">{modelLabel()}</dd>
-      <dt>pid</dt><dd class="mono">{agent.pid ?? '—'}</dd>
-      <dt>uuid</dt><dd class="mono" title={agent.id}>{agent.id || '—'}</dd>
-      {#if agent.claude_uuid}<dt>claude session</dt><dd class="mono" title={agent.claude_uuid}>{agent.claude_uuid}</dd>{/if}
-      <dt>bytes 5m</dt><dd>{bytesString(agent.bytes_5m)}</dd>
-      <dt>total</dt><dd>{bytesString(agent.total_bytes)}</dd>
-      <dt>idle</dt><dd>{idleString(agent.idle_seconds)}</dd>
-      <dt>context size</dt><dd>{agent.context_size ? agent.context_size.toLocaleString() + ' tokens' : '—'}</dd>
-      <dt>context used</dt><dd>
-        {#if ctx != null}
-          <span class="ctx-bar"><span class="ctx-fill" style="width:{ctx}%"></span></span>
-          <span class="ctx-num">{ctx.toFixed(1)}%</span>
-        {:else}—{/if}
-      </dd>
-      <dt>session limit</dt><dd class="muted" title="Anthropic's per-session quota — not yet exposed via API">—</dd>
-      <dt>weekly limit</dt><dd class="muted" title="Anthropic's weekly rate-limit quota — not yet exposed via API">—</dd>
-    </dl>
+    <!-- Card 1: Identity — static fields that don't change while running -->
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Identity</span>
+        <span class="agent-name">{agent.name}</span>
+      </div>
+      <dl>
+        <dt>agent</dt><dd>{agent.agent}</dd>
+        <dt>role</dt><dd>{agent.role}</dd>
+        <dt>team</dt><dd>{agent.team || '—'}</dd>
+        <dt>repo</dt><dd>{#if agent.github_url}<a href={agent.github_url} target="_blank" title={agent.github_url}>{ghRepoShort(agent.github_url)} ↗</a>{:else}—{/if}</dd>
+        <dt>branch</dt><dd>{agent.branch || '—'}</dd>
+        {#if agent.container_runtime}<dt>runtime</dt><dd class="mono">{agent.container_runtime}</dd>{/if}
+        {#if agent.trust_band}<dt>trust</dt><dd class="mono">{agent.trust_band}</dd>{/if}
+        <dt>login</dt><dd>{claudeStatus?.login_method ?? '—'}</dd>
+        <dt>account</dt><dd title={claudeProfile?.email || 'profile API requires elevated OAuth scope'}>{claudeProfile?.email || claudeStatus?.subscription || '—'}</dd>
+        <dt>model</dt><dd class="mono">{modelLabel()}</dd>
+      </dl>
+    </section>
+
+    <!-- Card 2: Runtime — dynamic fields that change during execution -->
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Runtime</span>
+        <span class="chip {statusKind}">● {statusText}</span>
+      </div>
+      <dl>
+        <dt>started</dt><dd>{ageString(agent.created_at)}</dd>
+        <dt>pid</dt><dd class="mono">{agent.pid ?? '—'}</dd>
+        <dt>bytes 5m</dt><dd>{bytesString(agent.bytes_5m)}</dd>
+        <dt>total</dt><dd>{bytesString(agent.total_bytes)}</dd>
+        <dt>idle</dt><dd>{idleString(agent.idle_seconds)}</dd>
+        <dt>context</dt><dd>
+          {#if ctx != null}
+            <span class="ctx-bar"><span class="ctx-fill" style="width:{ctx}%"></span></span>
+            <span class="ctx-num">{ctx.toFixed(1)}%</span>
+          {:else}—{/if}
+        </dd>
+        <dt>ctx size</dt><dd>{agent.context_size ? agent.context_size.toLocaleString() + ' tk' : '—'}</dd>
+        <dt>session limit</dt><dd class="muted" title="Anthropic per-session quota — not exposed via credentials API">{limitHint() ?? '—'}</dd>
+        <dt>weekly limit</dt><dd class="muted" title="Anthropic weekly rate-limit quota">{limitHint() ? 'see account portal' : '—'}</dd>
+      </dl>
+    </section>
   {/if}
 </div>
 
 <style>
-  .wrap { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-  header { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.55rem; border-bottom: 1px solid var(--border); }
-  h4 { margin: 0; color: var(--accent); }
-  small { color: var(--fg-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  dl { display: grid; grid-template-columns: minmax(110px, max-content) 1fr; gap: 0.1rem 0.7rem; padding: 0.4rem 0.7rem; margin: 0; overflow-y: auto; }
-  dt { color: var(--fg-muted); white-space: nowrap; }
-  dd { margin: 0; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .wrap { display: flex; flex-direction: column; height: 100%; overflow-y: auto; gap: 1px; }
+  .empty { color: var(--fg-muted); padding: 0.6rem 0.7rem; }
+
+  .card { background: var(--bg-elev); border-bottom: 1px solid var(--border); }
+  .card-head { display: flex; align-items: center; gap: 0.5rem; padding: 0.38rem 0.7rem; border-bottom: 1px solid var(--border); }
+  .card-title { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent); font-weight: 600; }
+  .agent-name { color: var(--fg-muted); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+  dl { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 0.08rem 0.6rem; padding: 0.35rem 0.7rem; margin: 0; }
+  dt { color: var(--fg-muted); white-space: nowrap; font-size: 0.82rem; line-height: 1.6; }
+  dd { margin: 0; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-size: 0.82rem; line-height: 1.6; }
   .mono { font-family: ui-monospace, monospace; }
   .muted { color: var(--fg-faint); }
-  .chip { display: inline-block; padding: 0.05rem 0.45rem; border-radius: 999px; font-weight: 600; }
+
+  .chip { display: inline-block; padding: 0.05rem 0.45rem; border-radius: 999px; font-weight: 600; font-size: 0.75rem; }
   .chip.ok { background: rgba(80, 200, 120, 0.15); color: #5cd57f; }
   .chip.warn { background: rgba(255, 165, 0, 0.15); color: #ffaa55; }
   .chip.danger { background: rgba(255, 107, 107, 0.18); color: #ff6b6b; }
   .chip.muted { background: rgba(150, 150, 150, 0.15); color: var(--fg-muted); }
-  .ctx-bar { display: inline-block; width: 80px; height: 6px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; vertical-align: middle; overflow: hidden; margin-right: 0.4rem; }
+
+  .ctx-bar { display: inline-block; width: 64px; height: 6px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; vertical-align: middle; overflow: hidden; margin-right: 0.35rem; }
   .ctx-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
   .ctx-num { font-family: ui-monospace, monospace; }
+
   a { color: var(--accent-2); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .empty { color: var(--fg-muted); padding: 0.6rem 0.7rem; }
 </style>
