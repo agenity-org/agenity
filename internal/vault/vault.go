@@ -35,6 +35,11 @@ type ProviderMeta struct {
 
 // KnownProviders lists the providers the UI exposes by default.
 var KnownProviders = map[string]ProviderMeta{
+	"claude-oauth": {
+		Label:       "Claude OAuth (subscription)",
+		DefaultEnv:  "", // delivered via /run/secrets/claude-credentials file mount
+		Description: "Full claude-code OAuth credentials JSON (paste from ~/.claude/.credentials.json or auto-captured via spawn-wizard login flow).",
+	},
 	"anthropic-api": {
 		Label:       "Anthropic API Key",
 		DefaultEnv:  "ANTHROPIC_API_KEY",
@@ -193,8 +198,54 @@ func (v *Vault) Delete(id string) error {
 	return fmt.Errorf("credential %s not found", id)
 }
 
+// GetValue returns the decrypted plaintext of one credential by ID.
+// Used by AgentSecretsDir to materialize Claude OAuth credentials at the
+// /run/secrets bind-mount path. Returns "not found" if id is unknown.
+func (v *Vault) GetValue(id string) (string, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, c := range v.creds {
+		if c.ID == id {
+			return v.decrypt(c.Cipher)
+		}
+	}
+	return "", fmt.Errorf("credential %s not found", id)
+}
+
+// ListByProvider returns all credential metadata for one provider, in
+// stable creation order. Empty result if no creds of that provider.
+func (v *Vault) ListByProvider(provider string) []CredMeta {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	var out []CredMeta
+	for _, c := range v.creds {
+		if c.Provider != provider {
+			continue
+		}
+		pm := KnownProviders[c.Provider]
+		envVar := c.EnvVar
+		if envVar == "" {
+			envVar = pm.DefaultEnv
+		}
+		out = append(out, CredMeta{
+			ID:            c.ID,
+			Provider:      c.Provider,
+			ProviderLabel: pm.Label,
+			Label:         c.Label,
+			EnvVar:        envVar,
+			CreatedAt:     c.CreatedAt,
+			UpdatedAt:     c.UpdatedAt,
+		})
+	}
+	return out
+}
+
 // EnvFor returns the env-var map for the given providers (nil = all).
 // Returned values are decrypted plaintext — callers inject into process env.
+//
+// Note: providers with an empty DefaultEnv (e.g. claude-oauth, where the
+// credential is delivered via a file mount rather than env) are filtered
+// out automatically — they never produce an env-var entry.
 func (v *Vault) EnvFor(providers []string) (map[string]string, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()

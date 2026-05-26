@@ -20,12 +20,12 @@ type ContainerRuntime interface {
 	// AgentHomeDir returns (and creates) the per-agent persistent home
 	// directory on the HOST that is bind-mounted into the container.
 	AgentHomeDir(agentName string, stateDir string) (string, error)
-	// AgentSecretsDir returns (and populates) the per-agent secrets
-	// directory bind-mounted at /run/secrets inside the container.
-	AgentSecretsDir(agentName string, stateDir string) (string, error)
 	// SpawnArgs returns the full argv to execute, given the agent's
 	// argv, env, cwd, home directory, and secrets directory. For bare
 	// exec this is just argv. For Podman it wraps argv in `podman run ...`.
+	// The secrets directory is materialized by the runtime (which has
+	// access to the token vault); the container runtime just bind-mounts
+	// it at /run/secrets.
 	SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string)
 }
 
@@ -88,24 +88,14 @@ func (r *PodmanRuntime) AgentHomeDir(agentName, stateDir string) (string, error)
 	return dir, nil
 }
 
-// AgentSecretsDir returns (and populates) the per-agent secrets directory
-// that gets bind-mounted at /run/secrets inside the agent container. Today
-// the only secret written is claude-credentials, sourced from the token
-// vault. Once #131 (token vault) lands, this function will pull tokens
-// from the vault keyed by the agent's selected token slot.
-func (r *PodmanRuntime) AgentSecretsDir(agentName, stateDir string) (string, error) {
+// agentSecretsDirPath returns the on-host directory used as the source
+// for the /run/secrets bind-mount. Materializing the directory's contents
+// is the runtime's responsibility (it has access to the token vault);
+// this helper just resolves and creates the path.
+func agentSecretsDirPath(agentName, stateDir string) (string, error) {
 	dir := filepath.Join(stateDir, "agents", agentName, "secrets")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
-	}
-	// Until the token vault lands (#131), fall back to the host's Claude
-	// credentials so the existing single-user setup keeps working. The
-	// vault implementation will overwrite this path.
-	if src := hostClaudeCredentialsPath(); src != "" {
-		if data, err := os.ReadFile(src); err == nil {
-			dst := filepath.Join(dir, "claude-credentials")
-			_ = os.WriteFile(dst, data, 0o644)
-		}
 	}
 	return dir, nil
 }
@@ -183,9 +173,6 @@ func (r *DockerRuntime) Available() error {
 func (r *DockerRuntime) AgentHomeDir(agentName, stateDir string) (string, error) {
 	return (&PodmanRuntime{}).AgentHomeDir(agentName, stateDir)
 }
-func (r *DockerRuntime) AgentSecretsDir(agentName, stateDir string) (string, error) {
-	return (&PodmanRuntime{}).AgentSecretsDir(agentName, stateDir)
-}
 func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	// Docker variant — same flags as Podman except no :U mount option
 	// (Docker handles UID remapping differently).
@@ -224,11 +211,6 @@ func (r *BareExecRuntime) Available() error { return nil }
 func (r *BareExecRuntime) AgentHomeDir(agentName, stateDir string) (string, error) {
 	// On bare exec, use the real host home — no isolation.
 	return os.UserHomeDir()
-}
-func (r *BareExecRuntime) AgentSecretsDir(agentName, stateDir string) (string, error) {
-	// On bare exec there are no container mounts — return an empty path
-	// so the caller skips the secrets-dir handling.
-	return "", nil
 }
 func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	return argv, env

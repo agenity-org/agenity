@@ -231,6 +231,11 @@ type Runtime struct {
 	stateDir         string           // ~/.local/state/chepherd
 	containerRuntime ContainerRuntime // podman | docker | bare
 
+	// vault is the token vault used to materialize /run/secrets/
+	// for agent containers. Nil → fall back to host ~/.claude/.credentials.json.
+	// Set via SetVault after vault.Open succeeds in main.
+	vault VaultProvider
+
 	// human-inbox sink
 	humanInbox []HumanInboxEntry
 
@@ -300,6 +305,32 @@ type AxisReview struct {
 	Score    float64   `json:"score"`
 	Note     string    `json:"note,omitempty"`
 	At       time.Time `json:"at"`
+}
+
+// VaultProvider is the interface the runtime needs from a token vault to
+// materialize /run/secrets/ for agent containers. Implementation lives in
+// internal/vault; broken out as an interface here to avoid an import cycle
+// (vault may want to call back into runtime in the future).
+type VaultProvider interface {
+	ListByProvider(provider string) []VaultCredMeta
+	GetValue(id string) (string, error)
+}
+
+// VaultCredMeta is the safe (value-less) view of one credential the vault
+// exposes. Mirrors internal/vault.CredMeta to break the import cycle.
+type VaultCredMeta struct {
+	ID            string
+	Provider      string
+	ProviderLabel string
+	Label         string
+	EnvVar        string
+}
+
+// SetVault wires the token vault into the runtime so AgentSecretsDir
+// pulls Claude OAuth credentials from the vault instead of the host
+// filesystem. Safe to call before or after Spawn. Pass nil to detach.
+func (r *Runtime) SetVault(v VaultProvider) {
+	r.vault = v
 }
 
 // StateDir returns the root state directory for this runtime
@@ -373,6 +404,13 @@ type SpawnSpec struct {
 
 	// RingBytes overrides ptyhost.Session default (1 MiB).
 	RingBytes int
+
+	// ClaudeTokenID picks which Claude OAuth credential from the vault
+	// gets mounted at /run/secrets/claude-credentials. "" = pick the most
+	// recently updated claude-oauth credential, or fall back to host
+	// ~/.claude/.credentials.json when none exists in the vault. Lets
+	// operators run agents under different Claude accounts. (R5, R4.)
+	ClaudeTokenID string
 }
 
 // Spawn creates a new session, registers it, persists metadata, and starts
@@ -469,9 +507,9 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime.Spawn: agent home dir: %w", err)
 	}
-	agentSecretsDir, err := r.containerRuntime.AgentSecretsDir(spec.Name, r.stateDir)
+	agentSecretsDir, err := r.materializeAgentSecrets(spec)
 	if err != nil {
-		return nil, nil, fmt.Errorf("runtime.Spawn: agent secrets dir: %w", err)
+		return nil, nil, fmt.Errorf("runtime.Spawn: agent secrets: %w", err)
 	}
 	spawnArgv, spawnEnv := r.containerRuntime.SpawnArgs(spec.Name, agentHomeDir, agentSecretsDir, spec.Cwd, argv, env)
 
@@ -1533,6 +1571,66 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		"CHEPHERD_MCP_URL=" + mcpURL,
 		"CHEPHERD_MCP_CONFIG=" + cfgPath,
 	}, cfgPath, nil
+}
+
+// materializeAgentSecrets prepares the per-agent secrets directory that
+// will be bind-mounted at /run/secrets inside the agent container, and
+// returns its host path. Source priority for the Claude credentials:
+//
+//  1. If spec.ClaudeTokenID is set → pull that exact credential from
+//     the token vault.
+//  2. Else if the vault has any claude-oauth credentials → pick the most
+//     recently updated one (R4: shared default token across all agents).
+//  3. Else → fall back to the host's ~/.claude/.credentials.json so a
+//     fresh chepherd install on a machine that already has claude-code
+//     logged in just works.
+//
+// The agent image's entrypoint script links the file into
+// ~/.claude/.credentials.json on container start (see scripts/agent-entrypoint.sh).
+func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
+	dir, err := agentSecretsDirPath(spec.Name, r.stateDir)
+	if err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, "claude-credentials")
+	// Best-effort: rotate prior content first so a stale token doesn't
+	// leak from a previous spawn under a different account.
+	_ = os.Remove(dst)
+
+	var payload string
+	if r.vault != nil {
+		if spec.ClaudeTokenID != "" {
+			if v, err := r.vault.GetValue(spec.ClaudeTokenID); err == nil {
+				payload = v
+			}
+		}
+		if payload == "" {
+			// Most recently updated claude-oauth entry (list returns
+			// creation-order; vault re-orders on Set so most-recent is last).
+			creds := r.vault.ListByProvider("claude-oauth")
+			if len(creds) > 0 {
+				latest := creds[len(creds)-1]
+				if v, err := r.vault.GetValue(latest.ID); err == nil {
+					payload = v
+				}
+			}
+		}
+	}
+	if payload == "" {
+		// Host-fallback so single-user installs without a vault entry
+		// keep working — preserves the v0.5–v0.7 behavior.
+		if src := hostClaudeCredentialsPath(); src != "" {
+			if b, err := os.ReadFile(src); err == nil {
+				payload = string(b)
+			}
+		}
+	}
+	if payload != "" {
+		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
 }
 
 // readGitContext runs `git -C <cwd>` twice to extract the remote-origin

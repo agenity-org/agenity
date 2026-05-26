@@ -140,6 +140,9 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "warn: vault: %v (credential vault disabled)\n", err)
 		} else {
 			rs.Vault = vlt
+			// Wire vault into the runtime so /run/secrets/claude-credentials
+			// is sourced from the vault on every spawn (TV1 / R4).
+			rt.SetVault(newRuntimeVaultAdapter(vlt))
 		}
 		hs, err := rs.ServeOn(runFlagListen)
 		if err != nil {
@@ -225,6 +228,27 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	shutdown()
 	return err
 }
+
+// runtimeVaultAdapter adapts *vault.Vault to runtime.VaultProvider — the
+// runtime package can't import vault directly without an import cycle, so
+// we adapt at the cmd layer.
+type runtimeVaultAdapter struct{ v *vault.Vault }
+
+func newRuntimeVaultAdapter(v *vault.Vault) *runtimeVaultAdapter { return &runtimeVaultAdapter{v: v} }
+
+func (a *runtimeVaultAdapter) ListByProvider(provider string) []runtime.VaultCredMeta {
+	src := a.v.ListByProvider(provider)
+	out := make([]runtime.VaultCredMeta, len(src))
+	for i, c := range src {
+		out[i] = runtime.VaultCredMeta{
+			ID: c.ID, Provider: c.Provider, ProviderLabel: c.ProviderLabel,
+			Label: c.Label, EnvVar: c.EnvVar,
+		}
+	}
+	return out
+}
+
+func (a *runtimeVaultAdapter) GetValue(id string) (string, error) { return a.v.GetValue(id) }
 
 // bootstrapShepherd brings a freshly-spawned shepherd session into its
 // watch cycle: accept the Claude-Code trust prompt + send a mission
