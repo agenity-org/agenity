@@ -348,7 +348,8 @@
   <header class="topbar">
     <a href="/" class="brand"><span class="brand-mark">░</span>chepherd<span class="ver">v0.8</span></a>
     <div class="stats">
-      {sessions.length} agents · {teams.length} teams · {memberships.length} memberships
+      <!-- #148 — pluralize correctly. "1 agent" not "1 agents". -->
+      {sessions.length} {sessions.length === 1 ? 'agent' : 'agents'} · {teams.length} {teams.length === 1 ? 'team' : 'teams'} · {memberships.length} {memberships.length === 1 ? 'membership' : 'memberships'}
     </div>
     {#if activeWorkspace}<span class="workspace-badge" title="active project workspace">{activeWorkspace}</span>{/if}
     <div class="view-menu-wrap" use:clickOutside={() => (showViewMenu = false)}>

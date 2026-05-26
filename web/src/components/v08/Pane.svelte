@@ -56,13 +56,17 @@
     document.removeEventListener('mouseup', endDrag);
   }
 
+  // #144 — removed legacy "details (both)" combo widget. Identity +
+  // Runtime are independent addable widgets. Saved layouts using the
+  // old 'agent-details' key are auto-migrated to 'agent-identity' in
+  // Pane.svelte's render branch below (kept that case so loaded
+  // workspaces don't crash).
   const WIDGET_LABELS = {
     'terminal': '▦ terminal',
     'session-list': '☰ sessions',
     'session-board': '▤ board',
     'agent-identity': 'ⓘ identity',
     'agent-runtime': '⚙ runtime',
-    'agent-details': 'ⓘ details (both)',
     'shepherd-assessment-card': '✻ scorecard',
     'inbox': '✉ inbox',
     'events': '⏱ events',

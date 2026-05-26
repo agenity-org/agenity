@@ -13,17 +13,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/hkdf"
 )
 
 // ProviderMeta describes a known credential provider.
@@ -100,9 +97,11 @@ type Vault struct {
 	creds   []Cred
 }
 
-// Open loads (or creates) the vault at path using a key derived from the
-// provided machine identity bytes.
+// Open loads (or creates) the vault at path. Encryption key lives at
+// path's-parent/vault.key (real random 32 bytes, 0600); generated on
+// first Open, persisted thereafter (#141).
 func Open(path string) (*Vault, error) {
+	vaultKeyPath = filepath.Join(filepath.Dir(path), "vault.key")
 	key, err := deriveKey()
 	if err != nil {
 		return nil, fmt.Errorf("vault key: %w", err)
@@ -303,20 +302,35 @@ func (v *Vault) save() error {
 
 // ─── crypto ──────────────────────────────────────────────────────────────────
 
-// deriveKey derives a 32-byte AES key from machine identity using HKDF-SHA256.
-// The key is stable across restarts on the same machine + user, but different
-// on different machines — so moving vault.json to another machine doesn't expose values.
+// deriveKey returns the 32-byte AES key for vault encryption (#141).
+//
+// First call: generates a real 32-byte random key, writes it to
+// $stateDir/vault.key with mode 0600. Subsequent calls read it back.
+// This replaces the v0.5–v0.8-pre derivation from hostname+username
+// which was effectively obfuscation (anyone with read on vault.json
+// AND `hostname; whoami` output could decrypt offline).
+//
+// The path to vault.key is derived from where vault.json lives — set
+// before deriveKey is called by Open().
+var vaultKeyPath string
+
 func deriveKey() ([]byte, error) {
-	hostname, _ := os.Hostname()
-	username := os.Getenv("USER")
-	if username == "" {
-		username = os.Getenv("LOGNAME")
+	if vaultKeyPath == "" {
+		return nil, fmt.Errorf("vault: keyPath not set — call Open() before deriveKey()")
 	}
-	salt := []byte("chepherd-vault-v1")
-	ikm := []byte(hostname + ":" + username)
-	h := hkdf.New(sha256.New, ikm, salt, []byte("chepherd-credential-key"))
+	if b, err := os.ReadFile(vaultKeyPath); err == nil && len(b) == 32 {
+		return b, nil
+	}
+	// Generate a fresh random key.
 	key := make([]byte, 32)
-	if _, err := io.ReadFull(h, key); err != nil {
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("vault: rand: %w", err)
+	}
+	// Ensure parent dir exists with restrictive perms before writing.
+	if err := os.MkdirAll(filepath.Dir(vaultKeyPath), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(vaultKeyPath, key, 0o600); err != nil {
 		return nil, err
 	}
 	return key, nil

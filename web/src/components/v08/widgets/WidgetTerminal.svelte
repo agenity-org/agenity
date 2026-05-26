@@ -134,7 +134,11 @@
       brightCyan:    '#87d7ff',
       brightWhite:   '#ffffff',
     };
-    term = new Terminal({ convertEol: true, fontFamily: 'ui-monospace, monospace', fontSize: currentWsFont(), theme: sel, cursorBlink: true, cols: 120, rows: 32 });
+    // #150 — convertEol: false. The native PTY already emits CRLF for
+    // line endings on terminal-style output; setting convertEol: true
+    // adds a CR before EVERY LF including ones in PTY-managed escape
+    // sequences, which mangles claude-code's box-drawing output.
+    term = new Terminal({ convertEol: false, fontFamily: 'ui-monospace, monospace', fontSize: currentWsFont(), theme: sel, cursorBlink: true, cols: 120, rows: 32 });
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
@@ -148,32 +152,42 @@
     resizeObs = new ResizeObserver(tryFit);
     resizeObs.observe(termContainer);
 
-    ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api-v08/v1/sessions/${name}/attach`);
-    ws.binaryType = 'arraybuffer';
-    ws.onmessage = (ev) => {
-      if (!term) return;
-      if (ev.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(ev.data));
-      } else {
-        term.write(ev.data);
-      }
+    // #151 — auto-reconnect on transient WebSocket close. Exponential
+    // backoff capped at 5s, gives up after 8 attempts (~30s).
+    let wsReconnectAttempts = 0;
+    const openWS = () => {
+      ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api-v08/v1/sessions/${name}/attach`);
+      ws.binaryType = 'arraybuffer';
+      ws.onmessage = (ev) => {
+        if (!term) return;
+        if (ev.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(ev.data));
+        } else {
+          term.write(ev.data);
+        }
+      };
+      ws.addEventListener('open', () => {
+        wsReconnectAttempts = 0;
+        setTimeout(sendResize, 200);
+      });
+      ws.addEventListener('close', () => {
+        if (attached !== name) return; // user switched agent — don't reconnect
+        wsReconnectAttempts++;
+        if (wsReconnectAttempts > 8) return;
+        const delay = Math.min(5000, 250 * 2 ** wsReconnectAttempts);
+        setTimeout(() => { if (attached === name) openWS(); }, delay);
+      });
     };
+    openWS();
     term.onResize(sendResize);
-    ws.addEventListener('open', () => setTimeout(sendResize, 200));
     term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
-    term.onSelectionChange(() => {
-      const s = term.getSelection();
-      if (s && navigator.clipboard) navigator.clipboard.writeText(s).catch(()=>{});
-    });
-    term.parser.registerOscHandler(52, (data) => {
-      const parts = data.split(';');
-      if (parts.length < 2) return true;
-      try {
-        const text = atob(parts[1]);
-        if (navigator.clipboard) navigator.clipboard.writeText(text).catch(()=>{});
-      } catch {}
-      return true;
-    });
+    // #142 — opt out of clipboard side-effects. Selecting text in the
+    // terminal no longer silently writes to the host clipboard; user
+    // must explicitly Ctrl-C/Cmd-C through the browser's native path.
+    // Likewise OSC 52 ("application can write the clipboard") is now
+    // ignored — claude-code or a malicious tool can no longer hijack
+    // the operator's clipboard via an escape sequence.
+    term.parser.registerOscHandler(52, () => true);
   }
 
   $effect(() => { attachTo(myAgent); });

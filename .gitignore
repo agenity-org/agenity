@@ -1,28 +1,24 @@
-# Binaries / build artifacts
-/chepherd
-/dist/
-/build/
-*.exe
-*.test
-*.out
+# Build outputs
+chepherd
+chepherd-v0?
+*.tar
 
-# Editor + OS
-.DS_Store
-.idea/
+# Walk evidence screenshots
+*.png
+*.jpg
+*.jpeg
+walk-evidence/
+
+# Editor / IDE
 .vscode/
+.idea/
 *.swp
-*~
 
-# Go
-vendor/
-*.prof
-
-# Environment
-.env
-.env.local
-
-# CI artifacts
-coverage.txt
-coverage.html
+# Playwright cache
 .playwright-mcp/
-.mcp.json
+
+# Claude state
+.claude/
+
+# Spreadsheets
+*.xlsx

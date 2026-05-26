@@ -142,7 +142,15 @@ func (s *Server) Handler() http.Handler {
 	if s.WebDir != "" {
 		fs := http.FileServer(http.Dir(s.WebDir))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// Let API routes pass through (already registered with longer prefix).
+			// #143 — unknown API paths return JSON 404, not the SPA's
+			// index.html. The "API silently returns marketing HTML"
+			// antipattern was a debugging nightmare.
+			if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/api-v08/") {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"unknown API path","path":"` + r.URL.Path + `"}`))
+				return
+			}
 			p := filepath.Join(s.WebDir, filepath.Clean("/"+r.URL.Path))
 			if _, err := os.Stat(p); os.IsNotExist(err) {
 				http.ServeFile(w, r, filepath.Join(s.WebDir, "index.html"))

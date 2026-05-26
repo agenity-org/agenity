@@ -210,10 +210,11 @@
       const r = await fetch(`${API}/git-providers`);
       providers = (await r.json()).providers || [];
     } catch { providers = []; }
-    // R3 (#134) — never leave the repo field blank: when exactly one
-    // provider is already registered, pre-select it so the operator can
-    // sail through stage 2 without an extra click.
-    if (providers.length === 1 && !selectedProviderId) {
+    // R3 (#134/#145) — never leave the repo field blank. If exactly one
+    // provider is registered, preselect it. If multiple are registered,
+    // preselect the FIRST one too so Next is never stuck disabled —
+    // operator can still click another card to change.
+    if (providers.length > 0 && !selectedProviderId) {
       selectedProviderId = providers[0].id;
     }
   }
@@ -373,7 +374,10 @@
   let selectedClaudeToken = $derived(claudeTokens.find(t => t.id === selectedClaudeTokenId) || null);
 </script>
 
-<div class="backdrop" on:click={onClose}>
+<!-- #152: backdrop click does NOT silently close — require an explicit
+     Cancel or × click, otherwise an accidental click on the dim
+     overlay loses everything the operator just configured. -->
+<div class="backdrop">
   <div class="modal" on:click|stopPropagation>
     <header>
       <h2>+ new {shape ? '· ' + shape : ''}</h2>
@@ -409,7 +413,10 @@
               <button class="shape" class:active={shape===t.name} on:click={() => pickShape(t.name)}>
                 <div class="s-icon">📋</div>
                 <div class="s-title">{t.name}</div>
-                <div class="s-blurb">{t.description || 'Catalog template'}</div>
+                <!-- #149 — truncate raw operator-instruction descriptions
+                     so they don't render as a wall of text. Full text
+                     visible on hover via title attribute. -->
+                <div class="s-blurb" title={t.description || 'Catalog template'}>{((t.description || 'Catalog template').split('\n')[0] || '').slice(0, 110)}</div>
               </button>
             {/each}
           </div>
@@ -540,7 +547,11 @@
               <select on:change={(e) => setMember(m.name, e.target.value)}>
                 <option value="">⊕ Fresh (default)</option>
                 {#each availableSessions.slice(0, 25) as s}
-                  <option value={s.uuid}>↻ {s.uuid.slice(0,8)} · {new Date(s.modified).toLocaleString()} · {(s.first_message || '').slice(0,45)}</option>
+                  <!-- #146 — privacy: don't leak first-message previews
+                       from unrelated workspaces. Show only UUID + when
+                       last modified. The full message can leak operator
+                       project secrets across spawn flows. -->
+                  <option value={s.uuid}>↻ {s.uuid.slice(0,8)} · {new Date(s.modified).toLocaleString()}</option>
                 {/each}
               </select>
             </div>
@@ -551,7 +562,7 @@
       {:else if stage === 4}
         <h3>Which Claude account?</h3>
         {#if claudeTokens.length === 0}
-          <p class="prose">No Claude credentials registered yet. Paste your <code>~/.claude/.credentials.json</code> content below, or skip this step and complete the OAuth login in the agent terminal after launch.</p>
+          <p class="prose">No Claude credentials registered yet. Click <strong>+ Log in to Claude</strong> below to start a guided login — chepherd will surface the Claude login URL and capture the token.</p>
         {:else if multipleClaudeTokens}
           <p class="prose">Pick which Claude account this team will use. Tokens are shared across all subsequent spawns until you change them.</p>
         {:else}

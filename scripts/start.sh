@@ -57,6 +57,7 @@ exec podman run \
   -v "${REPOS_DIR}:/home/chepherd/repos:rw" \
   --device /dev/fuse \
   --security-opt label=disable \
+  -e CHEPHERD_MCP_LISTEN=0.0.0.0:9090 \
   "${IMAGE}" \
   run \
     --headless \

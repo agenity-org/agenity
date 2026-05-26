@@ -257,19 +257,29 @@ func mcpMounts(env []string) []string {
 	return mounts
 }
 
-// HostAddrForAgent returns an IP address agent containers can dial to reach
-// services running on the host (e.g. chepherd's MCP listener on :9090).
+// HostAddrForAgent returns an IP address agent containers can dial to
+// reach chepherd's MCP listener on :9090. Two modes:
 //
-// In rootless Podman the bridge gateway reported by `podman network inspect
-// podman` (typically 10.88.0.1) is a phantom — slirp4netns simulates the
-// bridge inside the container's netns but the gateway IP isn't actually
-// routed to a real interface on the host. So we use the host's primary
-// outbound IP (the source IP of a UDP socket connected to a public DNS
-// server) which is always reachable from the container's slirp NAT.
+//  1. Chepherd is running INSIDE a pod (its own inner podman manages
+//     agents): the inner-bridge gateway (typically 10.88.0.1) IS the
+//     chepherd container's IP from the agent's perspective. Use it.
 //
-// Returns "" if detection fails; callers fall back to the operator-provided
-// CHEPHERD_MCP_URL.
+//  2. Chepherd is running on the host directly: the rootless-podman
+//     bridge gateway is a phantom (not routed to a real host interface),
+//     so we fall back to the host's primary outbound IP via the
+//     UDP-socket-LocalAddr trick.
+//
+// Returns "" if neither mode resolves; callers default CHEPHERD_MCP_URL.
 func HostAddrForAgent() string {
+	// Mode 1: are we inside a chepherd pod? Detected via the agent-storage
+	// bind mount that scripts/start.sh sets up. If yes, the inner-podman
+	// bridge gateway is the right answer.
+	if _, err := os.Stat(agentStorageRoot); err == nil {
+		if gw := podmanInnerBridgeGateway(); gw != "" {
+			return gw
+		}
+	}
+	// Mode 2: outbound IP.
 	c, err := net.Dial("udp4", "1.1.1.1:53")
 	if err != nil {
 		return ""
@@ -279,6 +289,34 @@ func HostAddrForAgent() string {
 		return addr.IP.String()
 	}
 	return ""
+}
+
+// podmanInnerBridgeGateway returns the gateway IP of the inner-podman
+// default bridge network. Empty string if podman isn't available or
+// the inspect fails.
+func podmanInnerBridgeGateway() string {
+	args := []string{"--root", agentStorageRoot, "--runroot", agentRunRoot,
+		"network", "inspect", "podman"}
+	out, err := exec.Command("podman", args...).Output()
+	if err != nil {
+		return ""
+	}
+	s := string(out)
+	idx := strings.Index(s, `"gateway":`)
+	if idx < 0 {
+		return ""
+	}
+	rest := s[idx+len(`"gateway":`):]
+	q1 := strings.Index(rest, `"`)
+	if q1 < 0 {
+		return ""
+	}
+	rest = rest[q1+1:]
+	q2 := strings.Index(rest, `"`)
+	if q2 < 0 {
+		return ""
+	}
+	return rest[:q2]
 }
 
 // hostClaudeCredentialsPath returns the path to the host's Claude credentials
