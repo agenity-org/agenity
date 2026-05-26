@@ -9,13 +9,13 @@
 -->
 <script>
   import { onMount } from 'svelte';
-  let { onClose, onLaunched } = $props();
+  let { onClose, onLaunched, defaultCwd = '' } = $props();
   const API = '/api-v08/v1';
 
   // ----- wizard state -----
   let stage = $state(1);
   let shape = $state(null);                  // null | 'solo' | 'solo-supervised' | 'pair' | 'council' | 'custom-yaml'
-  let cwd = $state('/home/openova/repos/chepherd');
+  let cwd = $state(defaultCwd || '/home/openova/repos/chepherd');
   let teamName = $state('');
   let gitMode = $state('use-existing');      // 'use-existing' | 'init-new' | 'connect-remote' | 'no-git'
   let remoteUrl = $state('');

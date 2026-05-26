@@ -110,16 +110,26 @@
   }
 
   // --- workspace save/load ---
+  let activeWorkspace = $state('');   // name of the currently-active named workspace
+  let projectCwd = $state('');        // CWD associated with active workspace
+
   async function saveLayout(name = 'current') {
+    const body = name === 'current'
+      ? layout  // 'current' stays as bare layout for backwards compat
+      : { layout, cwd: projectCwd };
     await fetch(`${API}/workspaces/${name}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(layout),
+      body: JSON.stringify(body),
     });
   }
   async function loadLayout(name) {
     try {
       const r = await fetch(`${API}/workspaces/${name}`);
-      if (r.ok) layout = await r.json();
+      if (!r.ok) return;
+      const d = await r.json();
+      // New envelope format: { layout, cwd }. Legacy: bare layout tree.
+      if (d.layout) { layout = d.layout; if (d.cwd) projectCwd = d.cwd; }
+      else layout = d;
     } catch {}
   }
 
@@ -238,14 +248,21 @@
   async function listSavedLayouts() {
     try { const r = await fetch(`${API}/workspaces`); const d = await r.json(); savedLayouts = d.workspaces || []; } catch {}
   }
+  let saveAsCwd = $state('');
   async function saveAs() {
     if (!saveAsName.trim()) return;
+    if (saveAsCwd.trim()) projectCwd = saveAsCwd.trim();
     await saveLayout(saveAsName.trim());
+    activeWorkspace = saveAsName.trim();
     await listSavedLayouts();
     showSaveAs = false;
     saveAsName = '';
+    saveAsCwd = '';
   }
-  async function loadSaved(n) { await loadLayout(n); }
+  async function loadSaved(n) {
+    await loadLayout(n);
+    activeWorkspace = n;
+  }
 
   // --- agent action menu (stop/pause/restart) ---
   let showAgentMenu = $state(false);
@@ -320,6 +337,7 @@
     <div class="stats">
       {sessions.length} agents · {teams.length} teams · {memberships.length} memberships
     </div>
+    {#if activeWorkspace}<span class="workspace-badge" title="active project workspace">{activeWorkspace}</span>{/if}
     <select class="view-select" title="layout" on:change={(e) => onViewChange(e)} value="">
       <option value="" disabled>View…</option>
       <optgroup label="Built-in">
@@ -378,7 +396,7 @@
 </div>
 
 {#if showWizard}
-  <SpawnWizard onClose={() => (showWizard = false)} onLaunched={refresh} />
+  <SpawnWizard onClose={() => (showWizard = false)} onLaunched={refresh} defaultCwd={projectCwd} />
 {/if}
 {#if showAgentSettings && selectedAgent}
   {@const ag = sessions.find(s => s.name === selectedAgent)}
@@ -390,9 +408,12 @@
 {#if showSaveAs}
   <div class="backdrop" on:click={() => (showSaveAs = false)}>
     <div class="modal-saveas" on:click|stopPropagation>
-      <h3>Save layout as…</h3>
-      <input bind:value={saveAsName} placeholder="my-view" autofocus />
-      <p class="hint">Saved views persist on the runtime + can be switched via the dropdown in the top bar.</p>
+      <h3>Save project workspace…</h3>
+      <label>Workspace name<input bind:value={saveAsName} placeholder="my-project" autofocus /></label>
+      <label>Project CWD (optional — used as default cwd for new spawns when this workspace is active)
+        <input bind:value={saveAsCwd} placeholder="/home/openova/repos/my-project" />
+      </label>
+      <p class="hint">Workspaces save your pane layout + a project root. Switch via the View dropdown.</p>
       <footer>
         <button class="secondary" on:click={() => (showSaveAs = false)}>Cancel</button>
         <button class="primary" on:click={saveAs} disabled={!saveAsName.trim()}>Save</button>
@@ -467,6 +488,7 @@
   .topbar .brand { color: var(--accent); font-weight: 700; text-decoration: none; font-size: 1.25rem; letter-spacing: -0.01em; }
   .topbar .brand .ver { font-size: 0.75rem; color: var(--fg-muted); margin-left: 0.4rem; font-weight: 400; }
   .topbar .stats { flex: 1; color: var(--fg-muted); font-size: 0.78rem; white-space: nowrap; }
+  .workspace-badge { font-size: 0.72rem; color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent-2) 25%, transparent); border-radius: 999px; padding: 0.1rem 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 12rem; }
   .view-switcher { display: flex; gap: 0.2rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.18rem; }
   .view-switcher button { padding: 0.32rem 0.7rem; background: transparent; color: var(--fg-muted); border: none; border-radius: 4px; cursor: pointer; font-size: 0.82rem; }
   .view-switcher button:hover { color: var(--accent); }

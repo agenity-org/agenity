@@ -83,6 +83,8 @@
       <dt>repo</dt><dd>{#if agent.github_url}<a href={agent.github_url} target="_blank" title={agent.github_url}>{ghRepoShort(agent.github_url)} ↗</a>{:else}—{/if}</dd>
       <dt>branch</dt><dd>{agent.branch || '—'}</dd>
       <dt>agent</dt><dd>{agent.agent}</dd>
+      {#if agent.container_runtime}<dt>runtime</dt><dd class="mono">{agent.container_runtime}</dd>{/if}
+      {#if agent.trust_band}<dt>trust band</dt><dd class="mono">{agent.trust_band}</dd>{/if}
       <dt>login</dt><dd>{claudeStatus?.login_method ?? '—'}</dd>
       <dt>email</dt><dd title="Anthropic profile API didn't return this — likely requires elevated OAuth scope">{claudeProfile?.email || '—'}</dd>
       <dt>subscription</dt><dd>{claudeStatus?.subscription ?? '—'}</dd>
