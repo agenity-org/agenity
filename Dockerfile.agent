@@ -25,10 +25,22 @@ RUN npm install -g qwen-code 2>/dev/null || true
 # opencode (optional — best-effort)
 RUN npm install -g opencode-ai 2>/dev/null || true
 
-# Create agent home dir with correct permissions
+# Non-root agent user (UID 1000) — required by chepherd's spawn contract.
+# Host UID 1000 in rootless Podman maps to container root; the actual
+# agent user inside is UID 1000 ≠ container root. All credentials and
+# state are provided through /run/secrets/ mounts owned via the U flag.
 RUN useradd -m -u 1000 -s /bin/bash agent \
-    && mkdir -p /home/agent/.claude/projects \
+    && mkdir -p /home/agent/.claude/projects /run/secrets \
     && chown -R agent:agent /home/agent
+
+# Entrypoint: link /run/secrets/claude-credentials to ~/.claude/.credentials.json
+# so claude-code can find it at its hardcoded path. The mount is provided by
+# chepherd at spawn time from its token vault; claude-code may refresh the
+# token in-place but the vault remains source of truth — chepherd captures
+# fresh tokens via PTY OAuth-URL detection (R5).
+COPY scripts/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
+RUN chmod +x /usr/local/bin/agent-entrypoint
 
 USER agent
 WORKDIR /home/agent
+ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]

@@ -462,12 +462,18 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// operator's confusion in the dashboard.
 	env = stripEnv(env, "TMUX", "TMUX_PANE", "TMUX_PLUGIN_MANAGER_PATH")
 
-	// Resolve per-agent home dir and wrap argv in container if runtime supports it.
+	// Resolve per-agent home dir + secrets dir, then wrap argv in container.
+	// The secrets dir is bind-mounted at /run/secrets inside the container
+	// and the agent image's entrypoint links claude-credentials into place.
 	agentHomeDir, err := r.containerRuntime.AgentHomeDir(spec.Name, r.stateDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime.Spawn: agent home dir: %w", err)
 	}
-	spawnArgv, spawnEnv := r.containerRuntime.SpawnArgs(spec.Name, agentHomeDir, spec.Cwd, argv, env)
+	agentSecretsDir, err := r.containerRuntime.AgentSecretsDir(spec.Name, r.stateDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime.Spawn: agent secrets dir: %w", err)
+	}
+	spawnArgv, spawnEnv := r.containerRuntime.SpawnArgs(spec.Name, agentHomeDir, agentSecretsDir, spec.Cwd, argv, env)
 
 	// Spawn the PTY child via ptyhost
 	id := newSessionID(spec.Name)
@@ -1459,12 +1465,16 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// (different UID in the user namespace) can read both.
 	_ = os.Chmod(cfgDir, 0o755)
 	// MCP URL the agent's bridge subprocess will dial. v0.8 default:
-	// host.containers.internal lets a Podman-rootless agent container
-	// reach the chepherd daemon running on the host. Override via
-	// CHEPHERD_MCP_URL when chepherd is in-cluster (k8s Service DNS).
+	// resolve the Podman bridge gateway IP (the host's reachable address
+	// from inside an agent container). Override via CHEPHERD_MCP_URL when
+	// chepherd is in-cluster (k8s Service DNS becomes ws://chepherd:9090).
 	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
 	if mcpURL == "" {
-		mcpURL = "ws://host.containers.internal:9090/mcp/ws"
+		gw := PodmanBridgeGateway()
+		if gw == "" {
+			gw = "10.88.0.1" // Podman default bridge gateway
+		}
+		mcpURL = "ws://" + gw + ":9090/mcp/ws"
 	}
 	// Use the absolute path of the currently-running chepherd binary so
 	// the MCP-bridge subprocess matches the running runtime regardless

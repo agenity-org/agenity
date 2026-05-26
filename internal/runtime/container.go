@@ -20,10 +20,13 @@ type ContainerRuntime interface {
 	// AgentHomeDir returns (and creates) the per-agent persistent home
 	// directory on the HOST that is bind-mounted into the container.
 	AgentHomeDir(agentName string, stateDir string) (string, error)
+	// AgentSecretsDir returns (and populates) the per-agent secrets
+	// directory bind-mounted at /run/secrets inside the container.
+	AgentSecretsDir(agentName string, stateDir string) (string, error)
 	// SpawnArgs returns the full argv to execute, given the agent's
-	// argv, env, cwd, and home directory. For bare exec this is just
-	// argv. For Podman it wraps argv in `podman run ...`.
-	SpawnArgs(agentName, agentHomeDir, cwd string, argv []string, env []string) ([]string, []string)
+	// argv, env, cwd, home directory, and secrets directory. For bare
+	// exec this is just argv. For Podman it wraps argv in `podman run ...`.
+	SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string)
 }
 
 // DetectRuntime returns the best available ContainerRuntime.
@@ -69,40 +72,45 @@ func (r *PodmanRuntime) Available() error {
 	return nil
 }
 
-const agentUID = 1000 // UID of the `agent` user inside the chepherd-agent image
-
+// AgentHomeDir returns (and creates) the per-agent state directory on the
+// host. v0.8 design: chepherd no longer copies credentials into the home
+// dir directly — credentials are delivered via /run/secrets bind-mount,
+// and the entrypoint script in the agent image links them into place.
+// The home dir is just persistent storage (projects/, session files,
+// claude-code's auto-save state). No chown hacks — Podman's `:U` mount
+// flag handles UID remapping into the container's user namespace.
 func (r *PodmanRuntime) AgentHomeDir(agentName, stateDir string) (string, error) {
 	dir := filepath.Join(stateDir, "agents", agentName, "home")
 	claudeDir := filepath.Join(dir, ".claude")
 	if err := os.MkdirAll(filepath.Join(claudeDir, "projects"), 0o755); err != nil {
 		return "", err
 	}
-	// Chown the tree to agentUID so the non-root agent process (running inside
-	// a nested container where root maps to a different host UID) can read/write
-	// its own home directory.
-	for _, p := range []string{dir, claudeDir, filepath.Join(claudeDir, "projects")} {
-		_ = os.Chown(p, agentUID, agentUID)
+	return dir, nil
+}
+
+// AgentSecretsDir returns (and populates) the per-agent secrets directory
+// that gets bind-mounted at /run/secrets inside the agent container. Today
+// the only secret written is claude-credentials, sourced from the token
+// vault. Once #131 (token vault) lands, this function will pull tokens
+// from the vault keyed by the agent's selected token slot.
+func (r *PodmanRuntime) AgentSecretsDir(agentName, stateDir string) (string, error) {
+	dir := filepath.Join(stateDir, "agents", agentName, "secrets")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
 	}
-	// Copy host Claude credentials into the agent home so the agent process
-	// (UID agentUID, non-root) can authenticate. Refreshed on every spawn so
-	// OAuth token rotation is reflected without a full restart.
+	// Until the token vault lands (#131), fall back to the host's Claude
+	// credentials so the existing single-user setup keeps working. The
+	// vault implementation will overwrite this path.
 	if src := hostClaudeCredentialsPath(); src != "" {
 		if data, err := os.ReadFile(src); err == nil {
-			dst := filepath.Join(claudeDir, ".credentials.json")
-			// Mode 0o644: inside rootless podman, host UID 1000 maps to container
-			// root (UID 0), so chown to agentUID=1000 makes the file root-owned
-			// inside the container. The container agent user (container UID 1000 =
-			// host UID ~100999) needs read access via the world-read bit.
-			if werr := os.WriteFile(dst, data, 0o644); werr == nil {
-				_ = os.Chmod(dst, 0o644) // override process umask
-				_ = os.Chown(dst, agentUID, agentUID)
-			}
+			dst := filepath.Join(dir, "claude-credentials")
+			_ = os.WriteFile(dst, data, 0o644)
 		}
 	}
 	return dir, nil
 }
 
-func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []string, env []string) ([]string, []string) {
+func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	// When running inside the chepherd container, explicit --root / --runroot
 	// point to the pre-populated agent storage (written by skopeo). Outside the
 	// container (dev mode), those paths don't exist — omit them so podman uses
@@ -117,18 +125,23 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []st
 		// Bridge networking — slirp4netns is rootless-only inside the container.
 		// Outside the container (dev mode), use host networking.
 		"--network", "bridge",
-		// Make host reachable from inside the container — needed so the
-		// MCP bridge subprocess (running inside the agent container) can
-		// dial back to chepherd on the host via host.containers.internal.
-		// `host-gateway` resolves to the container network's gateway at
-		// runtime; works on Podman + Docker.
-		"--add-host", "host.containers.internal:host-gateway",
 		// Per-agent persistent home (claude session files, config).
-		"-v", agentHomeDir+":/home/agent:rw",
+		// :U remaps file ownership into the container's user namespace so
+		// the in-container `agent` user (UID 1000) owns these paths
+		// without us touching them from the host.
+		"-v", agentHomeDir+":/home/agent:rw,U",
 		// Working repo — read/write.
 		"-v", cwd+":"+cwd+":rw",
 		"--workdir", cwd,
 	)
+
+	// Per-agent secrets — mounted at /run/secrets so the entrypoint script
+	// in the agent image can link /run/secrets/claude-credentials into the
+	// agent's home (R4). Once the token vault (#131) lands, all token
+	// material is written here from the vault at spawn time.
+	if agentSecretsDir != "" {
+		podArgs = append(podArgs, "-v", agentSecretsDir+":/run/secrets:ro,U")
+	}
 
 	// Mount MCP infrastructure: the session dir (contains .mcp.json), the
 	// chepherd binary (run as subprocess by claude-code), and the Unix socket.
@@ -170,22 +183,23 @@ func (r *DockerRuntime) Available() error {
 func (r *DockerRuntime) AgentHomeDir(agentName, stateDir string) (string, error) {
 	return (&PodmanRuntime{}).AgentHomeDir(agentName, stateDir)
 }
-func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []string, env []string) ([]string, []string) {
-	// Docker variant — same flags as Podman except no --userns keep-id
-	// (Docker handles this differently).
+func (r *DockerRuntime) AgentSecretsDir(agentName, stateDir string) (string, error) {
+	return (&PodmanRuntime{}).AgentSecretsDir(agentName, stateDir)
+}
+func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
+	// Docker variant — same flags as Podman except no :U mount option
+	// (Docker handles UID remapping differently).
 	dockerArgs := []string{
 		"docker", "run", "--rm", "--interactive", "--tty",
 		"--name", "chepherd-agent-" + agentName,
 		"--network", "bridge",
-		// Reach the host (where chepherd runs) via host.containers.internal.
-		"--add-host", "host.containers.internal:host-gateway",
 		"-v", agentHomeDir + ":/home/agent:rw",
 		"-v", cwd + ":" + cwd + ":rw",
 		"--workdir", cwd,
 		"-e", "HOME=/home/agent",
 	}
-	if hostCreds := hostClaudeCredentialsPath(); hostCreds != "" {
-		dockerArgs = append(dockerArgs, "-v", hostCreds+":/home/agent/.claude/.credentials.json:ro")
+	if agentSecretsDir != "" {
+		dockerArgs = append(dockerArgs, "-v", agentSecretsDir+":/run/secrets:ro")
 	}
 	for _, mount := range mcpMounts(env) {
 		dockerArgs = append(dockerArgs, "-v", mount)
@@ -211,7 +225,12 @@ func (r *BareExecRuntime) AgentHomeDir(agentName, stateDir string) (string, erro
 	// On bare exec, use the real host home — no isolation.
 	return os.UserHomeDir()
 }
-func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []string, env []string) ([]string, []string) {
+func (r *BareExecRuntime) AgentSecretsDir(agentName, stateDir string) (string, error) {
+	// On bare exec there are no container mounts — return an empty path
+	// so the caller skips the secrets-dir handling.
+	return "", nil
+}
+func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	return argv, env
 }
 
@@ -253,6 +272,39 @@ func mcpMounts(env []string) []string {
 	}
 
 	return mounts
+}
+
+// PodmanBridgeGateway returns the gateway IP of the default Podman bridge
+// network, which is the address agent containers must dial to reach the
+// chepherd daemon running on the host. Returns "" if detection fails;
+// callers fall back to a hardcoded "10.88.0.1" (Podman's default) or to
+// the operator-provided CHEPHERD_MCP_URL.
+//
+// This is needed because Podman 3.4 does not support the `host-gateway`
+// magic value for --add-host, so we resolve the IP at runtime and either
+// pass it as an --add-host entry or bake it into the MCP URL.
+func PodmanBridgeGateway() string {
+	out, err := exec.Command("podman", "network", "inspect", "podman").Output()
+	if err != nil {
+		return ""
+	}
+	// Cheap parse: look for "gateway": "x.x.x.x"
+	s := string(out)
+	idx := strings.Index(s, `"gateway":`)
+	if idx < 0 {
+		return ""
+	}
+	rest := s[idx+len(`"gateway":`):]
+	q1 := strings.Index(rest, `"`)
+	if q1 < 0 {
+		return ""
+	}
+	rest = rest[q1+1:]
+	q2 := strings.Index(rest, `"`)
+	if q2 < 0 {
+		return ""
+	}
+	return rest[:q2]
 }
 
 // hostClaudeCredentialsPath returns the path to the host's Claude credentials
