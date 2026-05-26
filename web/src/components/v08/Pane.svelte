@@ -159,7 +159,13 @@
       <div class="spacer"></div>
       <button title="split horizontally (add right)" on:click={() => splitPane(node.id, 'h')}>⬌</button>
       <button title="split vertically (add below)" on:click={() => splitPane(node.id, 'v')}>⬍</button>
-      <button title={fullscreen ? 'exit fullscreen' : 'fullscreen'} on:click={toggleFullscreen} class:active={fullscreen}>{fullscreen ? '⊠' : '⊞'}</button>
+      <button title={fullscreen ? 'exit fullscreen' : 'fullscreen'} on:click={toggleFullscreen} class:active={fullscreen}>
+        {#if fullscreen}
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 2H2v4M14 6V2h-4M10 14h4v-4M2 10v4h4"/></svg>
+        {:else}
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 6V2h4M14 10v4h-4M10 2h4v4M6 14H2v-4"/></svg>
+        {/if}
+      </button>
       <button title="close" on:click={() => removePane(node.id)}>×</button>
     </header>
     <div class="pane-body">

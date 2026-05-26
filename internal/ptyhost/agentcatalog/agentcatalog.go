@@ -82,7 +82,7 @@ var Builtin = []Agent{
 	},
 	{
 		Slug:        "claude-code",
-		Binary:      "/usr/local/bin/claude",
+		Binary:      "/usr/bin/claude",
 		DefaultArgs: []string{"--dangerously-skip-permissions"},
 		DefaultCwd:  "/workspace",
 		RequiredEnv: []string{"LLM_GATEWAY_URL"},

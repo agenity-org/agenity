@@ -38,18 +38,24 @@ FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Base tooling: git + curl (needed by agents); podman for ContainerRuntime
+# Base tooling: git + curl (needed by agents); podman for ContainerRuntime.
+# uidmap provides newuidmap/newgidmap required for rootless podman-in-podman.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates \
-    podman fuse-overlayfs slirp4netns \
+    podman fuse-overlayfs slirp4netns uidmap \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for the chepherd process itself
 RUN useradd -m -u 1000 -s /bin/bash chepherd \
-    && mkdir -p /app/web /home/chepherd/.local/state/chepherd
+    && mkdir -p /app/web /home/chepherd/.local/state/chepherd /home/chepherd/.local/share \
+    && chown -R chepherd:chepherd /home/chepherd/.local \
+    # subuid/subgid ranges required for rootless podman user-namespace mapping.
+    && echo "chepherd:100000:65536" >> /etc/subuid \
+    && echo "chepherd:100000:65536" >> /etc/subgid
 
 COPY --from=go-builder  /usr/local/bin/chepherd /usr/local/bin/chepherd
 COPY --from=web-builder /build/web/dist          /app/web/dist
+COPY --from=go-builder  /build/catalog            /app/catalog
 
 # Podman storage config for rootless inside container
 RUN mkdir -p /home/chepherd/.config/containers && \
@@ -57,7 +63,9 @@ RUN mkdir -p /home/chepherd/.config/containers && \
       > /home/chepherd/.config/containers/storage.conf && \
     chown -R chepherd:chepherd /home/chepherd/.config
 
-USER chepherd
+# Run as root inside the container (outer podman uses --privileged, so UID 0
+# in container = host UID — rootless but with full capabilities for inner podman).
+ENV HOME=/home/chepherd
 WORKDIR /home/chepherd
 
 # State dir mounted by compose.yaml for persistence across container restarts

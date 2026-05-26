@@ -95,6 +95,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/runtime/global-md", s.globalMDHandler)
 	mux.HandleFunc("/api/v1/folders/git-info", s.gitInfoHandler)
 	mux.HandleFunc("/api/v1/folders/git-setup", s.gitSetupHandler)
+	mux.HandleFunc("/api/v1/git-providers", s.gitProvidersHandler)
+	mux.HandleFunc("/api/v1/git-providers/", s.gitProviderByID)
 	mux.HandleFunc("/api/v1/teams/saved", s.savedTeamsHandler)
 	mux.HandleFunc("/api/v1/kanban", s.kanbanIssues)
 	mux.HandleFunc("/api/v1/kanban/move", s.kanbanMove)
@@ -348,6 +350,108 @@ func execCommand(name string, args ...string) *exec.Cmd {
 	return exec.Command(name, args...)
 }
 
+// gitReposHandler — GET /api/v1/folders/git-repos
+// Discovers git repos in ~/repos/, ~/projects/, ~/work/, ~/src/, ~/code/ and CWD.
+// Returns up to 60 repos sorted by modification time (newest first).
+// gitProvidersHandler — GET /api/v1/git-providers  (list)
+//                        POST /api/v1/git-providers  (register / update)
+func (s *Server) gitProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		providers, err := runtime.LoadGitProviders(s.rt.StateDir())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if providers == nil {
+			providers = []*runtime.GitProvider{}
+		}
+		// Never return raw tokens to the UI — mask them.
+		type safeProvider struct {
+			ID           string                  `json:"id"`
+			Kind         runtime.GitProviderKind `json:"kind"`
+			RepoURL      string                  `json:"repo_url"`
+			DisplayName  string                  `json:"display_name"`
+			RegisteredAt string                  `json:"registered_at"`
+			HasToken     bool                    `json:"has_token"`
+		}
+		var out []safeProvider
+		for _, p := range providers {
+			out = append(out, safeProvider{
+				ID:           p.ID,
+				Kind:         p.Kind,
+				RepoURL:      p.RepoURL,
+				DisplayName:  p.DisplayName,
+				RegisteredAt: p.RegisteredAt.UTC().Format(time.RFC3339),
+				HasToken:     p.Token != "",
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"providers": out})
+
+	case http.MethodPost:
+		var req struct {
+			Kind        runtime.GitProviderKind `json:"kind"`
+			RepoURL     string                  `json:"repo_url"`
+			Token       string                  `json:"token"`
+			DisplayName string                  `json:"display_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON"})
+			return
+		}
+		if req.Kind == "" || (req.Kind != runtime.GitProviderEmbedded && req.RepoURL == "") {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "kind and repo_url are required"})
+			return
+		}
+		id := string(req.Kind) + ":" + req.RepoURL
+		if req.Kind == runtime.GitProviderEmbedded {
+			id = "embedded"
+		}
+		name := req.DisplayName
+		if name == "" {
+			name = req.RepoURL
+		}
+		p := &runtime.GitProvider{
+			ID:           id,
+			Kind:         req.Kind,
+			RepoURL:      req.RepoURL,
+			Token:        req.Token,
+			DisplayName:  name,
+			RegisteredAt: time.Now().UTC(),
+		}
+		if err := runtime.UpsertGitProvider(s.rt.StateDir(), p); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind: "git_provider_registered", Actor: "operator",
+			Body: fmt.Sprintf("registered git provider %q (%s)", name, req.Kind),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// gitProviderByID — DELETE /api/v1/git-providers/{id}
+func (s *Server) gitProviderByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/git-providers/")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := runtime.DeleteGitProvider(s.rt.StateDir(), id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // claudeStatusHandler returns the operator's Claude login info — read from
 // ~/.claude/.credentials.json — so the AgentDetails widget can surface
 // "Login method: Claude Max account" etc. The OAuth access token + refresh
@@ -452,6 +556,64 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// resolveProviderCwd maps a provider_id to a working directory.
+// If provider_id is set, uses the provider's repo URL to derive a state-managed
+// clone path. If cwd is also provided, it wins (explicit override).
+func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, error) {
+	if providerID == "" {
+		if fallbackCwd == "" {
+			fallbackCwd, _ = os.UserHomeDir()
+		}
+		return fallbackCwd, nil
+	}
+	providers, err := runtime.LoadGitProviders(s.rt.StateDir())
+	if err != nil {
+		return fallbackCwd, err
+	}
+	for _, p := range providers {
+		if p.ID != providerID {
+			continue
+		}
+		if p.Kind == runtime.GitProviderEmbedded {
+			// Embedded Gitea — workspace under state dir.
+			dir := filepath.Join(s.rt.StateDir(), "workspaces", "embedded")
+			_ = os.MkdirAll(dir, 0o700)
+			return dir, nil
+		}
+		// External provider — clone if needed, return clone path.
+		dir := filepath.Join(s.rt.StateDir(), "workspaces", sanitizeID(p.ID))
+		if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+			_ = os.MkdirAll(dir, 0o700)
+			cloneURL := p.RepoURL
+			// Inject token for HTTPS clones.
+			if p.Token != "" && strings.HasPrefix(cloneURL, "https://") {
+				cloneURL = strings.Replace(cloneURL, "https://", "https://oauth2:"+p.Token+"@", 1)
+			}
+			cmd := exec.Command("git", "clone", "--depth=1", cloneURL, dir)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return dir, fmt.Errorf("git clone failed: %w\n%s", err, out)
+			}
+		}
+		return dir, nil
+	}
+	if fallbackCwd == "" {
+		fallbackCwd, _ = os.UserHomeDir()
+	}
+	return fallbackCwd, fmt.Errorf("provider %q not registered", providerID)
+}
+
+func sanitizeID(id string) string {
+	var b strings.Builder
+	for _, c := range id {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			b.WriteRune(c)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
+}
+
 func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -459,12 +621,18 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var req struct {
 			Name, Agent, Team, Role, Cwd, SystemPrompt string
+			ProviderID                                  string                `json:"provider_id"`
 			AgentArgs                                   []string              `json:"agent_args"`
 			ResumeUUID                                  string                `json:"resume_uuid"`
 			UseDefaultPrompt                            bool                  `json:"use_default_prompt"`
 			StatSheet                                   runtime.AgentStatSheet `json:"stat_sheet"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		cwd, err := s.resolveProviderCwd(req.ProviderID, req.Cwd)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
@@ -489,16 +657,12 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			AgentSlug:    req.Agent,
 			Team:         req.Team,
 			Role:         role,
-			Cwd:          req.Cwd,
+			Cwd:          cwd,
 			SystemPrompt: systemPrompt,
 			StatSheet:    req.StatSheet,
 			AgentArgs:    args,
 		})
 		if err == nil && req.Team != "" {
-			// v0.6: also record the membership in the unified model.
-			// Best-effort; failure here doesn't block the spawn since
-			// v0.5 SessionInfo.Team is still the source of truth in
-			// transitional code.
 			_, _ = s.rt.JoinTeam(req.Name, req.Team, runtime.MembershipRole(req.Role), "")
 		}
 		if err != nil {
@@ -1213,14 +1377,18 @@ func truncatePrompt(s string) string {
 }
 
 // templatesHandler — list available TeamProfile templates from the
-// catalog dir (./catalog at the repo root in dev; ~/.local/state/chepherd-v06/catalog
-// in production installs).
-func (s *Server) templatesHandler(w http.ResponseWriter, r *http.Request) {
-	dirs := []string{
+// catalog dir priority: bundled image catalog → operator custom → repo fallback (dev).
+func (s *Server) catalogDirs() []string {
+	return []string{
+		"/app/catalog",
 		"./catalog",
-		filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog"),
-		filepath.Join(s.rt.StateDir(), "..", "..", "..", "repos", "chepherd", "catalog"), // fallback to repo
+		filepath.Join(s.rt.StateDir(), "catalog"),
+		filepath.Join(os.Getenv("HOME"), "repos", "chepherd", "catalog"),
 	}
+}
+
+func (s *Server) templatesHandler(w http.ResponseWriter, r *http.Request) {
+	dirs := s.catalogDirs()
 	seen := map[string]bool{}
 	var out []map[string]any
 	for _, d := range dirs {
@@ -1262,7 +1430,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		// Save / publish operator-edited template YAML.
 		name := parts[0]
 		body, _ := io.ReadAll(r.Body)
-		opDir := filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog")
+		opDir := filepath.Join(s.rt.StateDir(), "catalog")
 		_ = os.MkdirAll(opDir, 0o700)
 		if err := os.WriteFile(filepath.Join(opDir, name+".yaml"), body, 0o600); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -1287,12 +1455,8 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		if newName == "" {
 			newName = srcName + "-fork"
 		}
-		dirs := []string{
-			"./catalog",
-			filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog"),
-		}
 		var srcPath string
-		for _, d := range dirs {
+		for _, d := range s.catalogDirs() {
 			candidate := filepath.Join(d, srcName+".yaml")
 			if _, err := os.Stat(candidate); err == nil {
 				srcPath = candidate
@@ -1320,7 +1484,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out := []byte(strings.Join(lines, "\n"))
-		opDir := filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog")
+		opDir := filepath.Join(s.rt.StateDir(), "catalog")
 		_ = os.MkdirAll(opDir, 0o700)
 		dstPath := filepath.Join(opDir, newName+".yaml")
 		if err := os.WriteFile(dstPath, out, 0o600); err != nil {
@@ -1343,18 +1507,15 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Team            string
 		Cwd             string
+		ProviderID      string                       `json:"provider_id"`
 		Topology        string
 		ResumeStrategy  string                       `json:"resume_strategy"` // "" | "fresh" | "latest-in-cwd"
 		MemberOverrides map[string]MemberOverrideReq `json:"member_overrides"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	// Find the template
-	dirs := []string{
-		"./catalog",
-		filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog"),
-	}
 	var p *catalog.TeamProfile
-	for _, d := range dirs {
+	for _, d := range s.catalogDirs() {
 		ps, _ := catalog.LoadAll(d)
 		for _, t := range ps {
 			if t.Name == templateName {
@@ -1374,7 +1535,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	if team == "" {
 		team = p.Name
 	}
-	cwd := req.Cwd
+	cwd, _ := s.resolveProviderCwd(req.ProviderID, req.Cwd)
 	if cwd == "" {
 		cwd = os.Getenv("HOME")
 	}

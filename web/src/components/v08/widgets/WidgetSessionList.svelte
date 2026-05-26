@@ -105,7 +105,7 @@
     </section>
   {/each}
   {#if !tree.length}
-    <p class="empty">No agents yet. Use "+ spawn" or "📦 templates".</p>
+    <p class="empty">No agents running — hit <strong>+ new</strong> to spawn one.</p>
   {/if}
 </div>
 

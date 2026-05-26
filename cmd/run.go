@@ -71,7 +71,7 @@ target this runtime instead of tmux.`,
 func init() {
 	runCmd.Flags().StringVar(&runFlagAgent, "agent", "claude-code", "default agent CLI slug (claude-code, qwen-code, aider, ...)")
 	runCmd.Flags().StringVar(&runFlagCwd, "cwd", "", "fallback working directory (default: current)")
-	runCmd.Flags().BoolVar(&runFlagNoShepherd, "no-shepherd", false, "skip the default shepherd (4-eyes off)")
+	runCmd.Flags().BoolVar(&runFlagNoShepherd, "no-shepherd", true, "skip the default shepherd (4-eyes off); use --no-shepherd=false to enable")
 	runCmd.Flags().StringVar(&runFlagStateDir, "state-dir", "", "runtime state dir (default: ~/.local/state/chepherd-v05)")
 	runCmd.Flags().BoolVar(&runFlagHeadless, "headless", false, "skip TUI; print runtime status + sleep (for testing / systemd)")
 	runCmd.Flags().StringVar(&runFlagListen, "listen", "127.0.0.1:8080", "HTTP/WS listen addr (set to '' to disable; for web/mobile clients)")

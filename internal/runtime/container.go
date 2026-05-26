@@ -42,8 +42,19 @@ func DetectRuntime() ContainerRuntime {
 
 // ─── Podman ──────────────────────────────────────────────────────────────────
 
-// PodmanRuntime spawns each agent as a rootless Podman container.
-// The container is ephemeral (--rm); state persists via bind mounts.
+// agentStorageRoot / agentRunRoot are the bind-mounted paths inside the
+// chepherd container where the pre-loaded agent image lives.
+// start.sh mounts AGENT_STORAGE to /var/lib/chepherd-agents; skopeo pre-
+// populates ${AGENT_STORAGE}/storage before the container starts.
+const (
+	agentStorageRoot = "/var/lib/chepherd-agents/storage"
+	agentRunRoot     = "/var/lib/chepherd-agents/run"
+)
+
+// PodmanRuntime spawns each agent as a Podman container managed by the
+// chepherd container's own internal podman (running as root inside a
+// --privileged outer container). The container is ephemeral (--rm); state
+// persists via bind mounts.
 type PodmanRuntime struct{}
 
 func (r *PodmanRuntime) Name() string { return "podman" }
@@ -52,42 +63,57 @@ func (r *PodmanRuntime) Available() error {
 	if _, err := exec.LookPath("podman"); err != nil {
 		return fmt.Errorf("podman not in PATH")
 	}
-	// Only activate if the chepherd-agent image is available.
-	// During development (before the image is built) we fall back to BareExec.
 	if !imageExists("chepherd-agent:latest") {
 		return fmt.Errorf("chepherd-agent:latest image not found; run: make agent-image")
 	}
 	return nil
 }
 
+const agentUID = 1000 // UID of the `agent` user inside the chepherd-agent image
+
 func (r *PodmanRuntime) AgentHomeDir(agentName, stateDir string) (string, error) {
 	dir := filepath.Join(stateDir, "agents", agentName, "home")
-	if err := os.MkdirAll(filepath.Join(dir, ".claude", "projects"), 0o700); err != nil {
+	claudeDir := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(filepath.Join(claudeDir, "projects"), 0o755); err != nil {
 		return "", err
+	}
+	// Chown the tree to agentUID so the non-root agent process (running inside
+	// a nested container where root maps to a different host UID) can read/write
+	// its own home directory.
+	for _, p := range []string{dir, claudeDir, filepath.Join(claudeDir, "projects")} {
+		_ = os.Chown(p, agentUID, agentUID)
+	}
+	// Copy host Claude credentials into the agent home so the agent process
+	// (UID agentUID, non-root) can authenticate. Refreshed on every spawn so
+	// OAuth token rotation is reflected without a full restart.
+	if src := hostClaudeCredentialsPath(); src != "" {
+		if data, err := os.ReadFile(src); err == nil {
+			dst := filepath.Join(claudeDir, ".credentials.json")
+			if werr := os.WriteFile(dst, data, 0o600); werr == nil {
+				_ = os.Chown(dst, agentUID, agentUID)
+			}
+		}
 	}
 	return dir, nil
 }
 
 func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, cwd string, argv []string, env []string) ([]string, []string) {
-	// Build podman run args. We run rootless (--userns keep-id) so files
-	// created inside the container are owned by the host user.
+	// Inner podman runs as root inside the --privileged chepherd container.
+	// Explicit --root / --runroot point to the pre-populated agent storage
+	// (written by skopeo on the host before chepherd starts).
 	podArgs := []string{
-		"podman", "run", "--rm", "--interactive", "--tty",
+		"podman",
+		"--root", agentStorageRoot,
+		"--runroot", agentRunRoot,
+		"run", "--rm", "--interactive", "--tty",
 		"--name", "chepherd-agent-" + agentName,
-		"--userns", "keep-id",
-		// Isolated network — agents can reach the internet but not the host network.
-		"--network", "slirp4netns",
+		// Bridge networking — slirp4netns is rootless-only.
+		"--network", "bridge",
 		// Per-agent persistent home (claude session files, config).
 		"-v", agentHomeDir + ":/home/agent:rw",
 		// Working repo — read/write.
 		"-v", cwd + ":" + cwd + ":rw",
 		"--workdir", cwd,
-	}
-
-	// Mount host Claude credentials read-only so the agent is pre-authenticated.
-	// Without this the agent exits immediately with "Not logged in".
-	if hostCreds := hostClaudeCredentialsPath(); hostCreds != "" {
-		podArgs = append(podArgs, "-v", hostCreds+":/home/agent/.claude/.credentials.json:ro")
 	}
 
 	// Mount MCP infrastructure: the session dir (contains .mcp.json), the
@@ -233,7 +259,16 @@ func hostClaudeCredentialsPath() string {
 }
 
 func imageExists(image string) bool {
-	err := exec.Command("podman", "image", "exists", image).Run()
+	// Check the mounted agent storage first (inside container or explicit root).
+	err := exec.Command("podman",
+		"--root", agentStorageRoot,
+		"--runroot", agentRunRoot,
+		"image", "exists", image).Run()
+	if err == nil {
+		return true
+	}
+	// Fallback: default podman storage (dev mode, running outside container).
+	err = exec.Command("podman", "image", "exists", image).Run()
 	if err == nil {
 		return true
 	}

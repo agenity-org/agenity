@@ -19,6 +19,13 @@
   import AgentSettings from './AgentSettings.svelte';
   import TeamSettings from './TeamSettings.svelte';
 
+  // --- clickOutside action (closes dropdowns when clicking elsewhere) ---
+  function clickOutside(node, handler) {
+    function handle(e) { if (!node.contains(e.target)) handler(); }
+    document.addEventListener('click', handle, true);
+    return { destroy() { document.removeEventListener('click', handle, true); } };
+  }
+
   // --- props / state ---
   let sessions = $state([]);
   let teams = $state([]);
@@ -237,9 +244,15 @@
   function applyFontSize(n) {
     fontSize = Math.max(9, Math.min(22, n));
     document.documentElement.style.setProperty('--ws-font', fontSize + 'px');
+    // Also drive the root rem base so all rem-based UI elements scale with A+/A-.
+    document.documentElement.style.fontSize = fontSize + 'px';
     try { localStorage.setItem('chepherd-font', String(fontSize)); } catch {}
   }
   // Default font on first load: 14 (overridable via localStorage from prior session)
+
+  // --- view picker (custom dropdown replacing native <select>) ---
+  let showViewMenu = $state(false);
+  function pickView(val) { showViewMenu = false; onViewChange({ target: { value: val } }); }
 
   // --- save-as named layout ---
   let showSaveAs = $state(false);
@@ -333,27 +346,39 @@
 
 <div class="workspace">
   <header class="topbar">
-    <a href="/" class="brand">✻ chepherd <span class="ver">v0.8</span></a>
+    <a href="/" class="brand"><span class="brand-mark">░</span>chepherd<span class="ver">v0.8</span></a>
     <div class="stats">
       {sessions.length} agents · {teams.length} teams · {memberships.length} memberships
     </div>
     {#if activeWorkspace}<span class="workspace-badge" title="active project workspace">{activeWorkspace}</span>{/if}
-    <select class="view-select" title="layout" on:change={(e) => onViewChange(e)} value="">
-      <option value="" disabled>View…</option>
-      <optgroup label="Built-in">
-        <option value="preset:focus">Focus</option>
-        <option value="preset:council">Council</option>
-        <option value="preset:board">Board</option>
-        <option value="preset:multi-team">Multi</option>
-      </optgroup>
-      {#if savedLayouts.length}
-        <optgroup label="Saved">
-          {#each savedLayouts.filter(n => n !== 'current') as n}
-            <option value="saved:{n}">{n}</option>
-          {/each}
-        </optgroup>
+    <div class="view-menu-wrap" use:clickOutside={() => (showViewMenu = false)}>
+      <button class="view-btn" on:click={() => (showViewMenu = !showViewMenu)} title="Switch layout">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+        </svg>
+        View
+        <svg class="caret" width="10" height="6" viewBox="0 0 10 6" fill="currentColor"><path d="M1 1l4 4 4-4"/></svg>
+      </button>
+      {#if showViewMenu}
+        <div class="view-dropdown" role="menu">
+          <div class="vd-section">Layout</div>
+          <button role="menuitem" on:click={() => pickView('preset:focus')}>Focus</button>
+          <button role="menuitem" on:click={() => pickView('preset:council')}>Council</button>
+          <button role="menuitem" on:click={() => pickView('preset:board')}>Board</button>
+          <button role="menuitem" on:click={() => pickView('preset:multi-team')}>Multi</button>
+          {#if savedLayouts.filter(n => n !== 'current').length}
+            <div class="vd-divider"></div>
+            <div class="vd-section">Saved</div>
+            {#each savedLayouts.filter(n => n !== 'current') as n}
+              <button role="menuitem" on:click={() => pickView('saved:' + n)}>{n}</button>
+            {/each}
+          {/if}
+        </div>
       {/if}
-    </select>
+    </div>
     <div class="font-knob" title="font size (applies to all widgets)">
       <button class="icon-btn small" on:click={() => applyFontSize(fontSize - 1)} aria-label="smaller">A-</button>
       <span class="font-num">{fontSize}px</span>
@@ -386,7 +411,13 @@
       </div>
     {/if}
     <button class="icon-btn" on:click={toggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
-    <button class="secondary" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">↓ save view</button>
+    <button class="save-layout-btn" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M13 14H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h8l2 2v9a1 1 0 0 1-1 1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+        <rect x="5" y="9" width="6" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
+        <rect x="5" y="2" width="4" height="3" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
+      </svg>
+    </button>
     <button class="primary spawn-btn" on:click={() => (showWizard = true)} title="Spawn a single agent or apply a team template">+ new</button>
   </header>
 
@@ -427,8 +458,8 @@
     --bg: #0a0a0a; --bg-elev: #111; --bg-input: #0a0a0a;
     --border: #1e1e1e; --border-strong: #2a2a2a;
     --fg: #f5f5f5; --fg-muted: #aaa; --fg-faint: #666;
-    --accent: #ffa500; --accent-2: #87ceeb; --danger: #ff6b6b;
-    --select-bg: #1a2530; --select-border: #5f9ea0;
+    --accent: #0072F5; --accent-2: #87ceeb; --danger: #ff6b6b;
+    --select-bg: #0d1f3c; --select-border: #0072F5;
     --scrollbar-track: transparent;
     --scrollbar-thumb: #2a2a2a;
     --scrollbar-thumb-hover: #3a3a3a;
@@ -437,8 +468,8 @@
     --bg: #fafafa; --bg-elev: #ffffff; --bg-input: #ffffff;
     --border: #e5e7eb; --border-strong: #cbd5e1;
     --fg: #1a1a1a; --fg-muted: #555; --fg-faint: #888;
-    --accent: #c97900; --accent-2: #2563eb; --danger: #c92020;
-    --select-bg: #e0f2fe; --select-border: #2563eb;
+    --accent: #0057c7; --accent-2: #2563eb; --danger: #c92020;
+    --select-bg: #e0f2fe; --select-border: #0057c7;
     --scrollbar-track: transparent;
     --scrollbar-thumb: #cbd5e1;
     --scrollbar-thumb-hover: #94a3b8;
@@ -485,15 +516,27 @@
   }
   .workspace { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--fg); }
   .topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.72rem 1.2rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
-  .topbar .brand { color: var(--accent); font-weight: 700; text-decoration: none; font-size: 1.25rem; letter-spacing: -0.01em; }
-  .topbar .brand .ver { font-size: 0.75rem; color: var(--fg-muted); margin-left: 0.4rem; font-weight: 400; }
+  .topbar .brand { color: var(--fg); font-weight: 700; text-decoration: none; font-size: 1.1rem; letter-spacing: -0.02em; font-family: ui-monospace, monospace; display: flex; align-items: baseline; gap: 0.2rem; }
+  .topbar .brand .brand-mark { color: var(--accent); font-size: 1.2em; }
+  .topbar .brand .ver { font-size: 0.65rem; color: var(--fg-faint); margin-left: 0.35rem; font-weight: 400; align-self: center; }
   .topbar .stats { flex: 1; color: var(--fg-muted); font-size: 0.78rem; white-space: nowrap; }
   .workspace-badge { font-size: 0.72rem; color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent-2) 25%, transparent); border-radius: 999px; padding: 0.1rem 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 12rem; }
-  .view-switcher { display: flex; gap: 0.2rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.18rem; }
-  .view-switcher button { padding: 0.32rem 0.7rem; background: transparent; color: var(--fg-muted); border: none; border-radius: 4px; cursor: pointer; font-size: 0.82rem; }
-  .view-switcher button:hover { color: var(--accent); }
-  button.primary { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 0.42rem 0.95rem; font-weight: 600; cursor: pointer; font-size: 0.88rem; }
-  button.spawn-btn { background: #0072F5; color: #fff; }
+  /* View picker — custom themed dropdown */
+  .view-menu-wrap { position: relative; }
+  .view-btn { display: flex; align-items: center; gap: 0.4rem; background: var(--bg); color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.38rem 0.65rem; cursor: pointer; font-size: 0.82rem; white-space: nowrap; }
+  .view-btn:hover { border-color: var(--accent-2); color: var(--fg); }
+  .view-btn .caret { transition: transform 0.15s; }
+  .view-dropdown { position: absolute; top: calc(100% + 4px); left: 0; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 8px; padding: 0.3rem; min-width: 140px; z-index: 200; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+  .view-dropdown button[role=menuitem] { display: block; width: 100%; padding: 0.38rem 0.65rem; background: transparent; color: var(--fg); border: none; border-radius: 5px; cursor: pointer; text-align: left; font-size: 0.82rem; }
+  .view-dropdown button[role=menuitem]:hover { background: var(--bg); color: var(--accent); }
+  .vd-section { padding: 0.2rem 0.65rem; color: var(--fg-faint); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  .vd-divider { height: 1px; background: var(--border); margin: 0.25rem 0.3rem; }
+  /* Save layout button — ghost icon, deliberately NOT blue (blue = new/primary only) */
+  .save-layout-btn { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; cursor: pointer; }
+  .save-layout-btn:hover { background: var(--bg); color: var(--fg); border-color: var(--accent); }
+  /* Primary / spawn button */
+  button.primary { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 0.42rem 0.95rem; font-weight: 600; cursor: pointer; font-size: 0.88rem; }
+  button.spawn-btn { background: #0072F5; color: #fff; padding: 0.5rem 1.1rem; }
   button.secondary { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.42rem 0.85rem; cursor: pointer; font-size: 0.88rem; }
   button.icon-btn { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   button.icon-btn.small { width: 28px; height: 24px; font-size: 0.7rem; padding: 0; }
@@ -509,7 +552,6 @@
   .handoff-row select { flex: 1; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-size: 0.8rem; padding: 0.2rem 0.3rem; }
   button.primary-sm { background: #0072F5; color: #fff; border: none; border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
   button.primary-sm:disabled { opacity: 0.4; cursor: default; }
-  .layout-pick { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.4rem 0.55rem; font-size: 0.82rem; cursor: pointer; max-width: 140px; }
   .canvas { flex: 1; min-height: 0; overflow: hidden; }
   .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
   .modal-saveas { width: min(420px, 92vw); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 10px; padding: 1.2rem 1.3rem; }

@@ -77,7 +77,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("mcp: listen %s: %w", s.sockPath, err)
 	}
-	_ = os.Chmod(s.sockPath, 0o600)
+	// 0666 so agent processes (which may run as a different UID inside a
+	// nested container) can connect without chown.
+	_ = os.Chmod(s.sockPath, 0o666)
 	s.listener = l
 	go s.acceptLoop()
 	return nil

@@ -106,7 +106,12 @@
       }
       // Rolling buffer for OAuth URL detection (keep last 4 KB to avoid unbounded growth)
       rawBuf = (rawBuf + text).slice(-4096);
-      const m = rawBuf.match(/https:\/\/claude\.(?:ai|com)\/[^\s\x1b\x07\x0d\x0a"']+/);
+      // Strip ANSI escape sequences and collapse CR/LF so that URLs word-wrapped
+      // by the PTY across multiple lines are reassembled into a single matchable string.
+      const scanBuf = rawBuf
+        .replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g, '')
+        .replace(/\r?\n/g, '');
+      const m = scanBuf.match(/https:\/\/claude\.(?:ai|com)\/[^\s"']+/);
       if (m && m[0] !== oauthUrl) oauthUrl = m[0];
     };
     term.onResize(sendResize);

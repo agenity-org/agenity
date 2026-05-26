@@ -1451,7 +1451,7 @@ func (r *Runtime) persistInfoLocked(info *SessionInfo) error {
 // child process for tools that prefer env-pointing over file discovery.
 func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, error) {
 	cfgDir := filepath.Join(r.stateDir, "sessions", sessionName)
-	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		return nil, "", err
 	}
 	sockPath := filepath.Join(r.stateDir, "runtime.sock")
@@ -1476,7 +1476,7 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		return nil, "", err
 	}
 	cfgPath := filepath.Join(cfgDir, ".mcp.json")
-	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
 		return nil, "", err
 	}
 	// Symlink into cwd as ./.mcp.json so Claude Code's per-project lookup
