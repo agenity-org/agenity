@@ -19,6 +19,9 @@ const (
 	RoleMemberReviewerEconomics  MembershipRole = "reviewer-economics"
 	RoleMemberTester             MembershipRole = "tester"
 	RoleMemberArchitect          MembershipRole = "architect"
+	// Orchestrator has authority to spawn workers, stop/pause sessions,
+	// and assign tasks — the PO/tech-lead role in a 2-pizza team.
+	RoleMemberOrchestrator MembershipRole = "orchestrator"
 )
 
 // Membership joins one Agent + one Team with a role. Globally unique by

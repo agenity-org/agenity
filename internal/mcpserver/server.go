@@ -341,6 +341,24 @@ func (s *Server) toolList() []map[string]any {
 				"team": map[string]any{"type": "string"},
 			},
 		}},
+		// v0.8 orchestrator tools — require caller role=orchestrator or role=shepherd
+		{"name": "chepherd.spawn_worker", "description": "Orchestrator-only: spawn a new worker session in the caller's team. Simpler alias for chepherd.spawn with role=worker. Args: name (string), agent (string, optional, default claude-code), cwd (string, optional), brief_override (string, optional).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name":           map[string]any{"type": "string"},
+				"agent":          map[string]any{"type": "string"},
+				"cwd":            map[string]any{"type": "string"},
+				"brief_override": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.stop_session", "description": "Orchestrator-only: permanently stop (terminate) a session. The session is removed from the registry. Use chepherd.pause to temporarily pause instead. Args: name (string).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+			},
+		}},
 	}
 }
 
@@ -646,10 +664,86 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			}
 		}
 		resp.Result = map[string]any{"team": a.Team, "canon": canon}
+	case "spawn_worker":
+		// Orchestrator-only: spawn a worker in the caller's team.
+		if !s.callerHasAuthority() {
+			resp.Error = &rpcErr{Code: -32000, Message: "authority denied: caller role must be orchestrator or shepherd to spawn workers"}
+			return resp
+		}
+		var a struct {
+			Name, Agent, Cwd, BriefOverride string `json:"name,omitempty"`
+		}
+		_ = json.Unmarshal(args, &a)
+		if a.Name == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "name required"}
+			return resp
+		}
+		agent := a.Agent
+		if agent == "" {
+			agent = "claude-code"
+		}
+		// Inherit team from caller's first membership, or "default"
+		callerTeam := "default"
+		for _, m := range s.rt.ListMemberships(s.CurrentCaller(), "") {
+			callerTeam = m.TeamName
+			break
+		}
+		spec := runtime.SpawnSpec{
+			Name:         a.Name,
+			AgentSlug:    agent,
+			Team:         callerTeam,
+			Role:         runtime.RoleWorker,
+			Cwd:          a.Cwd,
+			SystemPrompt: a.BriefOverride,
+		}
+		_, _, err := s.rt.Spawn(spec)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "spawn_worker: " + err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"ok": true, "name": a.Name, "team": callerTeam}
+	case "stop_session":
+		// Orchestrator-only: terminate a session.
+		if !s.callerHasAuthority() {
+			resp.Error = &rpcErr{Code: -32000, Message: "authority denied: caller role must be orchestrator or shepherd to stop sessions"}
+			return resp
+		}
+		var a struct{ Name string }
+		_ = json.Unmarshal(args, &a)
+		if err := s.rt.Stop(a.Name); err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "stop_session: " + err.Error()}
+			return resp
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind:  "session_stopped",
+			Actor: s.CurrentCaller(),
+			Body:  fmt.Sprintf("orchestrator %q stopped session %q", s.CurrentCaller(), a.Name),
+		})
+		resp.Result = map[string]any{"ok": true, "stopped": a.Name}
 	default:
 		resp.Error = &rpcErr{Code: -32601, Message: "unknown chepherd tool: " + name}
 	}
 	return resp
+}
+
+// callerHasAuthority returns true if the current MCP caller has orchestration
+// authority — i.e., their role in any team is "orchestrator" or "shepherd".
+func (s *Server) callerHasAuthority() bool {
+	caller := s.CurrentCaller()
+	if caller == "" || caller == "anonymous" {
+		return false
+	}
+	for _, m := range s.rt.ListMemberships(caller, "") {
+		if m.Role == runtime.RoleMemberOrchestrator || m.Role == runtime.RoleMemberShepherd {
+			return true
+		}
+	}
+	// Also check the session's own role field (set at spawn time)
+	_, si := s.rt.Get(caller)
+	if si != nil && (si.Role == "orchestrator" || si.Role == "shepherd") {
+		return true
+	}
+	return false
 }
 
 // ----- JSON-RPC types -----

@@ -325,7 +325,7 @@
                 <td>{m.team_name}</td>
                 <td>
                   <select value={m.role} on:change={(e) => changeRole(m.team_name, e.target.value)}>
-                    {#each ['worker', 'shepherd', 'reviewer', 'tester', 'architect'] as r}<option value={r}>{r}</option>{/each}
+                    {#each ['worker', 'orchestrator', 'shepherd', 'reviewer', 'tester', 'architect'] as r}<option value={r}>{r}</option>{/each}
                   </select>
                 </td>
                 <td><button class="danger" on:click={() => removeMembership(m.team_name)}>✕ Remove</button></td>
@@ -340,7 +340,7 @@
             {#each (teams || []).filter(t => !memberships.find(m => m.team_name === t.name)) as t}<option value={t.name}>{t.name}</option>{/each}
           </select>
           <select bind:value={addRole}>
-            {#each ['worker', 'shepherd', 'reviewer', 'tester', 'architect'] as r}<option value={r}>{r}</option>{/each}
+            {#each ['worker', 'orchestrator', 'shepherd', 'reviewer', 'tester', 'architect'] as r}<option value={r}>{r}</option>{/each}
           </select>
           <button class="primary" on:click={addMembership} disabled={!addTeam}>+ Add membership</button>
         </div>
