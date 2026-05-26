@@ -40,8 +40,10 @@
   let fontObs = null;
   let themeObs = null;
   let lastThemeSig = '';
-  let oauthUrl = $state('');  // detected OAuth URL shown as clickable banner
-  let rawBuf = '';             // rolling buffer for URL extraction (not shown)
+  // Legacy OAuth banner removed (#136 R5 redo) — the spawn wizard's
+  // dedicated stage 4 owns Claude login now. Showing a banner in the
+  // terminal pane was confusing operators when auto-dismiss had already
+  // taken care of the OAuth flow.
 
   function currentWsFont() {
     try {
@@ -150,31 +152,10 @@
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (ev) => {
       if (!term) return;
-      let text = '';
       if (ev.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(ev.data));
-        try { text = new TextDecoder().decode(ev.data); } catch {}
       } else {
         term.write(ev.data);
-        text = ev.data;
-      }
-      // Rolling buffer for OAuth URL detection (keep last 4 KB to avoid unbounded growth)
-      rawBuf = (rawBuf + text).slice(-4096);
-      // Strip ANSI escape sequences then remove ALL CR and LF so PTY-wrapped URLs
-      // reassemble into one matchable string. \r?\n only removes \r\n pairs and bare
-      // \n — claude-code uses bare \r (carriage-return without newline) to overwrite
-      // the old URL with the corrected one on the same line, so standalone \r must
-      // also be stripped or [^\s] stops at the \r and yields a truncated URL.
-      const scanBuf = rawBuf
-        .replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g, '')
-        .replace(/[\r\n]/g, '');
-      // claude-code first prints an older claude.ai URL then overwrites it with the
-      // canonical claude.com/cai URL via \r. After stripping \r both appear in
-      // scanBuf; pick the longest match — the canonical URL is always longer.
-      const allMatches = [...scanBuf.matchAll(/https:\/\/claude\.(?:ai|com)\/[^\s"'<>]+/g)];
-      if (allMatches.length > 0) {
-        const best = allMatches.reduce((a, b) => a[0].length >= b[0].length ? a : b);
-        if (best[0] !== oauthUrl) oauthUrl = best[0];
       }
     };
     term.onResize(sendResize);
@@ -240,34 +221,11 @@
   This widget renders only the xterm canvas, full height.
 -->
 <div class="term-pane">
-  {#if oauthUrl}
-  <div class="oauth-banner">
-    <span class="oauth-icon">🔑</span>
-    <span>Claude login required —</span>
-    <a href={oauthUrl} target="_blank" rel="noreferrer noopener">click to authenticate</a>
-    <button class="oauth-dismiss" onclick={() => oauthUrl = ''}>✕</button>
-  </div>
-  {/if}
   <div class="term-body" bind:this={termContainer}></div>
 </div>
 
 <style>
   .term-pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
-  .oauth-banner {
-    display: flex; align-items: center; gap: 0.4rem;
-    padding: 0.35rem 0.7rem; font-size: 0.8rem;
-    background: color-mix(in srgb, var(--accent) 18%, var(--bg));
-    border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    color: var(--fg);
-  }
-  .oauth-banner a { color: var(--accent); font-weight: 600; text-decoration: underline; }
-  .oauth-banner a:hover { opacity: 0.8; }
-  .oauth-icon { font-size: 1rem; }
-  .oauth-dismiss {
-    margin-left: auto; background: none; border: none; cursor: pointer;
-    color: var(--fg-dim, #888); font-size: 0.75rem; padding: 0 0.2rem;
-  }
-  .oauth-dismiss:hover { color: var(--fg); }
   .term-body { flex: 1; padding: 0.3rem 0.4rem; min-height: 0; overflow: hidden; }
   .term-body :global(.xterm) { height: 100%; }
   .term-body :global(.xterm-viewport) { height: 100% !important; }

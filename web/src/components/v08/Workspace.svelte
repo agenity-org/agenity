@@ -486,8 +486,12 @@
   :global(.xterm-viewport::-webkit-scrollbar-track) { background: var(--scrollbar-track); }
   :global(.xterm-viewport::-webkit-scrollbar-thumb) { background: var(--scrollbar-thumb); border-radius: 10px; border: 2px solid var(--bg); min-height: 40px; }
   :global(.xterm-viewport::-webkit-scrollbar-thumb:hover) { background: var(--scrollbar-thumb-hover); }
-  :global(html) { --ws-font: 14px; }
-  :global(html), :global(body) { background: var(--bg); color: var(--fg); margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
+  /* Single source of truth for type sizing (#2 audit + unify):
+     html's font-size IS --ws-font, so every `rem` value in every
+     component scales automatically when the operator hits A+/A-.
+     No per-component overrides needed. */
+  :global(html) { --ws-font: 14px; font-size: var(--ws-font); }
+  :global(html), :global(body) { background: var(--bg); color: var(--fg); margin: 0; padding: 0; height: 100vh; overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; }
   /* Force all form controls to inherit the base font — browsers default
      buttons/inputs/selects to a system UI font that can differ on some platforms. */
   :global(button), :global(input), :global(select), :global(textarea) { font-family: inherit; }

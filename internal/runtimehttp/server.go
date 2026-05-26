@@ -38,6 +38,7 @@ import (
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/profile"
+	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
@@ -111,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/vault", s.vaultRoot)
 	mux.HandleFunc("/api/v1/vault/", s.vaultByID)
 	mux.HandleFunc("/api/v1/vault/providers", s.vaultProviders)
+	mux.HandleFunc("/api/v1/agents", s.agentsCatalog)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
@@ -2363,6 +2365,58 @@ func (s *Server) claudeTokensHarvest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "label": label})
+}
+
+// agentsCatalog surfaces the compiled-in + override agent registry so the
+// spawn wizard can let operators pick an agent type (#127 R5 redo).
+// Returns a slim view: slug + label + description + which credential
+// types it expects, hiding internal Binary / DefaultArgs / RequiredEnv.
+func (s *Server) agentsCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	type entry struct {
+		Slug         string   `json:"slug"`
+		Label        string   `json:"label"`
+		Description  string   `json:"description"`
+		RequiresVCS  bool     `json:"requires_vcs"`  // GitHub etc. tokens useful
+		RequiresAuth string   `json:"requires_auth"` // "claude-oauth" | "openai-api" | "" (none)
+		RequiredEnv  []string `json:"required_env,omitempty"`
+	}
+	labels := map[string]struct {
+		Label, Description, Auth string
+	}{
+		"claude-code":     {"Claude Code", "Anthropic's official CLI — needs a Claude.ai subscription (Pro/Max/Team)", "claude-oauth"},
+		"qwen-code":       {"Qwen Code", "Alibaba's open coding agent — needs an OpenAI-compatible endpoint key", "openai-api"},
+		"aider":           {"Aider", "Open-source pair programmer — needs an OpenAI key", "openai-api"},
+		"cursor-agent":    {"Cursor Agent", "Cursor's headless agent — needs the LLM gateway", ""},
+		"little-coder":    {"Little Coder", "Minimal local agent — needs an OpenAI-compatible endpoint", "openai-api"},
+		"opencode":        {"OpenCode", "Community-built coding agent — needs an OpenAI-compatible endpoint", "openai-api"},
+		"sovereign-shell": {"Sovereign Shell", "Raw shell with no agent — useful as a rescue session", ""},
+	}
+	out := make([]entry, 0, len(agentcatalog.Builtin))
+	for _, a := range agentcatalog.Builtin {
+		meta := labels[a.Slug]
+		out = append(out, entry{
+			Slug:         a.Slug,
+			Label:        firstNonEmpty(meta.Label, a.Slug),
+			Description:  firstNonEmpty(meta.Description, a.Notes),
+			RequiresAuth: meta.Auth,
+			RequiresVCS:  meta.Auth == "claude-oauth" || meta.Auth == "openai-api",
+			RequiredEnv:  a.RequiredEnv,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": out})
+}
+
+func firstNonEmpty(s ...string) string {
+	for _, v := range s {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ─── Claude OAuth login-capture flow (R5 redo / #136) ───────────────────────

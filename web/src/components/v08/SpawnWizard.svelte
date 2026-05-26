@@ -42,6 +42,11 @@
 
   let pickedResurrect = $state(null);
 
+  // Agent-type registry (#127 R5 redo / Wizard agent selector). Picked
+  // at stage 1; defaults to claude-code so existing flows are unchanged.
+  let agents = $state([]);
+  let selectedAgentSlug = $state('claude-code');
+
   // Claude OAuth tokens (R5 / #136) — vault entries + host fallback
   let claudeTokens = $state([]);
   let selectedClaudeTokenId = $state('');   // default: empty → pick newest claude-oauth at spawn
@@ -103,10 +108,15 @@
   onMount(async () => {
     try { const r = await fetch(`${API}/templates`); templates = (await r.json()).templates || []; } catch {}
     try { const r = await fetch(`${API}/teams/saved`); savedTeams = ((await r.json()).teams || []).filter(t => !t.live); } catch {}
+    try { const r = await fetch(`${API}/agents`); agents = (await r.json()).agents || []; } catch {}
     await loadProviders();
     await loadSessions();
     await loadClaudeTokens();
   });
+
+  let selectedAgent = $derived(agents.find(a => a.slug === selectedAgentSlug) || null);
+  // Stage 4 (Claude account) is only relevant for claude-oauth agents.
+  let needsClaudeAccount = $derived(selectedAgent?.requires_auth === 'claude-oauth');
 
   async function loadClaudeTokens() {
     try {
@@ -289,7 +299,7 @@
       if (shape === 'solo') {
         const soloName = teamName || 'solo';
         const body = {
-          name: soloName, agent: 'claude-code',
+          name: soloName, agent: selectedAgentSlug || 'claude-code',
           team: teamName || 'default', role: 'worker',
           provider_id: selectedProviderId,
           use_default_prompt: true,
@@ -343,7 +353,14 @@
   function next() {
     if (stage === 2 && shape === 'resurrect') { doResurrect(); return; }
     if (stage === 2 && shape === 'custom-yaml') { stage = 5; return; }
-    // Auto-skip stage 4 when exactly one token exists — no decision needed.
+    // Auto-skip stage 4 (Claude account) when the selected agent doesn't
+    // use claude-oauth at all (e.g. qwen-code, aider, opencode).
+    if (stage === 3 && !needsClaudeAccount) {
+      selectedClaudeTokenId = '';
+      stage = 5;
+      return;
+    }
+    // Auto-skip stage 4 when exactly one Claude token exists — no decision needed.
     if (stage === 3 && claudeTokens.length === 1) {
       selectedClaudeTokenId = claudeTokens[0].id === 'host' ? '' : claudeTokens[0].id;
       stage = 5;
@@ -419,9 +436,24 @@
           </div>
         {/if}
 
-      <!-- ── STAGE 2: Git repo ───────────────────────────────────────────── -->
+      <!-- ── STAGE 2: Agent type + Git repo ──────────────────────────────── -->
       {:else if stage === 2}
-        <h3>Which repo will they work in?</h3>
+        <h3>Which agent will work here?</h3>
+        <p class="prose">Pick the CLI each team member will run. Different agents need different credentials — chepherd will surface only the ones that matter on later stages.</p>
+        <div class="agent-grid">
+          {#each agents as a}
+            <button class="agent-card" class:active={selectedAgentSlug===a.slug}
+                    on:click={() => selectedAgentSlug = a.slug}>
+              <div class="a-name">{a.label}</div>
+              <div class="a-desc">{a.description}</div>
+              {#if a.requires_auth}
+                <div class="a-auth">🔑 {a.requires_auth}</div>
+              {/if}
+            </button>
+          {/each}
+        </div>
+
+        <h3 style="margin-top:1.2rem">Which repo will they work in?</h3>
 
         {#if providers.length > 0 && !showRegisterForm}
           <div class="provider-grid">
@@ -581,9 +613,12 @@
         <h3>Ready to launch</h3>
         <ul class="confirm">
           <li><strong>Shape:</strong> {shape}</li>
+          <li><strong>Agent:</strong> {selectedAgent?.label || selectedAgentSlug}</li>
           <li><strong>Team:</strong> {teamName || shape}</li>
           <li><strong>Repo:</strong> {selectedProvider?.display_name || selectedProvider?.repo_url || '—'} <span class="p-badge">{selectedProvider?.kind || ''}</span></li>
-          <li><strong>Claude account:</strong> {selectedClaudeToken?.label || (selectedClaudeTokenId === '' ? '(auto — newest vault token)' : selectedClaudeTokenId)}</li>
+          {#if needsClaudeAccount}
+            <li><strong>Claude account:</strong> {selectedClaudeToken?.label || (selectedClaudeTokenId === '' ? '(auto — newest vault token)' : selectedClaudeTokenId)}</li>
+          {/if}
           {#if shape !== 'solo' && shape !== 'custom-yaml'}
             <li><strong>Members:</strong>
               <ul>
@@ -688,6 +723,14 @@
   button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
   button.ghost { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.45rem 0.95rem; cursor: pointer; font-size: 0.9rem; }
   button.ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* Agent type cards */
+  .agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.5rem; margin-bottom: 0.5rem; }
+  .agent-card { padding: 0.7rem 0.85rem; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; cursor: pointer; text-align: left; color: var(--fg); transition: border 0.1s; }
+  .agent-card:hover { border-color: var(--accent-2); }
+  .agent-card.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .a-name { font-weight: 600; color: var(--accent); margin-bottom: 0.2rem; font-size: 0.9rem; }
+  .a-desc { color: var(--fg-muted); font-size: 0.78rem; line-height: 1.35; }
+  .a-auth { color: var(--fg-faint); font-size: 0.7rem; margin-top: 0.3rem; }
   /* OAuth flow */
   .login-status { color: var(--fg-muted); font-size: 0.88rem; margin: 0.4rem 0; }
   .spinner-row { display: flex; justify-content: center; padding: 0.5rem; }

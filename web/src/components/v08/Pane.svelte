@@ -17,6 +17,8 @@
   import WidgetAgentPrompt from './widgets/WidgetAgentPrompt.svelte';
   import WidgetAgentSkills from './widgets/WidgetAgentSkills.svelte';
   import WidgetAgentDetails from './widgets/WidgetAgentDetails.svelte';
+  import WidgetAgentIdentity from './widgets/WidgetAgentIdentity.svelte';
+  import WidgetAgentRuntime from './widgets/WidgetAgentRuntime.svelte';
   import WidgetCanon from './widgets/WidgetCanon.svelte';
   import WidgetMCPLog from './widgets/WidgetMCPLog.svelte';
   import WidgetKanban from './widgets/WidgetKanban.svelte';
@@ -58,7 +60,9 @@
     'terminal': '▦ terminal',
     'session-list': '☰ sessions',
     'session-board': '▤ board',
-    'agent-details': 'ⓘ details',
+    'agent-identity': 'ⓘ identity',
+    'agent-runtime': '⚙ runtime',
+    'agent-details': 'ⓘ details (both)',
     'shepherd-assessment-card': '✻ scorecard',
     'inbox': '✉ inbox',
     'events': '⏱ events',
@@ -67,10 +71,6 @@
     'agent-prompt': '✏ prompt',
     'agent-skills': '🎮 skills',
     'kanban': '⊞ kanban',
-    // Legacy single-purpose cards kept for back-compat (saved layouts).
-    'identity-card': 'ⓘ identity (legacy)',
-    'location-card': '📍 location (legacy)',
-    'process-card': '⚙ process (legacy)',
   };
 
   // Per-pane derived agent for the terminal widget header chips.
@@ -177,12 +177,10 @@
         <WidgetSessionBoard {sessions} {selectedAgent} {selectAgent} />
       {:else if node.widget === 'agent-details'}
         <WidgetAgentDetails agent={(sessions || []).find(s => s.name === selectedAgent) || null} />
-      {:else if node.widget === 'identity-card'}
-        <WidgetCard kind="identity" {selectedAgent} {sessions} {memberships} />
-      {:else if node.widget === 'location-card'}
-        <WidgetCard kind="location" {selectedAgent} {sessions} />
-      {:else if node.widget === 'process-card'}
-        <WidgetCard kind="process" {selectedAgent} {sessions} />
+      {:else if node.widget === 'agent-identity'}
+        <WidgetAgentIdentity agent={(sessions || []).find(s => s.name === selectedAgent) || null} />
+      {:else if node.widget === 'agent-runtime'}
+        <WidgetAgentRuntime agent={(sessions || []).find(s => s.name === selectedAgent) || null} />
       {:else if node.widget === 'shepherd-assessment-card'}
         <WidgetSpider {selectedAgent} {sessions} />
       {:else if node.widget === 'inbox'}
