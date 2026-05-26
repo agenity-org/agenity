@@ -40,8 +40,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # Base tooling: git + curl (needed by agents); podman for ContainerRuntime.
 # uidmap provides newuidmap/newgidmap required for rootless podman-in-podman.
+# gosu lets the entrypoint drop privileges after image-load (runs as root
+# briefly to chown the named-volume state dir + load the agent image).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates \
+    git curl ca-certificates gosu \
     podman fuse-overlayfs slirp4netns uidmap \
     && rm -rf /var/lib/apt/lists/*
 
@@ -56,6 +58,8 @@ RUN useradd -m -u 1000 -s /bin/bash chepherd \
 COPY --from=go-builder  /usr/local/bin/chepherd /usr/local/bin/chepherd
 COPY --from=web-builder /build/web/dist          /app/web/dist
 COPY --from=go-builder  /build/catalog            /app/catalog
+COPY scripts/chepherd-entrypoint.sh             /usr/local/bin/chepherd-entrypoint
+RUN chmod +x /usr/local/bin/chepherd-entrypoint
 
 # Podman storage config for rootless inside container
 RUN mkdir -p /home/chepherd/.config/containers && \
@@ -71,9 +75,9 @@ WORKDIR /home/chepherd
 # State dir mounted by compose.yaml for persistence across container restarts
 VOLUME ["/home/chepherd/.local/state/chepherd"]
 
-EXPOSE 8080
+EXPOSE 8080 9090
 
-ENTRYPOINT ["chepherd", "run", \
-    "--headless", \
-    "--listen", "0.0.0.0:8080", \
-    "--web-dir", "/app/web/dist"]
+# Run as root inside the container — chepherd-entrypoint chowns the state
+# volume, loads the agent image into the in-pod podman storage, then
+# `exec gosu chepherd:chepherd ...` drops privileges before the daemon starts.
+ENTRYPOINT ["/usr/local/bin/chepherd-entrypoint"]

@@ -1,0 +1,21 @@
+# host-built binaries — Containerfile rebuilds these fresh
+chepherd
+chepherd-v0?
+
+# all screenshot artifacts
+*.png
+*.jpg
+*.jpeg
+
+# build outputs
+web/dist
+web/node_modules
+*.tar
+state-dir
+walk-evidence
+.playwright-mcp
+
+# editor / IDE
+.vscode
+.idea
+*.swp

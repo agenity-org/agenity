@@ -49,9 +49,11 @@ exec podman run \
   --privileged \
   -e HOME=/home/chepherd \
   -p "127.0.0.1:${PORT}:8080" \
+  -p "127.0.0.1:9090:9090" \
   -v "${STATE_DIR}:/home/chepherd/.local/state/chepherd:rw" \
   -v "${AGENT_STORAGE}:/var/lib/chepherd-agents:rw" \
   -v "${CLAUDE_DIR}:/home/chepherd/.claude:ro" \
+  -v "${HOME}/.claude.json:/home/chepherd/.claude.json:ro" \
   -v "${REPOS_DIR}:/home/chepherd/repos:rw" \
   --device /dev/fuse \
   --security-opt label=disable \
