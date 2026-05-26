@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -256,37 +257,28 @@ func mcpMounts(env []string) []string {
 	return mounts
 }
 
-// PodmanBridgeGateway returns the gateway IP of the default Podman bridge
-// network, which is the address agent containers must dial to reach the
-// chepherd daemon running on the host. Returns "" if detection fails;
-// callers fall back to a hardcoded "10.88.0.1" (Podman's default) or to
-// the operator-provided CHEPHERD_MCP_URL.
+// HostAddrForAgent returns an IP address agent containers can dial to reach
+// services running on the host (e.g. chepherd's MCP listener on :9090).
 //
-// This is needed because Podman 3.4 does not support the `host-gateway`
-// magic value for --add-host, so we resolve the IP at runtime and either
-// pass it as an --add-host entry or bake it into the MCP URL.
-func PodmanBridgeGateway() string {
-	out, err := exec.Command("podman", "network", "inspect", "podman").Output()
+// In rootless Podman the bridge gateway reported by `podman network inspect
+// podman` (typically 10.88.0.1) is a phantom — slirp4netns simulates the
+// bridge inside the container's netns but the gateway IP isn't actually
+// routed to a real interface on the host. So we use the host's primary
+// outbound IP (the source IP of a UDP socket connected to a public DNS
+// server) which is always reachable from the container's slirp NAT.
+//
+// Returns "" if detection fails; callers fall back to the operator-provided
+// CHEPHERD_MCP_URL.
+func HostAddrForAgent() string {
+	c, err := net.Dial("udp4", "1.1.1.1:53")
 	if err != nil {
 		return ""
 	}
-	// Cheap parse: look for "gateway": "x.x.x.x"
-	s := string(out)
-	idx := strings.Index(s, `"gateway":`)
-	if idx < 0 {
-		return ""
+	defer c.Close()
+	if addr, ok := c.LocalAddr().(*net.UDPAddr); ok {
+		return addr.IP.String()
 	}
-	rest := s[idx+len(`"gateway":`):]
-	q1 := strings.Index(rest, `"`)
-	if q1 < 0 {
-		return ""
-	}
-	rest = rest[q1+1:]
-	q2 := strings.Index(rest, `"`)
-	if q2 < 0 {
-		return ""
-	}
-	return rest[:q2]
+	return ""
 }
 
 // hostClaudeCredentialsPath returns the path to the host's Claude credentials

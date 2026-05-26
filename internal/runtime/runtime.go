@@ -1503,14 +1503,17 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// (different UID in the user namespace) can read both.
 	_ = os.Chmod(cfgDir, 0o755)
 	// MCP URL the agent's bridge subprocess will dial. v0.8 default:
-	// resolve the Podman bridge gateway IP (the host's reachable address
-	// from inside an agent container). Override via CHEPHERD_MCP_URL when
-	// chepherd is in-cluster (k8s Service DNS becomes ws://chepherd:9090).
+	// resolve the host's primary outbound IP — rootless Podman's reported
+	// bridge gateway (10.88.0.1) is a slirp4netns phantom that isn't
+	// actually routed back to host services, so we use the eth0-equivalent
+	// IP that the container's NAT reaches via the default route. Override
+	// via CHEPHERD_MCP_URL when chepherd is in-cluster (K8s Service DNS
+	// becomes ws://chepherd:9090).
 	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
 	if mcpURL == "" {
-		gw := PodmanBridgeGateway()
+		gw := HostAddrForAgent()
 		if gw == "" {
-			gw = "10.88.0.1" // Podman default bridge gateway
+			gw = "127.0.0.1" // dev fallback; only works if container shares host net
 		}
 		mcpURL = "ws://" + gw + ":9090/mcp/ws"
 	}
