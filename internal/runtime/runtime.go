@@ -947,9 +947,9 @@ func (r *Runtime) PokePrompt(name string, body string) error {
 		return fmt.Errorf("runtime.PokePrompt: session %q has no live PTY", name)
 	}
 	wrapped := "Your updated working instructions from the operator (please incorporate going forward): " + body
-	_, _ = sess.Write([]byte(wrapped))
+	_, _ = sess.Inject([]byte(wrapped))
 	time.Sleep(120 * time.Millisecond)
-	_, _ = sess.Write([]byte("\r"))
+	_, _ = sess.Inject([]byte("\r"))
 	r.RecordEvent(Event{
 		Kind:  "prompt_poke",
 		Actor: "operator",

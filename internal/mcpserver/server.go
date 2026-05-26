@@ -497,12 +497,18 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			resp.Error = &rpcErr{Code: -32000, Message: "no such session: " + a.Name}
 			return resp
 		}
-		// Write the body bytes as the first PTY chunk — this is what the
-		// remote agent reads as the typed content. Trim any trailing \n
-		// the caller provided since we'll dispatch Enter as a separate
-		// chunk for kitty / modifyOtherKeys-aware TUIs (see issue #76).
+		// Typing-skip: if the operator wrote keystrokes within the last 15s,
+		// delay the inject so it doesn't collide with an in-progress thought.
+		const founderTypingSkipSec = 15
+		if last := sess.LastOperatorWrite(); !last.IsZero() && time.Since(last) < founderTypingSkipSec*time.Second {
+			remaining := founderTypingSkipSec*time.Second - time.Since(last)
+			time.Sleep(remaining)
+		}
+
+		// Use Inject (not Write) so lastOperatorWrite is not bumped and the
+		// writeMu serializes this against any concurrent operator keystrokes.
 		body := strings.TrimRight(a.Body, "\r\n")
-		if _, err := sess.Write([]byte(body)); err != nil {
+		if _, err := sess.Inject([]byte(body)); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
 		}
@@ -515,7 +521,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			// Brief pause lets the receiver's input editor process the
 			// body before the Enter event arrives.
 			time.Sleep(120 * time.Millisecond)
-			if _, err := sess.Write([]byte("\r")); err != nil {
+			if _, err := sess.Inject([]byte("\r")); err != nil {
 				resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 				return resp
 			}

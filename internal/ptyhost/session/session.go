@@ -110,6 +110,14 @@ type Session struct {
 	closed      bool
 	done        chan struct{}
 	exitErr     error
+
+	// writeMu serializes all PTY stdin writes so operator keystrokes and
+	// shepherd/MCP injections never interleave at the byte level.
+	writeMu sync.Mutex
+	// lastOperatorWrite records when the operator last sent keystrokes.
+	// Used by callers (e.g. send_to_session) to implement a typing-skip
+	// delay (FOUNDER_TYPING_SKIP_SECONDS) before injecting coach messages.
+	lastOperatorWrite time.Time
 }
 
 // Spec describes how to spawn the agent process inside the PTY.
@@ -267,6 +275,8 @@ func (s *Session) Unsubscribe(sub *Subscriber) {
 }
 
 // Write forwards user keystrokes (raw bytes from the WS) to PTY stdin.
+// writeMu is held for the duration so concurrent shepherd injections
+// cannot interleave with operator keystrokes at the byte level.
 func (s *Session) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	if s.closed {
@@ -275,7 +285,37 @@ func (s *Session) Write(p []byte) (int, error) {
 	}
 	f := s.ptyFile
 	s.mu.Unlock()
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.lastOperatorWrite = time.Now()
 	return f.Write(p)
+}
+
+// Inject writes bytes directly to PTY stdin as a programmatic injection
+// (shepherd coach messages, system prompts, etc.). Unlike Write it does NOT
+// update lastOperatorWrite. It respects the same writeMu so it never
+// interleaves with operator keystrokes.
+func (s *Session) Inject(p []byte) (int, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return 0, ErrClosed
+	}
+	f := s.ptyFile
+	s.mu.Unlock()
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return f.Write(p)
+}
+
+// LastOperatorWrite returns the time the operator last wrote keystrokes.
+// Zero value means no operator input has been received yet.
+func (s *Session) LastOperatorWrite() time.Time {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.lastOperatorWrite
 }
 
 // Resize triggers SIGWINCH on the child by re-setting the PTY winsize

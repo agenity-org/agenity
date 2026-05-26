@@ -27,7 +27,7 @@ func (r *Runtime) shepherdLoop(sess *session.Session, name string) {
 	// 8s gives the splash animation time to settle before we Enter.
 	time.Sleep(8 * time.Second)
 	// Accept trust ("Yes, I trust this folder" — Enter).
-	_, _ = sess.Write([]byte("\r"))
+	_, _ = sess.Inject([]byte("\r"))
 	// 15s post-trust gives Claude time to: read settings, discover MCP
 	// via --mcp-config, render the input box, and become ready to accept
 	// typed prompts. 5s (the previous value) was too short — kickoff text
@@ -124,12 +124,13 @@ For your first observation of a worker, use baseline scores 5/5/5/5/5 with note 
 	}
 }
 
-// pokeAgent writes body + a separate \r to the agent's PTY (the kitty-kbd
-// fix from #76: Enter must arrive as a distinct PTY chunk).
+// pokeAgent injects body + a separate \r to the agent's PTY using Inject
+// (not Write) so it doesn't bump lastOperatorWrite and respects writeMu
+// against concurrent operator keystrokes (kitty-kbd fix #76).
 func (r *Runtime) pokeAgent(sess *session.Session, body string) {
-	_, _ = sess.Write([]byte(body))
+	_, _ = sess.Inject([]byte(body))
 	time.Sleep(120 * time.Millisecond)
-	_, _ = sess.Write([]byte("\r"))
+	_, _ = sess.Inject([]byte("\r"))
 }
 
 // respawnShepherd retires the current shepherd session + spawns a
