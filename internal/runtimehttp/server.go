@@ -754,7 +754,16 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		//      git-provider registration in the wizard).
 		//   2. Vault tokens matching standard provider env vars
 		//      (GITHUB_TOKEN, GITLAB_TOKEN, GITEA_TOKEN, ANTHROPIC_API_KEY).
+		//
+		// IMPORTANT: when the agent will use a Claude OAuth token (the
+		// usual flow — non-empty ClaudeTokenID OR any non-empty Claude
+		// OAuth credential available), we MUST NOT inject ANTHROPIC_API_KEY
+		// because claude-code refuses to start with both set ("Auth
+		// conflict: Both a token (claude.ai) and an API key set"). The
+		// API key path is reserved for explicit API-only configs (which
+		// the agent would request via env later, not the auto flow).
 		spawnEnv := s.collectVCSTokenEnv(req.ProviderID)
+		spawnEnv = stripEnvKey(spawnEnv, "ANTHROPIC_API_KEY")
 		info, _, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:          req.Name,
 			AgentSlug:     req.Agent,
@@ -2419,22 +2428,84 @@ func (s *Server) claudeLoginBegin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "spawn: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// claude-code on first run shows a theme picker BEFORE the OAuth URL.
-	// Auto-dismiss it (and any subsequent simple prompts) by sending a
-	// handful of Enter keys spaced out so the URL flow surfaces without
-	// operator input. Each Enter is ~1s apart so any TUI animation lands.
+	// claude-code on first run shows a sequence of prompts before the
+	// OAuth URL: theme picker → "use API key?" (if env has one) → intro
+	// "Press Enter to continue" → "Bypass permissions" warning. Watch
+	// the ring buffer for marker text and inject the right reply only
+	// AFTER each marker appears — blind Enter-spam races the prompts.
 	if sess != nil {
-		go func() {
-			for i := 0; i < 6; i++ {
-				time.Sleep(2 * time.Second)
-				_, err := sess.Inject([]byte("\r"))
-				if err != nil {
-					return
-				}
-			}
-		}()
+		go autoDismissClaudeFirstRunPrompts(sess)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"name": name})
+}
+
+// autoDismissClaudeFirstRunPrompts watches sess's ring buffer for the
+// first-run prompts claude-code prints + injects the right reply per
+// prompt so the OAuth URL surfaces without operator interaction.
+// Returns once the canonical Claude OAuth URL is detected or after a
+// timeout — the polling URL endpoint handles the rest.
+func autoDismissClaudeFirstRunPrompts(sess *session.Session) {
+	// Each step: marker substring → bytes to inject after it's seen.
+	// Order matters; we only advance to step N after step N-1's marker
+	// was seen (so a prompt that's already been dismissed doesn't re-fire).
+	type step struct {
+		marker string
+		reply  []byte
+		// If pause>0, sleep after injecting (lets the next prompt render).
+		pause time.Duration
+	}
+	// claude-code's TUI renders each word via cursor-position escape
+	// codes (e.g. "\x1b[9G text"), not real spaces, so stripping ANSI
+	// from the ring buffer leaves words concatenated. Markers below are
+	// the SPACE-LESS form ("ChoosethetextstylethatlooksbestwithyourTerminal"
+	// etc.) — they must match the post-strip text.
+	steps := []step{
+		// 1. Theme picker. Default highlight "Dark mode ✔" — Enter accepts.
+		{marker: "Choosethetextstyle", reply: []byte("\r"), pause: 1200 * time.Millisecond},
+		// 2. "Select login method" — default option 1 is "Claude account with
+		//    subscription". Enter accepts. (This prompt appears AFTER the
+		//    theme picker for fresh installs; ANTHROPIC_API_KEY env was
+		//    stripped before spawn so the API-key conflict prompt is gone.)
+		{marker: "Selectloginmethod", reply: []byte("\r"), pause: 1200 * time.Millisecond},
+		// 3. Legacy/alternate API-key conflict prompt (safety net — only
+		//    fires if ANTHROPIC_API_KEY somehow leaked into env).
+		{marker: "DoyouwanttousethisAPIkey", reply: []byte("2\r"), pause: 1000 * time.Millisecond},
+		// 4. Intro "Press Enter to continue" (some claude-code versions
+		//    show this between login-method pick and the OAuth URL).
+		{marker: "PressEntertocontinue", reply: []byte("\r"), pause: 1000 * time.Millisecond},
+	}
+
+	deadline := time.Now().Add(60 * time.Second)
+	stepIdx := 0
+	for time.Now().Before(deadline) {
+		sub, replay, err := sess.Subscribe(1)
+		if err != nil {
+			return
+		}
+		sess.Unsubscribe(sub)
+		clean := ansiAndCRStrip.ReplaceAll(replay, nil)
+		text := strings.ReplaceAll(strings.ReplaceAll(string(clean), "\r", ""), "\n", "")
+		text = strings.ReplaceAll(text, " ", "") // strip ALL spaces too — TUI rendering eliminates real ones
+		// OAuth URL already visible → done.
+		if strings.Contains(text, "claude.com/cai/oauth") || strings.Contains(text, "claude.ai/oauth") {
+			return
+		}
+		// Advance through any markers visible in current buffer.
+		advanced := false
+		for stepIdx < len(steps) {
+			if strings.Contains(text, steps[stepIdx].marker) {
+				_, _ = sess.Inject(steps[stepIdx].reply)
+				time.Sleep(steps[stepIdx].pause)
+				stepIdx++
+				advanced = true
+			} else {
+				break
+			}
+		}
+		if !advanced {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
 }
 
 // claudeLoginURL polls the ephemeral agent's ring buffer for the OAuth URL.
@@ -2550,6 +2621,20 @@ func (s *Server) claudeLoginCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.rt.Stop(name)
 	writeJSON(w, http.StatusOK, map[string]string{"cancelled": name})
+}
+
+// stripEnvKey returns env with all KEY=... entries matching key removed.
+// Used to keep ANTHROPIC_API_KEY out of OAuth-mode agent containers.
+func stripEnvKey(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func logMiddleware(h http.Handler) http.Handler {
