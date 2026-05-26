@@ -106,13 +106,22 @@
       }
       // Rolling buffer for OAuth URL detection (keep last 4 KB to avoid unbounded growth)
       rawBuf = (rawBuf + text).slice(-4096);
-      // Strip ANSI escape sequences and collapse CR/LF so that URLs word-wrapped
-      // by the PTY across multiple lines are reassembled into a single matchable string.
+      // Strip ANSI escape sequences then remove ALL CR and LF so PTY-wrapped URLs
+      // reassemble into one matchable string. \r?\n only removes \r\n pairs and bare
+      // \n — claude-code uses bare \r (carriage-return without newline) to overwrite
+      // the old URL with the corrected one on the same line, so standalone \r must
+      // also be stripped or [^\s] stops at the \r and yields a truncated URL.
       const scanBuf = rawBuf
         .replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/g, '')
-        .replace(/\r?\n/g, '');
-      const m = scanBuf.match(/https:\/\/claude\.(?:ai|com)\/[^\s"']+/);
-      if (m && m[0] !== oauthUrl) oauthUrl = m[0];
+        .replace(/[\r\n]/g, '');
+      // claude-code first prints an older claude.ai URL then overwrites it with the
+      // canonical claude.com/cai URL via \r. After stripping \r both appear in
+      // scanBuf; pick the longest match — the canonical URL is always longer.
+      const allMatches = [...scanBuf.matchAll(/https:\/\/claude\.(?:ai|com)\/[^\s"'<>]+/g)];
+      if (allMatches.length > 0) {
+        const best = allMatches.reduce((a, b) => a[0].length >= b[0].length ? a : b);
+        if (best[0] !== oauthUrl) oauthUrl = best[0];
+      }
     };
     term.onResize(sendResize);
     ws.addEventListener('open', () => setTimeout(sendResize, 200));
