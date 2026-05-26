@@ -186,7 +186,6 @@
   }
   function next() {
     if (stage === 2 && shape === 'resurrect') { doResurrect(); return; }
-    if (stage === 2 && shape === 'solo') { stage = 4; return; }
     if (stage === 2 && shape === 'custom-yaml') { stage = 4; return; }
     stage += 1;
   }
