@@ -672,9 +672,24 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, err
 			continue
 		}
 		if p.Kind == runtime.GitProviderEmbedded {
-			// Embedded Gitea — workspace under state dir.
-			dir := filepath.Join(s.rt.StateDir(), "workspaces", "embedded")
-			_ = os.MkdirAll(dir, 0o700)
+			// Embedded Gitea (#137) — ensure the sidecar container is
+			// running, then clone the workspace repo into the state dir.
+			repoName := p.DisplayName
+			if repoName == "" {
+				repoName = "workspace"
+			}
+			info, err := runtime.EnsureEmbeddedGitea(s.rt.StateDir(), repoName)
+			if err != nil {
+				return fallbackCwd, fmt.Errorf("embedded gitea: %w", err)
+			}
+			dir := filepath.Join(s.rt.StateDir(), "workspaces", "embedded-"+sanitizeID(repoName))
+			if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+				_ = os.MkdirAll(dir, 0o755)
+				cmd := exec.Command("git", "clone", "--depth=1", info.CloneURLForRepo(repoName), dir)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					return dir, fmt.Errorf("embedded git clone: %w (%s)", err, strings.TrimSpace(string(out)))
+				}
+			}
 			return dir, nil
 		}
 		// External provider — clone if needed, return clone path.
