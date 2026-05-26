@@ -28,6 +28,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
@@ -143,6 +144,26 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			// Wire vault into the runtime so /run/secrets/claude-credentials
 			// is sourced from the vault on every spawn (TV1 / R4).
 			rt.SetVault(newRuntimeVaultAdapter(vlt))
+		}
+		// Auth provider — local (HS256 JWT) by default; oidc when
+		// CHEPHERD_AUTH_MODE=oidc + CHEPHERD_OIDC_ISSUER set (#128).
+		if ap, err := auth.New("", stateDir, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: auth: %v (server is unauthenticated)\n", err)
+		} else {
+			rs.Auth = ap
+			fmt.Printf("✓ Auth provider: %s\n", ap.Mode())
+			if lp, ok := ap.(*auth.LocalProvider); ok {
+				// Issue + print a bootstrap operator token on first run so
+				// the operator has something to paste into the dashboard.
+				// Skipped on subsequent boots — the same secret signs the
+				// same tokens, so any prior token still validates.
+				if _, statErr := os.Stat(filepath.Join(stateDir, "auth.printed")); statErr != nil {
+					if tok, err := lp.IssueBootstrapToken(nil, "operator", 0); err == nil {
+						fmt.Printf("\n  Bootstrap token (operator, 30d):\n  %s\n\n", tok)
+						_ = os.WriteFile(filepath.Join(stateDir, "auth.printed"), []byte(tok), 0o600)
+					}
+				}
+			}
 		}
 		hs, err := rs.ServeOn(runFlagListen)
 		if err != nil {

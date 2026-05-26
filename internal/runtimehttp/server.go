@@ -33,6 +33,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
@@ -46,6 +47,7 @@ type Server struct {
 	rt     *runtime.Runtime
 	WebDir string        // optional: serve Astro static build from this dir
 	Vault  *vault.Vault  // optional: credential vault (nil = vault API returns 503)
+	Auth   auth.AuthProvider // optional: auth provider (nil = no token validation, dev only)
 
 	upgrader websocket.Upgrader
 }
