@@ -38,6 +38,8 @@
   let termContainer;
   let attached = null;
   let fontObs = null;
+  let themeObs = null;
+  let lastThemeSig = '';
   let oauthUrl = $state('');  // detected OAuth URL shown as clickable banner
   let rawBuf = '';             // rolling buffer for URL extraction (not shown)
 
@@ -75,9 +77,61 @@
     const { Terminal } = await import('@xterm/xterm');
     const { FitAddon } = await import('@xterm/addon-fit');
     const { WebLinksAddon } = await import('@xterm/addon-web-links');
-    const sel = (typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light')
-      ? { background: '#fafafa', foreground: '#1a1a1a', cursor: '#1a1a1a', selectionBackground: '#cbd5e1' }
-      : { background: '#0a0a0a', foreground: '#f5f5f5', cursor: '#f5f5f5', selectionBackground: '#2a3540' };
+    // R2 (#133) — claude-code-aware ANSI palettes.
+    // claude-code's TUI uses specific 256-color escape codes plus the base
+    // 16 ANSI slots. xterm.js can only theme the 16 base slots; the
+    // remaining 240 colors come from xterm's built-in 256-color table.
+    // The palettes below pick base colors that (a) match claude-code's
+    // dark/light official terminal builds, (b) keep good contrast against
+    // chepherd's background, (c) preserve syntax-highlight legibility.
+    const isLight = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light';
+    const sel = isLight ? {
+      background:          '#fafafa',
+      foreground:          '#1a1a1a',
+      cursor:              '#1a1a1a',
+      cursorAccent:        '#fafafa',
+      selectionBackground: '#cbd5e1',
+      // 16 ANSI slots tuned for claude-code's light palette
+      black:         '#1a1a1a',
+      red:           '#c0392b',
+      green:         '#1e7e34',
+      yellow:        '#b8860b',
+      blue:          '#0066cc',
+      magenta:       '#a020a0',
+      cyan:          '#008a8a',
+      white:         '#dcdcdc',
+      brightBlack:   '#666666',
+      brightRed:     '#e74c3c',
+      brightGreen:   '#28a745',
+      brightYellow:  '#daa520',
+      brightBlue:    '#3498db',
+      brightMagenta: '#c0468d',
+      brightCyan:    '#17a2b8',
+      brightWhite:   '#1a1a1a',
+    } : {
+      background:          '#0a0a0a',
+      foreground:          '#f5f5f5',
+      cursor:              '#f5f5f5',
+      cursorAccent:        '#0a0a0a',
+      selectionBackground: '#2a3540',
+      // claude-code dark palette — accent orange + syntax-friendly mids
+      black:         '#0a0a0a',
+      red:           '#e74c3c',
+      green:         '#5fd75f',
+      yellow:        '#ffa500',  // chepherd accent
+      blue:          '#5fafff',
+      magenta:       '#d75faf',
+      cyan:          '#5fd7ff',
+      white:         '#dadada',
+      brightBlack:   '#777777',
+      brightRed:     '#ff6b6b',
+      brightGreen:   '#87d787',
+      brightYellow:  '#ffd75f',
+      brightBlue:    '#87ceeb',  // chepherd accent-2
+      brightMagenta: '#ff87d7',
+      brightCyan:    '#87d7ff',
+      brightWhite:   '#ffffff',
+    };
     term = new Terminal({ convertEol: true, fontFamily: 'ui-monospace, monospace', fontSize: currentWsFont(), theme: sel, cursorBlink: true, cols: 120, rows: 32 });
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -147,6 +201,17 @@
     // Watch for --ws-font changes on documentElement style attribute.
     fontObs = new MutationObserver(() => applyFontAndRefit());
     fontObs.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    // R2 (#133): re-attach on theme toggle so the claude-code palette
+    // switches between dark/light without a page reload.
+    themeObs = new MutationObserver(() => {
+      const sig = document.documentElement.dataset.theme || 'dark';
+      if (sig !== lastThemeSig) {
+        lastThemeSig = sig;
+        attached = null; // trigger $effect to recreate Terminal with new palette
+        attachTo(myAgent);
+      }
+    });
+    themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   });
 
   onDestroy(() => {
@@ -154,6 +219,7 @@
     if (resizeObs) resizeObs.disconnect();
     if (term) term.dispose();
     if (fontObs) fontObs.disconnect();
+    if (themeObs) themeObs.disconnect();
   });
 
   let info = $derived(sessions?.find(s => s.name === myAgent));

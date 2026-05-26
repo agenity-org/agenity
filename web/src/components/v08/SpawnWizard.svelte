@@ -130,6 +130,12 @@
       const r = await fetch(`${API}/git-providers`);
       providers = (await r.json()).providers || [];
     } catch { providers = []; }
+    // R3 (#134) — never leave the repo field blank: when exactly one
+    // provider is already registered, pre-select it so the operator can
+    // sail through stage 2 without an extra click.
+    if (providers.length === 1 && !selectedProviderId) {
+      selectedProviderId = providers[0].id;
+    }
   }
   async function loadSessions() {
     try {
@@ -160,7 +166,15 @@
   async function registerProvider() {
     regBusy = true; regError = '';
     try {
-      const body = { kind: regKind, repo_url: regUrl, token: regToken, display_name: regName || regUrl };
+      // R3 (#134) — embedded providers don't have a URL; use the team name
+      // as the default repo name so the field is never blank. Falls back
+      // to the shape id if no team name set yet.
+      let displayName = regName;
+      if (!displayName && regKind === 'embedded') {
+        displayName = teamName || shape || 'embedded-repo';
+      }
+      if (!displayName) displayName = regUrl;
+      const body = { kind: regKind, repo_url: regUrl, token: regToken, display_name: displayName };
       const r = await fetch(`${API}/git-providers`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -378,8 +392,10 @@
             {:else}
               <p class="prose">chepherd will spin up an embedded Gitea container. No external account needed.</p>
             {/if}
-            <label class="field-label">Label <small>(optional — shown in provider list)</small>
-              <input bind:value={regName} placeholder="{regUrl || 'my-repo'}" />
+            <label class="field-label">
+              {detectedKind === 'embedded' ? 'Embedded repo name' : 'Label'}
+              <small>(optional — shown in provider list)</small>
+              <input bind:value={regName} placeholder={detectedKind === 'embedded' ? (teamName || shape || 'embedded-repo') : (regUrl || 'my-repo')} />
             </label>
             {#if regError}<div class="error">{regError}</div>{/if}
             <div class="reg-actions">
