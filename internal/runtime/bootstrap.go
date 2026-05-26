@@ -141,6 +141,29 @@ For your first observation of a worker, use baseline scores 5/5/5/5/5 with note 
 			go r.respawnShepherd(name, sess)
 			return
 		}
+
+		// Context-size triggered rotation: compact at 70%, respawn at 90%.
+		if _, si := r.Get(name); si != nil {
+			if si.ContextSize > 0 && si.ContextTokens > 0 {
+				pct := float64(si.ContextTokens) / float64(si.ContextSize)
+				if pct >= 0.90 {
+					r.RecordEvent(Event{
+						Kind: "shepherd_context_respawn", Actor: "runtime",
+						Body: fmt.Sprintf("shepherd %q at %.0f%% context; respawning", name, pct*100),
+					})
+					r.pokeAgent(sess, "CONTEXT LIMIT IMMINENT (≥90%): write a 5-line handoff via chepherd.record_event(kind='shepherd_handoff', body='<summary>') NOW before I respawn you.")
+					go r.respawnShepherd(name, sess)
+					return
+				} else if pct >= 0.70 {
+					r.RecordEvent(Event{
+						Kind: "shepherd_context_compact", Actor: "runtime",
+						Body: fmt.Sprintf("shepherd %q at %.0f%% context; requesting compact", name, pct*100),
+					})
+					r.pokeAgent(sess, "Context window at 70%+. Run /compact now to summarise and free space before the next tick.")
+				}
+			}
+		}
+
 		band := r.TeamWorstBand(shepherdTeams())
 		r.pokeAgent(sess, fmt.Sprintf("Tick (shepherd %q, band=%s): chepherd.list_memberships(agent=%q) to find your teams, then for each worker in those teams call chepherd.read_pane → chepherd.set_scorecard → chepherd.record_verdict. Update scores based on what changed since last tick. Stay quiet unless alert_human is needed.", name, band, name))
 	}

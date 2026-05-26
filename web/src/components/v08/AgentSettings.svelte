@@ -18,10 +18,13 @@
   let promptDirty = $state(false);
   let promptSaving = $state(false);
   let promptErr = $state('');
+  let globalMD = $state('');
+  let globalMDOpen = $state(false);
 
   // Skills state
   let skills = $state({ context_budget: 0, model_tier: '', discipline_weight: 0, velocity_expect: '', token_budget_usd: 0 });
   let skillsSaving = $state(false);
+  let modelApplying = $state(false);
 
   // Canon state
   let canonBody = $state('');
@@ -48,7 +51,16 @@
     };
     loadCanon();
     loadMemberships();
+    loadGlobalMD();
   });
+
+  async function loadGlobalMD() {
+    try {
+      const r = await fetch(`${API}/runtime/global-md`);
+      const d = await r.json();
+      globalMD = d.body || '';
+    } catch {}
+  }
   async function loadMemberships() {
     try {
       const r = await fetch(`${API}/memberships?agent=${encodeURIComponent(agent.name)}`);
@@ -125,6 +137,27 @@
     skillsSaving = false;
   }
 
+  const MODEL_IDS = {
+    haiku:  'claude-haiku-4-5-20251001',
+    sonnet: 'claude-sonnet-4-6',
+    opus:   'claude-opus-4-7',
+    qwen:   'qwen-coder',  // non-claude; just show notice
+  };
+  async function applyModel() {
+    if (!skills.model_tier) return;
+    const modelId = MODEL_IDS[skills.model_tier] || skills.model_tier;
+    if (skills.model_tier === 'qwen') {
+      alert('Model change for qwen-code requires a restart. Save + restart from the right-click menu.');
+      return;
+    }
+    modelApplying = true;
+    await fetch(`${API}/sessions/${agent.name}/send`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: `/model ${modelId}` }),
+    });
+    modelApplying = false;
+  }
+
   async function saveCanon() {
     await fetch(`${API}/teams/${agent.team}/canon`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -172,14 +205,38 @@
       <button class:active={tab==='skills'} on:click={() => tab='skills'}>🎮 Skills</button>
       <button class:active={tab==='canon'} on:click={() => tab='canon'}>📜 Canon</button>
       <button class:active={tab==='membership'} on:click={() => tab='membership'}>🧩 Membership</button>
-      <button class:active={tab==='actions'} on:click={() => tab='actions'}>⚙ Actions</button>
+      <button class:active={tab==='actions'} on:click={() => tab='actions'}>✎ Rename</button>
     </nav>
     <div class="body">
       {#if tab === 'prompt'}
-        <p class="hint">Edit the working instructions. Save sends a fresh user message "Your updated working instructions from the operator: …" — Claude picks it up without restart.</p>
-        <textarea bind:value={promptDraft} on:input={() => (promptDirty = true)} rows="16"></textarea>
-        {#if promptErr}<div class="err">{promptErr}</div>{/if}
-        <div class="row"><button class="primary" on:click={savePrompt} disabled={promptSaving || !promptDirty}>{promptSaving ? 'Sending…' : 'Send to agent'}</button></div>
+        <div class="source-stack">
+          <!-- Source 1: Global ~/.claude/CLAUDE.md -->
+          <details class="source-block" bind:open={globalMDOpen}>
+            <summary class="source-head">
+              <span class="source-label">① Global <code>~/.claude/CLAUDE.md</code></span>
+              <span class="source-badge ro">read-only</span>
+            </summary>
+            <pre class="source-body">{globalMD || '(empty)'}</pre>
+          </details>
+          <!-- Source 2: Team canon -->
+          <div class="source-block">
+            <div class="source-head">
+              <span class="source-label">② Team canon <code>{agent?.team || '—'}/CLAUDE.md</code></span>
+              <span class="source-badge ro">read-only · edit in Canon tab</span>
+            </div>
+            <pre class="source-body">{canonBody || '(no team canon yet)'}</pre>
+          </div>
+          <!-- Source 3: Agent system prompt (editable) -->
+          <div class="source-block">
+            <div class="source-head">
+              <span class="source-label">③ Agent system prompt</span>
+              <span class="source-badge">editable · sends without restart</span>
+            </div>
+            <textarea bind:value={promptDraft} on:input={() => (promptDirty = true)} rows="10"></textarea>
+            {#if promptErr}<div class="err">{promptErr}</div>{/if}
+            <div class="row"><button class="primary" on:click={savePrompt} disabled={promptSaving || !promptDirty}>{promptSaving ? 'Sending…' : 'Send to agent'}</button></div>
+          </div>
+        </div>
       {:else if tab === 'skills'}
         <p class="hint">Per-agent stat sheet — defaults shipped per role; override only what you want. Save patches the runtime.</p>
         <div class="grid">
@@ -204,7 +261,10 @@
           </label>
           <label>Token budget $/session<input type="number" min="0" step="0.5" bind:value={skills.token_budget_usd} /></label>
         </div>
-        <div class="row"><button class="primary" on:click={saveSkills} disabled={skillsSaving}>{skillsSaving ? 'Saving…' : 'Save'}</button></div>
+        <div class="row">
+          <button class="ghost" on:click={applyModel} disabled={!skills.model_tier || modelApplying} title="Send /model command to agent PTY — takes effect immediately for claude-code">{modelApplying ? 'Applying…' : '↪ Apply model now'}</button>
+          <button class="primary" on:click={saveSkills} disabled={skillsSaving}>{skillsSaving ? 'Saving…' : 'Save'}</button>
+        </div>
       {:else if tab === 'canon'}
         <p class="hint">Team CLAUDE.md — every member reads this each tick (chepherd via <code>read_canon</code> MCP). Shared across the whole team.</p>
         {#if canonEditing}
@@ -247,16 +307,9 @@
           <button class="primary" on:click={addMembership} disabled={!addTeam}>+ Add membership</button>
         </div>
       {:else if tab === 'actions'}
-        <p class="hint">Lifecycle actions on this agent. Rename: change the @-address operator-side. Restart: reboot preserving cwd / role / prompt / stat sheet. Stop: tear down.</p>
-        <label>Rename agent <input bind:value={renameDraft} placeholder={agent?.name} /></label>
+        <p class="hint">Change the agent's @-address (name). The session, cwd, role, and history remain unchanged. Pause / Resume / Restart / Stop are in the right-click menu on the session list.</p>
+        <label>New name <input bind:value={renameDraft} placeholder={agent?.name} /></label>
         <div class="row"><button class="primary" on:click={doRename} disabled={renaming || !renameDraft || renameDraft === agent?.name}>{renaming ? 'Renaming…' : 'Rename'}</button></div>
-        <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border);" />
-        <div class="actions">
-          <button on:click={() => action('pause')}>⏸ Pause</button>
-          <button on:click={() => action('unpause')}>▶ Resume</button>
-          <button on:click={() => action('restart')}>↻ Restart</button>
-          <button class="danger" on:click={() => action('stop')}>■ Stop</button>
-        </div>
       {/if}
     </div>
   </div>
@@ -289,6 +342,17 @@
   .mem-table td.empty { color: var(--fg-faint); text-align: center; padding: 1rem; }
   .mem-table button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 4px; padding: 0.25rem 0.55rem; cursor: pointer; }
   .add-row { display: flex; gap: 0.5rem; align-items: center; }
+  .source-stack { display: flex; flex-direction: column; gap: 0.8rem; }
+  .source-block { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .source-head { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.7rem; background: var(--bg); cursor: default; list-style: none; }
+  .source-head::-webkit-details-marker { display: none; }
+  details.source-block > summary.source-head { cursor: pointer; }
+  .source-label { flex: 1; font-size: 0.78rem; color: var(--fg-muted); font-weight: 600; }
+  .source-badge { font-size: 0.68rem; color: var(--fg-faint); background: var(--bg-input); border-radius: 999px; padding: 0.1rem 0.45rem; }
+  .source-badge.ro { color: var(--fg-faint); }
+  .source-body { background: var(--bg-input); padding: 0.55rem 0.7rem; margin: 0; font-family: ui-monospace, monospace; font-size: 0.74rem; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow-y: auto; color: var(--fg-muted); }
+  .source-block textarea { border: none; border-top: 1px solid var(--border); border-radius: 0; margin: 0; }
+  .source-block .row { padding: 0 0.7rem 0.7rem; }
   .add-row select { flex: 1; }
   button.primary { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 0.45rem 1rem; font-weight: 600; cursor: pointer; }
   button.primary:disabled { opacity: 0.4; cursor: not-allowed; }

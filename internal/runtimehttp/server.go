@@ -89,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/prompts/", s.promptsHandler) // /api/v1/prompts/{role}
 	mux.HandleFunc("/api/v1/runtime/claude-status", s.claudeStatusHandler)
 	mux.HandleFunc("/api/v1/runtime/claude-profile", s.claudeProfileHandler)
+	mux.HandleFunc("/api/v1/runtime/global-md", s.globalMDHandler)
 	mux.HandleFunc("/api/v1/folders/git-info", s.gitInfoHandler)
 	mux.HandleFunc("/api/v1/folders/git-setup", s.gitSetupHandler)
 	mux.HandleFunc("/api/v1/teams/saved", s.savedTeamsHandler)
@@ -1813,6 +1814,27 @@ func githubAPIDelete(url string) ([]byte, int, error) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return b, resp.StatusCode, nil
+}
+
+// globalMDHandler returns the content of ~/.claude/CLAUDE.md (the user-global
+// instruction file that Claude Code reads on every session). Read-only; used
+// by the AgentSettings Prompt tab to show all three instruction sources.
+func (s *Server) globalMDHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"body": ""})
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"body": ""})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"body": string(data)})
 }
 
 func logMiddleware(h http.Handler) http.Handler {
