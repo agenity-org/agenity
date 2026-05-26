@@ -38,6 +38,8 @@
   let termContainer;
   let attached = null;
   let fontObs = null;
+  let oauthUrl = $state('');  // detected OAuth URL shown as clickable banner
+  let rawBuf = '';             // rolling buffer for URL extraction (not shown)
 
   function currentWsFont() {
     try {
@@ -72,12 +74,14 @@
 
     const { Terminal } = await import('@xterm/xterm');
     const { FitAddon } = await import('@xterm/addon-fit');
+    const { WebLinksAddon } = await import('@xterm/addon-web-links');
     const sel = (typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light')
       ? { background: '#fafafa', foreground: '#1a1a1a', cursor: '#1a1a1a', selectionBackground: '#cbd5e1' }
       : { background: '#0a0a0a', foreground: '#f5f5f5', cursor: '#f5f5f5', selectionBackground: '#2a3540' };
     term = new Terminal({ convertEol: true, fontFamily: 'ui-monospace, monospace', fontSize: currentWsFont(), theme: sel, cursorBlink: true, cols: 120, rows: 32 });
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    term.loadAddon(new WebLinksAddon());
     term.open(termContainer);
     const tryFit = () => {
       const r = termContainer?.getBoundingClientRect();
@@ -92,8 +96,18 @@
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (ev) => {
       if (!term) return;
-      if (ev.data instanceof ArrayBuffer) term.write(new Uint8Array(ev.data));
-      else term.write(ev.data);
+      let text = '';
+      if (ev.data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(ev.data));
+        try { text = new TextDecoder().decode(ev.data); } catch {}
+      } else {
+        term.write(ev.data);
+        text = ev.data;
+      }
+      // Rolling buffer for OAuth URL detection (keep last 4 KB to avoid unbounded growth)
+      rawBuf = (rawBuf + text).slice(-4096);
+      const m = rawBuf.match(/https:\/\/claude\.(?:ai|com)\/[^\s\x1b\x07\x0d\x0a"']+/);
+      if (m && m[0] !== oauthUrl) oauthUrl = m[0];
     };
     term.onResize(sendResize);
     ws.addEventListener('open', () => setTimeout(sendResize, 200));
@@ -146,11 +160,34 @@
   This widget renders only the xterm canvas, full height.
 -->
 <div class="term-pane">
+  {#if oauthUrl}
+  <div class="oauth-banner">
+    <span class="oauth-icon">🔑</span>
+    <span>Claude login required —</span>
+    <a href={oauthUrl} target="_blank" rel="noreferrer noopener">click to authenticate</a>
+    <button class="oauth-dismiss" onclick={() => oauthUrl = ''}>✕</button>
+  </div>
+  {/if}
   <div class="term-body" bind:this={termContainer}></div>
 </div>
 
 <style>
   .term-pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
+  .oauth-banner {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.35rem 0.7rem; font-size: 0.8rem;
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--fg);
+  }
+  .oauth-banner a { color: var(--accent); font-weight: 600; text-decoration: underline; }
+  .oauth-banner a:hover { opacity: 0.8; }
+  .oauth-icon { font-size: 1rem; }
+  .oauth-dismiss {
+    margin-left: auto; background: none; border: none; cursor: pointer;
+    color: var(--fg-dim, #888); font-size: 0.75rem; padding: 0 0.2rem;
+  }
+  .oauth-dismiss:hover { color: var(--fg); }
   .term-body { flex: 1; padding: 0.3rem 0.4rem; min-height: 0; overflow: hidden; }
   .term-body :global(.xterm) { height: 100%; }
   .term-body :global(.xterm-viewport) { height: 100% !important; }
