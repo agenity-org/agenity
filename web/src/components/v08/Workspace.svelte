@@ -1,5 +1,5 @@
 <!--
-  v0.7 Workspace canvas — recursive tree of splits + widget catalog.
+  v0.8 Workspace canvas — recursive tree of splits + widget catalog.
   Refs #80, #85.
 
   Layout = Pane | HSplit{a,b,ratio} | VSplit{a,b,ratio}
@@ -65,7 +65,7 @@
   }
 
   // --- API ---
-  // v0.7 uses its own /api-v08 namespace so it always hits the v0.7 runtime
+  // v0.8 uses its own /api-v08 namespace so it always hits the v0.8 runtime
   // (:8081) regardless of which Astro dev server / port served the page.
   const API = '/api-v08/v1';
   async function refresh() {
@@ -298,7 +298,7 @@
 
 <div class="workspace">
   <header class="topbar">
-    <a href="/" class="brand">✻ chepherd <span class="ver">v0.7</span></a>
+    <a href="/" class="brand">✻ chepherd <span class="ver">v0.8</span></a>
     <div class="stats">
       {sessions.length} agents · {teams.length} teams · {memberships.length} memberships
     </div>
@@ -338,8 +338,8 @@
       </div>
     {/if}
     <button class="icon-btn" on:click={toggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
-    <button class="secondary" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">💾 save view</button>
-    <button class="primary" on:click={() => (showWizard = true)} title="Spawn a single agent or apply a team template">+ new</button>
+    <button class="secondary" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">↓ save view</button>
+    <button class="primary spawn-btn" on:click={() => (showWizard = true)} title="Spawn a single agent or apply a team template">+ new</button>
   </header>
 
   <div class="canvas">
@@ -433,14 +433,15 @@
     font-size: calc(var(--ws-font) * 0.82) !important;
   }
   .workspace { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--fg); }
-  .topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.55rem 1rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
-  .topbar .brand { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.1rem; }
-  .topbar .brand .ver { font-size: 0.72rem; color: var(--fg-muted); margin-left: 0.4rem; }
+  .topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.72rem 1.2rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); }
+  .topbar .brand { color: var(--accent); font-weight: 700; text-decoration: none; font-size: 1.25rem; letter-spacing: -0.01em; }
+  .topbar .brand .ver { font-size: 0.75rem; color: var(--fg-muted); margin-left: 0.4rem; font-weight: 400; }
   .topbar .stats { flex: 1; color: var(--fg-muted); font-size: 0.78rem; white-space: nowrap; }
   .view-switcher { display: flex; gap: 0.2rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.18rem; }
   .view-switcher button { padding: 0.32rem 0.7rem; background: transparent; color: var(--fg-muted); border: none; border-radius: 4px; cursor: pointer; font-size: 0.82rem; }
   .view-switcher button:hover { color: var(--accent); }
   button.primary { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 0.42rem 0.95rem; font-weight: 600; cursor: pointer; font-size: 0.88rem; }
+  button.spawn-btn { background: #0072F5; color: #fff; }
   button.secondary { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.42rem 0.85rem; cursor: pointer; font-size: 0.88rem; }
   button.icon-btn { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   button.icon-btn.small { width: 28px; height: 24px; font-size: 0.7rem; padding: 0; }

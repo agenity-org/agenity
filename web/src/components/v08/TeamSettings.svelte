@@ -11,6 +11,7 @@
 
   let renameDraft = $state(team?.name || '');
   let topologyDraft = $state(team?.topology || 'hub');
+  let confirmDelete = $state(false);
 
   let canonBody = $state('');
   let canonDraft = $state('');
@@ -40,7 +41,6 @@
     onClose?.();
   }
   async function deleteTeam() {
-    if (!confirm(`Delete team "${team.name}"? Agents will be unaffiliated.`)) return;
     await fetch(`${API}/teams/${team.name}`, { method: 'DELETE' });
     onChanged?.();
     onClose?.();
@@ -103,18 +103,26 @@
           <label>Team name<input bind:value={renameDraft} /></label>
           <label>Topology
             <select bind:value={topologyDraft}>
-              <option value="hub">hub (shepherd in the middle)</option>
+              <option value="hub">hub (chepherd in the middle)</option>
               <option value="mesh">mesh (peer-to-peer)</option>
               <option value="custom">custom</option>
             </select>
           </label>
         </div>
-        <div class="row">
-          <button class="danger" on:click={deleteTeam}>🗑 Delete team</button>
-          <span style="flex:1"></span>
-          <button class="ghost" on:click={onClose}>Cancel</button>
-          <button class="primary" on:click={saveSettings}>Save</button>
-        </div>
+        {#if confirmDelete}
+          <div class="row confirm-row">
+            <span class="confirm-label">Delete team "{team.name}"? Members become unaffiliated.</span>
+            <button class="danger" on:click={deleteTeam}>Confirm delete</button>
+            <button class="ghost" on:click={() => (confirmDelete = false)}>Cancel</button>
+          </div>
+        {:else}
+          <div class="row">
+            <button class="danger" on:click={() => (confirmDelete = true)}>🗑 Delete team</button>
+            <span style="flex:1"></span>
+            <button class="ghost" on:click={onClose}>Cancel</button>
+            <button class="primary" on:click={saveSettings}>Save</button>
+          </div>
+        {/if}
       {/if}
     </div>
   </div>
@@ -145,4 +153,6 @@
   button.primary { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 0.45rem 1rem; font-weight: 600; cursor: pointer; }
   button.ghost { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.45rem 0.95rem; cursor: pointer; }
   button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 6px; padding: 0.45rem 0.95rem; cursor: pointer; }
+  .confirm-row { background: color-mix(in srgb, var(--danger) 8%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: 6px; padding: 0.5rem 0.7rem; gap: 0.6rem; }
+  .confirm-label { flex: 1; color: var(--fg); font-size: 0.87rem; }
 </style>

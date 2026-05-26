@@ -206,7 +206,7 @@
         </div>
         <div class="row"><button class="primary" on:click={saveSkills} disabled={skillsSaving}>{skillsSaving ? 'Saving…' : 'Save'}</button></div>
       {:else if tab === 'canon'}
-        <p class="hint">Team CLAUDE.md — every member reads this each tick (shepherd via <code>read_canon</code> MCP). Shared across the whole team.</p>
+        <p class="hint">Team CLAUDE.md — every member reads this each tick (chepherd via <code>read_canon</code> MCP). Shared across the whole team.</p>
         {#if canonEditing}
           <textarea bind:value={canonDraft} rows="18"></textarea>
           <div class="row">

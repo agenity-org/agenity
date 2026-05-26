@@ -31,7 +31,7 @@
 
   const SHAPES = [
     { id: 'solo',             icon: '🧑',  title: 'Solo',            blurb: 'One agent, no shepherd. Quick exploration.' },
-    { id: 'solo-supervised',  icon: '👤',  title: 'Solo + Shepherd', blurb: 'One worker + one shepherd watching. The daily default.' },
+    { id: 'solo-supervised',  icon: '👤',  title: 'Solo + Chepherd', blurb: 'One worker + one chepherd watching. The daily default.' },
     { id: 'pair',             icon: '👥',  title: 'Pair',            blurb: 'Implementer + reviewer + shepherd. Code review built in.' },
     { id: 'council',          icon: '🏛',  title: 'Council',         blurb: '5 agents: implementer + tester + 2 specialist reviewers + orchestrator. Heavy or risky work.' },
     { id: 'resurrect',        icon: '↻',   title: 'Resurrect a team', blurb: 'Bring back a previously-spawned team — each member resumes its last Claude session.' },
@@ -272,7 +272,7 @@
           <label>Topology
             <select bind:value={topology}>
               <option value="">(template default)</option>
-              <option value="hub">hub (shepherd in the middle)</option>
+              <option value="hub">hub (chepherd in the middle)</option>
               <option value="mesh">mesh (peer-to-peer)</option>
               <option value="custom">custom</option>
             </select>

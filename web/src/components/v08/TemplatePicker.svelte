@@ -97,7 +97,7 @@
     <div class="body">
       <div class="primer">
         <strong>How team templates work.</strong> A template is a recipe for a team
-        (e.g. <em>pair</em> = 1 implementer + 1 reviewer + 1 shepherd). Applying it
+        (e.g. <em>pair</em> = 1 implementer + 1 reviewer + 1 chepherd). Applying it
         spawns every member at once + auto-joins them to a new team. Each member
         can be a <strong>Fresh</strong> session OR <strong>Resumed</strong> from a
         previous Claude session in this working directory — picked per-member
@@ -118,7 +118,7 @@
         <label>Team name (defaults to template name) <input bind:value={team} placeholder={selected || ''} /></label>
         <label>Topology <select bind:value={topology}>
           <option value="">(template default)</option>
-          <option value="hub">hub (shepherd in the middle)</option>
+          <option value="hub">hub (chepherd in the middle)</option>
           <option value="mesh">mesh (peer-to-peer)</option>
           <option value="custom">custom</option>
         </select></label>
