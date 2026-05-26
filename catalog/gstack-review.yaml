@@ -1,0 +1,64 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: gstack-review
+description: |
+  GStack-style review team: Implementer + Code Reviewer + Security Reviewer + Shepherd.
+  Focused on risky or security-sensitive changes where two independent review layers
+  (code quality + security) are required before merge. All reviews are recorded via
+  chepherd.set_review_axis and surfaced in the WidgetSpider scorecard.
+topology: hub
+members:
+  - name: implementer-1
+    agent: claude-code
+    role: worker
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000
+      velocity_expect: high
+
+  - name: reviewer-1
+    agent: claude-code
+    role: reviewer
+    brief_override: |
+      You are the Code Reviewer. Your job:
+      1. Watch implementer-1 via chepherd.read_pane(name='implementer-1', lines=60).
+      2. After each commit or PR: review for correctness, test coverage, SOLID principles,
+         performance, and edge cases.
+      3. Record your assessment via chepherd.set_review_axis(name='implementer-1', ...).
+      4. Coach via chepherd.send_to_session with [@reviewer-1] prefix.
+      5. Mark 'approved' (E=9+, V=9+) or 'changes-requested' (E<7 or missing tests).
+      Focus: does the code DO what it claims? Are edge cases handled? Are tests sufficient?
+      You do NOT write application code. You review it.
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 100000
+      discipline_weight: 1.2
+
+  - name: security-reviewer-1
+    agent: claude-code
+    role: reviewer
+    brief_override: |
+      You are the Security Reviewer. Your job:
+      1. Watch implementer-1 and reviewer-1 via chepherd.read_pane.
+      2. After each PR: audit for OWASP Top 10 (injection, auth bypass, XSS, IDOR, etc.),
+         secrets in code, unsafe deserialization, missing input validation, insecure defaults.
+      3. Use STRIDE to categorise any findings: Spoofing, Tampering, Repudiation,
+         Information Disclosure, Denial of Service, Elevation of Privilege.
+      4. Record findings via chepherd.set_review_axis(name='implementer-1', ...).
+         D axis reflects security discipline; E axis reflects whether the output is safely shippable.
+      5. Coach via chepherd.send_to_session with [@security-reviewer-1] prefix.
+      Security veto: if you find a HIGH severity finding, set D < 4 and coach immediately.
+      Do NOT merge if active HIGH security findings are unaddressed.
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 100000
+      discipline_weight: 1.5
+
+  - name: shepherd-1
+    agent: claude-code
+    role: shepherd
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 100000
