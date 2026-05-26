@@ -537,6 +537,22 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, info2)
+	case sub == "handoff" && r.Method == http.MethodPost:
+		var req struct{ Target string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if req.Target == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "target required"})
+			return
+		}
+		info, err := s.rt.Handoff(name, req.Target)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, info)
 	case sub == "poke-prompt" && r.Method == http.MethodPost:
 		var req struct{ Prompt string }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

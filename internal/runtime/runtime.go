@@ -1330,6 +1330,84 @@ func (r *Runtime) Restart(name string) (*SessionInfo, error) {
 	return newInfo, nil
 }
 
+// Handoff copies the source agent's active Claude JSONL session to the target
+// agent's home directory and spawns the target with --resume <uuid> so it
+// picks up the conversation where the source left off.
+//
+// The source agent is stopped after the copy completes.
+// Returns the new target SessionInfo on success.
+func (r *Runtime) Handoff(source, target string) (*SessionInfo, error) {
+	r.mu.Lock()
+	srcID, ok := r.byName[source]
+	if !ok {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("runtime.Handoff: unknown source session %q", source)
+	}
+	srcInfo := r.info[srcID]
+	uuid := srcInfo.ClaudeUUID
+	srcHome := srcInfo.AgentHomeDir
+
+	dstID, ok2 := r.byName[target]
+	if !ok2 {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("runtime.Handoff: unknown target session %q", target)
+	}
+	dstInfo := r.info[dstID]
+	dstHome := dstInfo.AgentHomeDir
+	dstSpec := SpawnSpec{
+		Name:         dstInfo.Name,
+		AgentSlug:    dstInfo.AgentSlug,
+		Team:         dstInfo.Team,
+		Role:         dstInfo.Role,
+		Cwd:          dstInfo.Cwd,
+		SystemPrompt: dstInfo.SystemPrompt,
+		StatSheet:    dstInfo.StatSheet,
+	}
+	r.mu.Unlock()
+
+	if uuid == "" {
+		return nil, fmt.Errorf("runtime.Handoff: source %q has no active Claude session UUID", source)
+	}
+	if srcHome == "" || dstHome == "" {
+		return nil, fmt.Errorf("runtime.Handoff: source or target has no agent home dir (bare exec?)")
+	}
+
+	// Copy the JSONL session file from source home to target home.
+	srcJSONL := filepath.Join(srcHome, ".claude", "projects", "-"+strings.ReplaceAll(filepath.ToSlash(dstSpec.Cwd), "/", "-"), uuid+".jsonl")
+	dstProjectDir := filepath.Join(dstHome, ".claude", "projects", "-"+strings.ReplaceAll(filepath.ToSlash(dstSpec.Cwd), "/", "-"))
+	dstJSONL := filepath.Join(dstProjectDir, uuid+".jsonl")
+
+	if err := os.MkdirAll(dstProjectDir, 0o700); err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: create target project dir: %w", err)
+	}
+	data, err := os.ReadFile(srcJSONL)
+	if err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: read source JSONL %s: %w", srcJSONL, err)
+	}
+	if err := os.WriteFile(dstJSONL, data, 0o600); err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: write target JSONL: %w", err)
+	}
+
+	// Stop source, then restart target with --resume.
+	_ = r.Stop(source)
+	time.Sleep(500 * time.Millisecond)
+	_ = r.Stop(target)
+	time.Sleep(500 * time.Millisecond)
+
+	dstSpec.AgentArgs = append(dstSpec.AgentArgs, "--resume", uuid)
+	newInfo, _, err := r.Spawn(dstSpec)
+	if err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: spawn target: %w", err)
+	}
+	r.RecordEvent(Event{
+		Kind:  "agent_handoff",
+		Actor: "operator",
+		Body:  fmt.Sprintf("session handed off from %q to %q (uuid=%s)", source, target, uuid),
+		Meta:  map[string]any{"source": source, "target": target, "uuid": uuid},
+	})
+	return newInfo, nil
+}
+
 // Wait blocks until the runtime's state changes (used by long-poll style
 // subscribers like the TUI ticker). Cancellable via the returned function.
 func (r *Runtime) Wait() {

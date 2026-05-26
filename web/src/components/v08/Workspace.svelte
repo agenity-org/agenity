@@ -249,6 +249,8 @@
 
   // --- agent action menu (stop/pause/restart) ---
   let showAgentMenu = $state(false);
+  let showHandoffPicker = $state(false);
+  let handoffTarget = $state('');
   async function agentAction(act) {
     if (!selectedAgent) return;
     let url, method, body;
@@ -264,6 +266,22 @@
     } catch (e) { alert(String(e)); }
     await refresh();
     showAgentMenu = false;
+  }
+
+  async function doHandoff() {
+    if (!selectedAgent || !handoffTarget) return;
+    try {
+      const r = await fetch(`${API}/sessions/${selectedAgent}/handoff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: handoffTarget }),
+      });
+      if (!r.ok) { const e = await r.json().catch(()=>({})); alert(e.error || `HTTP ${r.status}`); return; }
+    } catch (e) { alert(String(e)); return; }
+    showHandoffPicker = false;
+    showAgentMenu = false;
+    handoffTarget = '';
+    await refresh();
   }
 
   // --- mount ---
@@ -332,6 +350,18 @@
             <button on:click={() => agentAction('pause')}>⏸ Pause</button>
             <button on:click={() => agentAction('unpause')}>▶ Resume</button>
             <button on:click={() => agentAction('restart')}>↻ Restart</button>
+            <button on:click={() => (showHandoffPicker = !showHandoffPicker)}>⇄ Hand off to…</button>
+            {#if showHandoffPicker}
+              <div class="handoff-row">
+                <select bind:value={handoffTarget}>
+                  <option value="">pick target…</option>
+                  {#each sessions.filter(s => s.name !== selectedAgent && !s.exited) as s}
+                    <option value={s.name}>{s.name}</option>
+                  {/each}
+                </select>
+                <button class="primary-sm" on:click={doHandoff} disabled={!handoffTarget}>Go</button>
+              </div>
+            {/if}
             <button class="danger" on:click={() => agentAction('stop')}>■ Stop</button>
           </div>
         {/if}
@@ -453,6 +483,10 @@
   .agent-menu .dropdown button { padding: 0.4rem 0.7rem; background: transparent; color: var(--fg); border: none; border-radius: 4px; cursor: pointer; text-align: left; font-size: 0.82rem; }
   .agent-menu .dropdown button:hover { background: var(--bg); }
   .agent-menu .dropdown button.danger { color: var(--danger); }
+  .handoff-row { display: flex; gap: 0.3rem; padding: 0.3rem 0.5rem; align-items: center; }
+  .handoff-row select { flex: 1; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-size: 0.8rem; padding: 0.2rem 0.3rem; }
+  button.primary-sm { background: #0072F5; color: #fff; border: none; border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
+  button.primary-sm:disabled { opacity: 0.4; cursor: default; }
   .layout-pick { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.4rem 0.55rem; font-size: 0.82rem; cursor: pointer; max-width: 140px; }
   .canvas { flex: 1; min-height: 0; overflow: hidden; }
   .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
