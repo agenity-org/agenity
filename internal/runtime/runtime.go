@@ -101,6 +101,11 @@ type SessionInfo struct {
 	ContextSize   int    `json:"context_size,omitempty"`    // model context window (e.g. 200_000 or 1_000_000)
 	ContextTokens int    `json:"context_tokens,omitempty"`  // tokens currently held in the window (last usage block)
 	ClaudeUUID    string `json:"claude_uuid,omitempty"`     // sessionId of the JSONL Claude is appending to
+
+	// ContainerRuntime is "podman", "docker", or "bare" — how this agent was spawned.
+	ContainerRuntime string `json:"container_runtime,omitempty"`
+	// AgentHomeDir is the per-agent persistent home directory on the host.
+	AgentHomeDir string `json:"agent_home_dir,omitempty"`
 }
 
 // Scorecard is shepherd's latest 5-axis assessment of a session.
@@ -176,7 +181,8 @@ type Runtime struct {
 	grants []Grant
 
 	// configuration
-	stateDir string // ~/.local/state/chepherd
+	stateDir         string           // ~/.local/state/chepherd
+	containerRuntime ContainerRuntime // podman | docker | bare
 
 	// human-inbox sink
 	humanInbox []HumanInboxEntry
@@ -281,16 +287,21 @@ func New(stateDir string) (*Runtime, error) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "inbox"), 0o700); err != nil {
 		return nil, err
 	}
+	cr := DetectRuntime()
+	if err := os.MkdirAll(filepath.Join(stateDir, "agents"), 0o700); err != nil {
+		return nil, err
+	}
 	r := &Runtime{
-		sessions:    make(map[string]*session.Session),
-		byName:      make(map[string]string),
-		info:        make(map[string]*SessionInfo),
-		stateDir:    stateDir,
-		activity:    make(map[string]*sessionActivity),
-		teams:       make(map[string]*Team),
-		memberships: make(map[string]*Membership),
-		axisReviews: make(map[string]map[string]*AxisReview),
-		events:      newEventBuffer(1000),
+		sessions:         make(map[string]*session.Session),
+		byName:           make(map[string]string),
+		info:             make(map[string]*SessionInfo),
+		stateDir:         stateDir,
+		activity:         make(map[string]*sessionActivity),
+		teams:            make(map[string]*Team),
+		memberships:      make(map[string]*Membership),
+		axisReviews:      make(map[string]map[string]*AxisReview),
+		events:           newEventBuffer(1000),
+		containerRuntime: cr,
 	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
@@ -404,11 +415,18 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// operator's confusion in the dashboard.
 	env = stripEnv(env, "TMUX", "TMUX_PANE", "TMUX_PLUGIN_MANAGER_PATH")
 
+	// Resolve per-agent home dir and wrap argv in container if runtime supports it.
+	agentHomeDir, err := r.containerRuntime.AgentHomeDir(spec.Name, r.stateDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime.Spawn: agent home dir: %w", err)
+	}
+	spawnArgv, spawnEnv := r.containerRuntime.SpawnArgs(spec.Name, agentHomeDir, spec.Cwd, argv, env)
+
 	// Spawn the PTY child via ptyhost
 	id := newSessionID(spec.Name)
 	s, err := session.New(id, session.Spec{
-		Command:   argv,
-		Env:       env,
+		Command:   spawnArgv,
+		Env:       spawnEnv,
 		Cwd:       spec.Cwd,
 		RingBytes: spec.RingBytes,
 	})
@@ -439,16 +457,18 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	}
 
 	info := &SessionInfo{
-		ID:           id,
-		Name:         spec.Name,
-		AgentSlug:    spec.AgentSlug,
-		Team:         spec.Team,
-		Role:         spec.Role,
-		Cwd:          spec.Cwd,
-		CreatedAt:    time.Now().UTC(),
-		PID:          s.PID(),
-		SystemPrompt: spec.SystemPrompt,
-		StatSheet:    statSheet,
+		ID:               id,
+		Name:             spec.Name,
+		AgentSlug:        spec.AgentSlug,
+		Team:             spec.Team,
+		Role:             spec.Role,
+		Cwd:              spec.Cwd,
+		CreatedAt:        time.Now().UTC(),
+		PID:              s.PID(),
+		SystemPrompt:     spec.SystemPrompt,
+		StatSheet:        statSheet,
+		ContainerRuntime: r.containerRuntime.Name(),
+		AgentHomeDir:     agentHomeDir,
 	}
 	// Extract GitHub URL once at spawn — cheap (single git config read),
 	// makes the right-pane "GitHub" link populate immediately. Branch is
