@@ -3,7 +3,14 @@
   Stage 1: Shape
   Stage 2: Git repo (registered providers — or register new)
   Stage 3: Fresh or resume per member
-  Stage 4: Confirm + launch
+  Stage 4: Claude account picker (skipped silently if exactly one token exists)
+  Stage 5: Confirm + launch
+
+  R5 (#136): Claude OAuth is a first-class wizard step. If the vault is
+  empty AND there's no host ~/.claude/.credentials.json, stage 4 forces the
+  operator to paste a credentials.json (or harvest one from a freshly-spawned
+  agent after they complete the OAuth-URL login in the browser). Tokens are
+  reusable across all subsequent spawns (R4), with per-agent override.
 -->
 <script>
   import { onMount } from 'svelte';
@@ -34,6 +41,15 @@
   let regError = $state('');
 
   let pickedResurrect = $state(null);
+
+  // Claude OAuth tokens (R5 / #136) — vault entries + host fallback
+  let claudeTokens = $state([]);
+  let selectedClaudeTokenId = $state('');   // default: empty → pick newest claude-oauth at spawn
+  let pasteMode = $state(false);
+  let pasteText = $state('');
+  let pasteLabel = $state('');
+  let pasteBusy = $state(false);
+  let pasteError = $state('');
 
   const SHAPES = [
     { id: 'solo',            icon: '🧑',  title: 'Solo',             blurb: 'One agent, no shepherd. Quick exploration.' },
@@ -83,7 +99,31 @@
     try { const r = await fetch(`${API}/teams/saved`); savedTeams = ((await r.json()).teams || []).filter(t => !t.live); } catch {}
     await loadProviders();
     await loadSessions();
+    await loadClaudeTokens();
   });
+
+  async function loadClaudeTokens() {
+    try {
+      const r = await fetch(`${API}/claude-tokens`);
+      claudeTokens = (await r.json()).tokens || [];
+    } catch { claudeTokens = []; }
+  }
+
+  async function savePastedClaudeToken() {
+    pasteBusy = true; pasteError = '';
+    try {
+      const r = await fetch(`${API}/claude-tokens/paste`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: pasteLabel || '', value: pasteText }),
+      });
+      if (!r.ok) { const e = await r.text(); throw new Error(e || `HTTP ${r.status}`); }
+      const d = await r.json();
+      await loadClaudeTokens();
+      selectedClaudeTokenId = d.id;
+      pasteMode = false; pasteText = ''; pasteLabel = '';
+    } catch (e) { pasteError = e.message || String(e); }
+    pasteBusy = false;
+  }
 
   async function loadProviders() {
     try {
@@ -157,6 +197,11 @@
       const provider = providers.find(p => p.id === selectedProviderId);
       if (!provider) throw new Error('No git repo selected.');
 
+      // claude_token_id: "" means runtime picks most-recent claude-oauth from
+      // vault, or falls back to host filesystem. Synthetic "host" id maps to
+      // the same empty-→host-fallback path.
+      const claudeTokenId = (selectedClaudeTokenId && selectedClaudeTokenId !== 'host') ? selectedClaudeTokenId : '';
+
       if (shape === 'solo') {
         const soloName = teamName || 'solo';
         const body = {
@@ -164,6 +209,7 @@
           team: teamName || 'default', role: 'worker',
           provider_id: selectedProviderId,
           use_default_prompt: true,
+          claude_token_id: claudeTokenId,
         };
         const ov = memberOverrides[soloName] || {};
         if (ov.resume_uuid) body.resume_uuid = ov.resume_uuid;
@@ -182,7 +228,7 @@
         }
         const r = await fetch(`${API}/templates/${shape}/apply`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ team: teamName || shape, provider_id: selectedProviderId, topology, member_overrides: mo }),
+          body: JSON.stringify({ team: teamName || shape, provider_id: selectedProviderId, topology, member_overrides: mo, claude_token_id: claudeTokenId }),
         });
         if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
       }
@@ -191,20 +237,39 @@
     busy = false;
   }
 
+  // Claude-token stage logic:
+  //   - if vault has zero claude-oauth tokens AND no host fallback → MUST visit stage 4
+  //   - if exactly one token → skip stage 4 silently (selected automatically)
+  //   - if multiple → stage 4 lets operator pick / paste new
+  let needsClaudeAuth = $derived(claudeTokens.length === 0);
+  let multipleClaudeTokens = $derived(claudeTokens.length > 1);
+
   function back() { if (stage > 1) { stage -= 1; error = ''; } }
   function nextEnabled() {
     if (stage === 1) return !!shape;
     if (stage === 2 && shape === 'resurrect') return !!pickedResurrect;
     if (stage === 2) return !!selectedProviderId;
+    if (stage === 4) {
+      // Stage 4 is the Claude-account picker. Need at least one token
+      // OR a host fallback (the "host" synthetic entry counts).
+      return claudeTokens.length > 0;
+    }
     return true;
   }
   function next() {
     if (stage === 2 && shape === 'resurrect') { doResurrect(); return; }
-    if (stage === 2 && shape === 'custom-yaml') { stage = 4; return; }
+    if (stage === 2 && shape === 'custom-yaml') { stage = 5; return; }
+    // Auto-skip stage 4 when exactly one token exists — no decision needed.
+    if (stage === 3 && claudeTokens.length === 1) {
+      selectedClaudeTokenId = claudeTokens[0].id === 'host' ? '' : claudeTokens[0].id;
+      stage = 5;
+      return;
+    }
     stage += 1;
   }
 
   let selectedProvider = $derived(providers.find(p => p.id === selectedProviderId) || null);
+  let selectedClaudeToken = $derived(claudeTokens.find(t => t.id === selectedClaudeTokenId) || null);
 </script>
 
 <div class="backdrop" on:click={onClose}>
@@ -215,7 +280,8 @@
         <span class:active={stage===1}></span>
         <span class:active={stage===2}></span>
         {#if shape && shape !== 'custom-yaml' && shape !== 'resurrect'}<span class:active={stage===3}></span>{/if}
-        <span class:active={stage===4}></span>
+        {#if shape !== 'resurrect'}<span class:active={stage===4}></span>{/if}
+        <span class:active={stage===5}></span>
       </div>
       <button class="close-btn" on:click={onClose}>×</button>
     </header>
@@ -363,13 +429,62 @@
           {/each}
         </div>
 
-      <!-- ── STAGE 4: Confirm ────────────────────────────────────────────── -->
+      <!-- ── STAGE 4: Claude account picker (R5 / #136) ─────────────────── -->
       {:else if stage === 4}
+        <h3>Which Claude account?</h3>
+        {#if claudeTokens.length === 0}
+          <p class="prose">No Claude credentials registered yet. Paste your <code>~/.claude/.credentials.json</code> content below, or skip this step and complete the OAuth login in the agent terminal after launch.</p>
+        {:else if multipleClaudeTokens}
+          <p class="prose">Pick which Claude account this team will use. Tokens are shared across all subsequent spawns until you change them.</p>
+        {:else}
+          <p class="prose">One Claude credential available — selected automatically. Add more if you want to switch accounts per agent.</p>
+        {/if}
+
+        {#if !pasteMode}
+          <div class="provider-grid">
+            {#each claudeTokens as t}
+              <button class="provider-card" class:active={selectedClaudeTokenId===t.id}
+                      on:click={() => selectedClaudeTokenId = t.id}>
+                <div class="p-kind">{t.id === 'host' ? 'HOST' : 'VAULT'}</div>
+                <div class="p-name">{t.label || t.id}</div>
+                {#if t.id !== 'host' && t.created_at}
+                  <div class="p-token">added {new Date(t.created_at).toLocaleDateString()}</div>
+                {/if}
+              </button>
+            {/each}
+          </div>
+          <button class="add-repo-btn" on:click={() => { pasteMode = true; pasteError = ''; }}>
+            + Paste credentials.json
+          </button>
+        {:else}
+          <div class="register-form">
+            <p class="prose" style="margin-top:0">
+              Paste the contents of <code>~/.claude/.credentials.json</code> from a machine where you've already run <code>claude</code> and logged in. Or run <code>claude</code> once on this machine first.
+            </p>
+            <label class="field-label">Label <small>(optional)</small>
+              <input bind:value={pasteLabel} placeholder="e.g. work-claude-max" />
+            </label>
+            <label class="field-label">credentials.json content
+              <textarea bind:value={pasteText} rows="6" placeholder={'{"claudeAiOauth": {"accessToken": "..."}}'}></textarea>
+            </label>
+            {#if pasteError}<div class="error">{pasteError}</div>{/if}
+            <div class="reg-actions">
+              <button class="ghost" on:click={() => { pasteMode = false; pasteError = ''; }}>Cancel</button>
+              <button class="primary" on:click={savePastedClaudeToken} disabled={pasteBusy || !pasteText}>
+                {pasteBusy ? 'Saving…' : 'Save credential'}
+              </button>
+            </div>
+          </div>
+        {/if}
+
+      <!-- ── STAGE 5: Confirm ────────────────────────────────────────────── -->
+      {:else if stage === 5}
         <h3>Ready to launch</h3>
         <ul class="confirm">
           <li><strong>Shape:</strong> {shape}</li>
           <li><strong>Team:</strong> {teamName || shape}</li>
           <li><strong>Repo:</strong> {selectedProvider?.display_name || selectedProvider?.repo_url || '—'} <span class="p-badge">{selectedProvider?.kind || ''}</span></li>
+          <li><strong>Claude account:</strong> {selectedClaudeToken?.label || (selectedClaudeTokenId === '' ? '(auto — newest vault token)' : selectedClaudeTokenId)}</li>
           {#if shape !== 'solo' && shape !== 'custom-yaml'}
             <li><strong>Members:</strong>
               <ul>
@@ -389,7 +504,7 @@
       <button class="ghost" on:click={back} disabled={stage===1}>← Back</button>
       <div class="spacer"></div>
       <button class="ghost" on:click={onClose}>Cancel</button>
-      {#if stage < 4}
+      {#if stage < 5}
         <button class="primary" on:click={next} disabled={!nextEnabled()}>Next →</button>
       {:else}
         <button class="primary" on:click={launch} disabled={busy}>{busy ? 'Launching…' : '🚀 Launch'}</button>
@@ -433,7 +548,7 @@
   /* Register form */
   .register-form { background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; padding: 0.9rem 1rem; }
   .field-label { display: block; color: var(--fg-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.65rem; }
-  .field-label input, .field-label select { display: block; width: 100%; margin-top: 0.25rem; padding: 0.45rem 0.6rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-size: 0.9rem; box-sizing: border-box; }
+  .field-label input, .field-label select, .field-label textarea { display: block; width: 100%; margin-top: 0.25rem; padding: 0.45rem 0.6rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-size: 0.9rem; box-sizing: border-box; font-family: ui-monospace, monospace; resize: vertical; }
   .field-label small { text-transform: none; letter-spacing: normal; color: var(--fg-faint); }
   .reg-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.85rem; }
   /* Auto-detected kind hint + token link */

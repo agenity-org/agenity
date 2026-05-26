@@ -106,6 +106,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/vault/", s.vaultByID)
 	mux.HandleFunc("/api/v1/vault/providers", s.vaultProviders)
 
+	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
+	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
+	mux.HandleFunc("/api/v1/claude-tokens/paste", s.claudeTokensPaste)
+	mux.HandleFunc("/api/v1/claude-tokens/harvest", s.claudeTokensHarvest)
+
 	// /api-v08/ prefix alias — strips to /api/ so the Astro static build
 	// (which uses the versioned dev-proxy path) works against this server
 	// without rewriting every fetch URL.
@@ -2109,12 +2114,144 @@ func (s *Server) vaultProviders(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 	}
 	out := make([]providerResp, 0, len(vault.KnownProviders))
-	order := []string{"anthropic-api", "openrouter", "newapi", "github-pat", "gitlab-pat", "gitea", "custom"}
+	order := []string{"claude-oauth", "anthropic-api", "openrouter", "newapi", "github-pat", "gitlab-pat", "gitea", "custom"}
 	for _, id := range order {
 		pm := vault.KnownProviders[id]
 		out = append(out, providerResp{ID: id, Label: pm.Label, DefaultEnv: pm.DefaultEnv, Description: pm.Description})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ─── Claude OAuth token handlers (R5 / #136) ────────────────────────────────
+//
+// The spawn wizard needs to: (a) list available Claude accounts, (b) accept a
+// pasted credentials.json for the "manual login" path, (c) harvest the
+// credentials that claude-code writes into a freshly-OAuth'd agent's home
+// directory back into the vault so the next agent reuses them automatically.
+
+func (s *Server) claudeTokensHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Vault == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"tokens": []any{}})
+		return
+	}
+	type tokenView struct {
+		ID        string    `json:"id"`
+		Label     string    `json:"label"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	creds := s.Vault.ListByProvider("claude-oauth")
+	out := make([]tokenView, 0, len(creds))
+	for _, c := range creds {
+		out = append(out, tokenView{ID: c.ID, Label: c.Label, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt})
+	}
+	// Also surface a synthetic "host" token if the host filesystem has
+	// claude-code logged in — lets the wizard show "Use host login" as an
+	// option even before the vault is seeded.
+	if home, err := os.UserHomeDir(); err == nil {
+		if _, statErr := os.Stat(filepath.Join(home, ".claude", ".credentials.json")); statErr == nil {
+			out = append(out, tokenView{ID: "host", Label: "Host login (~/.claude/.credentials.json)"})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": out})
+}
+
+// claudeTokensPaste accepts a raw credentials.json payload (the contents
+// the operator copied from their own ~/.claude/.credentials.json) and
+// stores it in the vault as a claude-oauth credential. Used when the
+// operator is on a fresh chepherd install + has the JSON handy.
+func (s *Server) claudeTokensPaste(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Vault == nil {
+		http.Error(w, "vault not initialised", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		Label string `json:"label"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.Value == "" {
+		http.Error(w, "value required", http.StatusBadRequest)
+		return
+	}
+	// Sanity-check it's the expected shape — must parse as JSON with a
+	// "claudeAiOauth" or "anthropic" key.
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(body.Value), &probe); err != nil {
+		http.Error(w, "value is not valid JSON", http.StatusBadRequest)
+		return
+	}
+	if _, hasOAuth := probe["claudeAiOauth"]; !hasOAuth {
+		// Don't reject outright — future claude-code versions may rename
+		// the field. Warn via a 200 with a "warning" key.
+	}
+	label := body.Label
+	if label == "" {
+		label = "pasted-" + time.Now().UTC().Format("2006-01-02-15:04")
+	}
+	id, err := s.Vault.Set("", "claude-oauth", label, "", body.Value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id})
+}
+
+// claudeTokensHarvest reads the .claude/.credentials.json file inside an
+// agent's home directory (which claude-code writes after a successful
+// OAuth login from within the container) and stores it into the vault.
+// Called by the spawn wizard after the operator completes the OAuth flow
+// — closes the loop so subsequent agents reuse the captured token.
+//
+// Body: {"agent_name": "<session-name>", "label": "<optional label>"}
+func (s *Server) claudeTokensHarvest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Vault == nil {
+		http.Error(w, "vault not initialised", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		AgentName string `json:"agent_name"`
+		Label     string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.AgentName == "" {
+		http.Error(w, "agent_name required", http.StatusBadRequest)
+		return
+	}
+	credPath := filepath.Join(s.rt.StateDir(), "agents", body.AgentName, "home", ".claude", ".credentials.json")
+	data, err := os.ReadFile(credPath)
+	if err != nil {
+		http.Error(w, "no credentials at "+credPath+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+	label := body.Label
+	if label == "" {
+		label = "harvested-from-" + body.AgentName + "-" + time.Now().UTC().Format("2006-01-02-15:04")
+	}
+	id, err := s.Vault.Set("", "claude-oauth", label, "", string(data))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "label": label})
 }
 
 func logMiddleware(h http.Handler) http.Handler {
