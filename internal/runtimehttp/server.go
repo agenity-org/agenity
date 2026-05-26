@@ -42,7 +42,8 @@ import (
 // Server hosts chepherd runtime endpoints. Caller is responsible for
 // listening on a port + calling http.Serve(listener, server.Handler()).
 type Server struct {
-	rt *runtime.Runtime
+	rt     *runtime.Runtime
+	WebDir string // optional: serve static Astro build from this dir
 
 	upgrader websocket.Upgrader
 }
@@ -95,6 +96,32 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/teams/saved", s.savedTeamsHandler)
 	mux.HandleFunc("/api/v1/kanban", s.kanbanIssues)
 	mux.HandleFunc("/api/v1/kanban/move", s.kanbanMove)
+
+	// /api-v08/ prefix alias — strips to /api/ so the Astro static build
+	// (which uses the versioned dev-proxy path) works against this server
+	// without rewriting every fetch URL.
+	apiHandler := http.Handler(mux)
+	mux.Handle("/api-v08/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/api/" + strings.TrimPrefix(r.URL.Path, "/api-v08/")
+		r2.RequestURI = r2.URL.RequestURI()
+		apiHandler.ServeHTTP(w, r2)
+	}))
+
+	// Static file serving — only active when --web-dir is set.
+	// SPA fallback: any path not matching a real file returns index.html.
+	if s.WebDir != "" {
+		fs := http.FileServer(http.Dir(s.WebDir))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// Let API routes pass through (already registered with longer prefix).
+			p := filepath.Join(s.WebDir, filepath.Clean("/"+r.URL.Path))
+			if _, err := os.Stat(p); os.IsNotExist(err) {
+				http.ServeFile(w, r, filepath.Join(s.WebDir, "index.html"))
+				return
+			}
+			fs.ServeHTTP(w, r)
+		})
+	}
 
 	return logMiddleware(mux)
 }

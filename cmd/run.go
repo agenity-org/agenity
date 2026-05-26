@@ -44,6 +44,7 @@ var (
 	runFlagStateDir    string
 	runFlagHeadless    bool
 	runFlagListen      string
+	runFlagWebDir      string
 )
 
 var runCmd = &cobra.Command{
@@ -73,6 +74,7 @@ func init() {
 	runCmd.Flags().StringVar(&runFlagStateDir, "state-dir", "", "runtime state dir (default: ~/.local/state/chepherd-v05)")
 	runCmd.Flags().BoolVar(&runFlagHeadless, "headless", false, "skip TUI; print runtime status + sleep (for testing / systemd)")
 	runCmd.Flags().StringVar(&runFlagListen, "listen", "127.0.0.1:8080", "HTTP/WS listen addr (set to '' to disable; for web/mobile clients)")
+	runCmd.Flags().StringVar(&runFlagWebDir, "web-dir", "", "serve Astro static build from this dir (production mode; empty = dev-proxy mode)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -120,12 +122,17 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	var httpSrv *http.Server
 	if runFlagListen != "" {
 		rs := runtimehttp.New(rt)
+		rs.WebDir = runFlagWebDir
 		hs, err := rs.ServeOn(runFlagListen)
 		if err != nil {
 			return fmt.Errorf("http server: %w", err)
 		}
 		httpSrv = hs
-		fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
+		if runFlagWebDir != "" {
+			fmt.Printf("✓ HTTP/WS server + web UI on http://%s (web-dir: %s)\n", runFlagListen, runFlagWebDir)
+		} else {
+			fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
+		}
 	}
 
 	// Zero workers by default — the operator opens the dashboard and

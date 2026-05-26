@@ -1,0 +1,41 @@
+# chepherd local stack — podman-compose / docker compose
+#
+# Usage:
+#   podman-compose up -d        # start
+#   podman-compose logs -f      # tail logs
+#   podman-compose down         # stop
+#   docker compose up -d        # docker users
+
+services:
+  chepherd:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: chepherd:latest
+    container_name: chepherd
+    restart: unless-stopped
+    ports:
+      # chepherd UI + API on host port 8080
+      - "8080:8080"
+    volumes:
+      # Persist runtime state (sessions, workspaces, scorecard, event log) across restarts
+      - chepherd-state:/home/chepherd/.local/state/chepherd
+      # Mount host ~/.claude so agents share your existing Claude auth + CLAUDE.md
+      - ${HOME}/.claude:/home/chepherd/.claude:ro
+      # Mount your repos read-write so agents can checkout / commit inside the container
+      - ${HOME}/repos:/home/chepherd/repos:rw
+    environment:
+      # Override to point agents at a different cwd inside the container
+      CHEPHERD_CWD: ${CHEPHERD_CWD:-/home/chepherd/repos}
+    # Rootless podman inside a container needs /dev/fuse
+    devices:
+      - /dev/fuse
+    security_opt:
+      - label=disable          # allow podman-in-podman (ContainerRuntime)
+    # Pass claude.ai host through for OAuth redirect
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  chepherd-state:
+    driver: local
