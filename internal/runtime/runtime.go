@@ -76,6 +76,10 @@ type SessionInfo struct {
 	// when absent.
 	Scorecard *Scorecard `json:"scorecard,omitempty"`
 
+	// TrustBand is derived from Scorecard.D at scorecard-update time.
+	// Drives the shepherd's adaptive tick interval.
+	TrustBand TrustBand `json:"trust_band,omitempty"`
+
 	// Shepherd verdict history — count of coach/intervene verdicts AND
 	// the most recent one (with timestamp + message). Empty until first
 	// non-silent verdict.
@@ -119,6 +123,49 @@ type Scorecard struct {
 	Discipline float64   `json:"D"`
 	Note       string    `json:"note,omitempty"`
 	At         time.Time `json:"at"`
+}
+
+// TrustBand is the adaptive coaching level derived from scorecard data.
+// Maps to tick intervals: trusted=30m, standard=10m, concerned=5m, crisis=2m.
+type TrustBand string
+
+const (
+	TrustBandTrusted   TrustBand = "trusted"   // D >= 8
+	TrustBandStandard  TrustBand = "standard"  // D >= 6
+	TrustBandConcerned TrustBand = "concerned" // D >= 4
+	TrustBandCrisis    TrustBand = "crisis"    // D < 4
+)
+
+// BandFromScorecard derives the trust band from a scorecard's discipline
+// score. Returns TrustBandStandard if sc is nil (no scorecard yet).
+func BandFromScorecard(sc *Scorecard) TrustBand {
+	if sc == nil {
+		return TrustBandStandard
+	}
+	switch {
+	case sc.Discipline >= 8:
+		return TrustBandTrusted
+	case sc.Discipline >= 6:
+		return TrustBandStandard
+	case sc.Discipline >= 4:
+		return TrustBandConcerned
+	default:
+		return TrustBandCrisis
+	}
+}
+
+// BandTickInterval returns the shepherd tick interval for a given trust band.
+func BandTickInterval(b TrustBand) time.Duration {
+	switch b {
+	case TrustBandTrusted:
+		return 30 * time.Minute
+	case TrustBandConcerned:
+		return 5 * time.Minute
+	case TrustBandCrisis:
+		return 2 * time.Minute
+	default: // standard
+		return 10 * time.Minute
+	}
 }
 
 // sessionActivity holds the running tally for one session — used by the
@@ -817,6 +864,41 @@ func (r *Runtime) maybeUpdateTeamApply(team, member, uuid string) {
 	}
 }
 
+// TeamWorstBand returns the most urgent TrustBand among all non-exited workers
+// in the given team(s). If teams is empty, considers all workers in the runtime.
+// Used by the shepherd tick loop to set its next interval.
+func (r *Runtime) TeamWorstBand(teams []string) TrustBand {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	teamSet := make(map[string]bool, len(teams))
+	for _, t := range teams {
+		teamSet[t] = true
+	}
+	worst := TrustBandTrusted
+	urgency := map[TrustBand]int{
+		TrustBandTrusted:   0,
+		TrustBandStandard:  1,
+		TrustBandConcerned: 2,
+		TrustBandCrisis:    3,
+	}
+	for _, info := range r.info {
+		if info.Role == RoleShepherd || info.Exited {
+			continue
+		}
+		if len(teamSet) > 0 && !teamSet[info.Team] {
+			continue
+		}
+		band := info.TrustBand
+		if band == "" {
+			band = TrustBandStandard
+		}
+		if urgency[band] > urgency[worst] {
+			worst = band
+		}
+	}
+	return worst
+}
+
 // SetScorecard stores shepherd's latest assessment of a worker. Idempotent:
 // each call overwrites the previous scorecard for that name.
 // `caller` is the agent name that produced the scorecard (recorded as the
@@ -830,6 +912,7 @@ func (r *Runtime) SetScorecard(caller, name string, sc Scorecard) error {
 	}
 	sc.At = time.Now().UTC()
 	r.info[id].Scorecard = &sc
+	r.info[id].TrustBand = BandFromScorecard(&sc)
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	if caller == "" {

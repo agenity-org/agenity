@@ -99,11 +99,34 @@ For your first observation of a worker, use baseline scores 5/5/5/5/5 with note 
 		}(n)
 	})
 
+	// Adaptive tick loop: interval is derived from the worst trust band of any
+	// worker in the shepherd's team(s). Trusted=30m, Standard=10m,
+	// Concerned=5m, Crisis=2m. Fresh shepherds start at Standard (10m) and
+	// adapt after the first scorecard lands.
 	const maxTicksBeforeRefresh = 50
 	tickCount := 0
-	tick := time.NewTicker(60 * time.Second)
-	defer tick.Stop()
-	for range tick.C {
+
+	// Look up the shepherd's team(s) to scope the band query.
+	shepherdTeams := func() []string {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		id, ok := r.byName[name]
+		if !ok {
+			return nil
+		}
+		return r.info[id].Shepherding
+	}
+
+	nextInterval := func() time.Duration {
+		band := r.TeamWorstBand(shepherdTeams())
+		return BandTickInterval(band)
+	}
+
+	for {
+		interval := nextInterval()
+		select {
+		case <-time.After(interval):
+		}
 		live, _ := r.Get(name)
 		if live == nil || live != sess {
 			return
@@ -115,12 +138,11 @@ For your first observation of a worker, use baseline scores 5/5/5/5/5 with note 
 				Body: fmt.Sprintf("shepherd %q hit tick limit (%d); refreshing for anti-rot", name, maxTicksBeforeRefresh),
 			})
 			r.pokeAgent(sess, "FINAL TICK before refresh: write a 5-line summary of the current state of your watch via chepherd.record_event(kind='shepherd_handoff', body='<summary>'). I'll spawn a replacement in 15s with this summary as its boot context. Use kind='shepherd_handoff' EXACTLY — your successor's bootstrap looks it up by kind+actor.")
-			// Give the dying shepherd 15s to write the handoff, then
-			// trigger the replacement.
 			go r.respawnShepherd(name, sess)
 			return
 		}
-		r.pokeAgent(sess, fmt.Sprintf("Tick (shepherd %q): chepherd.list_memberships(agent=%q) to find your teams, then for each worker in those teams call chepherd.read_pane → chepherd.set_scorecard → chepherd.record_verdict. Update scores based on what changed since last tick. Stay quiet unless alert_human is needed.", name, name))
+		band := r.TeamWorstBand(shepherdTeams())
+		r.pokeAgent(sess, fmt.Sprintf("Tick (shepherd %q, band=%s): chepherd.list_memberships(agent=%q) to find your teams, then for each worker in those teams call chepherd.read_pane → chepherd.set_scorecard → chepherd.record_verdict. Update scores based on what changed since last tick. Stay quiet unless alert_human is needed.", name, band, name))
 	}
 }
 
