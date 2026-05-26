@@ -1454,6 +1454,10 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		return nil, "", err
 	}
+	// MkdirAll does not change permissions on pre-existing dirs, and WriteFile
+	// is subject to the process umask. Chmod explicitly so the container user
+	// (different UID in the user namespace) can read both.
+	_ = os.Chmod(cfgDir, 0o755)
 	sockPath := filepath.Join(r.stateDir, "runtime.sock")
 	// Use the absolute path of the currently-running chepherd binary so
 	// the MCP-bridge subprocess matches the running runtime regardless
@@ -1479,6 +1483,7 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
 		return nil, "", err
 	}
+	_ = os.Chmod(cfgPath, 0o644)
 	// Symlink into cwd as ./.mcp.json so Claude Code's per-project lookup
 	// finds our config. If a symlink already exists, repair it if it
 	// points at a missing target (e.g. an old per-session config that
