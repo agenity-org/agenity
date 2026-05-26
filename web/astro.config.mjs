@@ -16,6 +16,7 @@ import svelte from '@astrojs/svelte';
 const backendPort = process.env.CHEPHERD_PORT || '8080';
 const backendPortV06 = process.env.CHEPHERD_PORT_V06 || '8081';
 const backendPortV07 = process.env.CHEPHERD_PORT_V07 || '8082';
+const backendPortV08 = process.env.CHEPHERD_PORT_V08 || '8083';
 
 export default defineConfig({
   integrations: [svelte()],
@@ -25,6 +26,23 @@ export default defineConfig({
   vite: {
     server: {
       proxy: {
+        // --- v0.8 (always :8083) ---
+        '/api-v08/v1/sessions': {
+          target: `ws://127.0.0.1:${backendPortV08}`,
+          ws: true,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api-v08/, '/api'),
+        },
+        '/api-v08/v1/events/stream': {
+          target: `http://127.0.0.1:${backendPortV08}`,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api-v08/, '/api'),
+        },
+        '/api-v08': {
+          target: `http://127.0.0.1:${backendPortV08}`,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/api-v08/, '/api'),
+        },
         // --- v0.7 (always :8082) ---
         '/api-v07/v1/sessions': {
           target: `ws://127.0.0.1:${backendPortV07}`,
