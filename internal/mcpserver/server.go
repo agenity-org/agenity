@@ -107,6 +107,32 @@ func (s *Server) CurrentCaller() string {
 	return s.lastCaller
 }
 
+// applyAutoEnvelope is the #203 send_to_session auto-envelope rule:
+// when an agent calls send_to_session, the receiver should see the
+// source identity ("[@<caller>] <body>"). The shepherd (and any other
+// caller that formats its own envelope) supplies bodies that already
+// begin with "[@" — in that case we leave the body as-is to avoid
+// double-prepending.
+//
+// Rules (deterministic; unit-tested in server_test.go):
+//
+//   - body already starts with "[@"   → leave as-is
+//   - caller is empty                 → leave as-is
+//   - otherwise                       → return "[@" + caller + "] " + body
+//
+// CurrentCaller() defaults to "shepherd" when no agent header was set,
+// so the shepherd self-call path (which always writes its own envelope
+// per shepherd.md) never double-prepends.
+func applyAutoEnvelope(caller, body string) string {
+	if caller == "" {
+		return body
+	}
+	if strings.HasPrefix(body, "[@") {
+		return body
+	}
+	return "[@" + caller + "] " + body
+}
+
 // New constructs a Server bound to the runtime. Call StartHTTP(addr) to
 // begin accepting connections.
 func New(rt *runtime.Runtime) *Server {
@@ -515,6 +541,10 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		// Use Inject (not Write) so lastOperatorWrite is not bumped and the
 		// writeMu serializes this against any concurrent operator keystrokes.
 		body := strings.TrimRight(a.Body, "\r\n")
+
+		// #203: auto-envelope (see applyAutoEnvelope).
+		body = applyAutoEnvelope(s.CurrentCaller(), body)
+
 		if _, err := sess.Inject([]byte(body)); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp

@@ -192,6 +192,11 @@ func (r *Relay) processLine(sender, line string) {
 		log.Printf("relay: %s → @%s body too large (%d>%d), dropped", sender, target, len(body), MaxBodyBytes)
 		return
 	}
+	// #203 deprecation warning — observe this log line over one minor
+	// release; once usage drops, delete the regex relay entirely.
+	// Agents should call chepherd.send_to_session instead of writing
+	// "@<peer>: <body>" to stdout (per internal/prompts/worker.md).
+	log.Printf("deprecated: agent %s used @-relay to reach @%s; should call chepherd.send_to_session instead (#203)", sender, target)
 
 	// Rate limit per sender
 	if !r.rateAllow(sender) {
