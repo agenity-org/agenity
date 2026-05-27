@@ -36,6 +36,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/chepherd/chepherd/internal/discovery"
 	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
@@ -55,13 +56,27 @@ type Server struct {
 	AuthToken string            // bearer token required on /api/v1/* (#139) — empty disables enforcement
 	Profile   *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
 
+	// #174 — Discovery Layer service. Initialised in New(); registers
+	// the 4 builtin providers (GitHub, GitLab, Bitbucket, Gitea) so
+	// SpawnWizard Stage-2 can auto-enumerate orgs + repos.
+	discovery *discovery.Service
+
 	upgrader websocket.Upgrader
 }
 
 // New constructs a Server bound to the runtime.
 func New(rt *runtime.Runtime) *Server {
+	// #174 — Discovery service with 4 builtin providers.
+	disc := discovery.NewService()
+	disc.RegisterProvider(discovery.NewGitHubProvider())
+	disc.RegisterProvider(discovery.NewGitLabProvider())
+	disc.RegisterProvider(discovery.NewBitbucketProvider())
+	// Gitea provider needs a BaseURL — register lazily once embedded-
+	// gitea or a self-hosted instance is configured. Apps that want
+	// it can call s.discovery.RegisterProvider(NewGiteaProvider(url)).
 	return &Server{
-		rt: rt,
+		rt:        rt,
+		discovery: disc,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -114,6 +129,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/vault/", s.vaultByID)
 	mux.HandleFunc("/api/v1/vault/providers", s.vaultProviders)
 	mux.HandleFunc("/api/v1/agents", s.agentsCatalog)
+	// #174 — discovery layer (auto-enumerate orgs + repos from saved tokens)
+	mux.HandleFunc("/api/v1/discovery/", s.discoveryRouter)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
