@@ -1,0 +1,58 @@
+---
+import WizardStepper from '../components/v09/WizardStepper.svelte';
+import Stage4Launch from '../components/v09/Stage4Launch.svelte';
+import '../styles/global.css';
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chepherd v0.9 — Stage 4 (Launch) preview</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; min-height: 100vh; background: #0a0a0a; color: #f5f5f5; font-family: ui-sans-serif, system-ui, sans-serif; }
+      .container { max-width: 760px; margin: 2rem auto; border: 1px solid #2a2a2a; border-radius: 10px; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <script>
+      if (typeof window !== 'undefined' && !window.__chepherdFetchPatched) {
+        window.__chepherdFetchPatched = true;
+        const _origFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : (input?.url || '');
+          if (url.startsWith('/api/') || url.startsWith('/api-v08/')) {
+            let tok = '';
+            try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
+            init = init || {};
+            init.headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined));
+            if (tok && !init.headers.has('Authorization')) {
+              init.headers.set('Authorization', 'Bearer ' + tok);
+            }
+          }
+          return _origFetch(input, init);
+        };
+      }
+    </script>
+    <div class="container">
+      <!-- Stepper label updated per architect 2026-05-27: Members → Agents -->
+      <WizardStepper client:load steps={[{label:'Shape'},{label:'Repo'},{label:'Agents'},{label:'Launch'}]} current={4} />
+      <Stage4Launch
+        client:load
+        selection={{
+          template: { id: 'scrum', name: 'Scrum Team' },
+          repo: { kind: 'builtin', full_name: 'chepherd-admin/scrum-walk', default_branch: 'main' },
+          teamName: 'scrum-team',
+          members: [
+            { label: 'po-1', primary_skill: 'product-owner', additional_skills: [], account_class: 'anthropic' },
+            { label: 'arch-1', primary_skill: 'architect', additional_skills: [], account_class: 'anthropic' },
+            { label: 'impl-1', primary_skill: 'implementer', additional_skills: [], account_class: 'anthropic' },
+            { label: 'qa-1', primary_skill: 'qa-tester', additional_skills: [], account_class: 'anthropic' },
+            { label: 'shepherd-1', primary_skill: 'shepherd', additional_skills: [], account_class: 'anthropic' },
+          ]
+        }}
+      />
+    </div>
+  </body>
+</html>
