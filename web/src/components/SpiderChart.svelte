@@ -34,7 +34,7 @@
 
 <svg viewBox={`0 0 ${viewW} ${viewH}`} class="spider" role="img" aria-label="Session scorecard radar chart">
   <!-- Grid: concentric pentagons at 0.25, 0.5, 0.75, 1.0 -->
-  {#each [0.25, 0.5, 0.75, 1.0] as ratio}
+  {#each [0.25, 0.5, 0.75, 1.0] as ratio (ratio)}
     <polygon
       points={polygon(axes.map((_, i) => gridPoint(i, axes.length, ratio)))}
       class="grid"
@@ -43,7 +43,7 @@
   {/each}
 
   <!-- Axis spokes -->
-  {#each axes as _, i}
+  {#each axes as _, i (i)}
     <line
       x1={cx} y1={cy}
       x2={gridPoint(i, axes.length, 1.0).x}
@@ -59,14 +59,14 @@
       class="data"
     />
     <!-- Data points -->
-    {#each axes as a, i}
+    {#each axes as a, i (i)}
       {@const p = pointFor(i, axes.length, a.value)}
       <circle cx={p.x} cy={p.y} r="3" class="data-dot" />
     {/each}
   {/if}
 
   <!-- Labels -->
-  {#each axes as a, i}
+  {#each axes as a, i (i)}
     {@const l = labelFor(i, axes.length)}
     <text x={l.x} y={l.y} class="label" text-anchor={l.x < cx - 4 ? 'end' : (l.x > cx + 4 ? 'start' : 'middle')}>
       {a.label}
