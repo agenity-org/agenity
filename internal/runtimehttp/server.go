@@ -36,6 +36,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/chepherd/chepherd/internal/skills"
 	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
@@ -55,12 +56,15 @@ type Server struct {
 	AuthToken string            // bearer token required on /api/v1/* (#139) — empty disables enforcement
 	Profile   *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
 
+	// #194 — Skill Library (12 builtins + user-defined CRUD).
+	skills *skills.Store
+
 	upgrader websocket.Upgrader
 }
 
 // New constructs a Server bound to the runtime.
 func New(rt *runtime.Runtime) *Server {
-	return &Server{
+	s := &Server{
 		rt: rt,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
@@ -72,6 +76,13 @@ func New(rt *runtime.Runtime) *Server {
 			},
 		},
 	}
+	// #194 — Skill Library.
+	if rt != nil {
+		if sk, err := skills.NewStore(rt.StateDir()); err == nil {
+			s.skills = sk
+		}
+	}
+	return s
 }
 
 // Handler returns the HTTP mux ready to be served.
@@ -114,6 +125,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/vault/", s.vaultByID)
 	mux.HandleFunc("/api/v1/vault/providers", s.vaultProviders)
 	mux.HandleFunc("/api/v1/agents", s.agentsCatalog)
+	// #194 — Skill Library
+	mux.HandleFunc("/api/v1/skills", s.skillsRoot)
+	mux.HandleFunc("/api/v1/skills/", s.skillByID)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
