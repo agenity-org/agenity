@@ -160,7 +160,20 @@ func EnsureEmbeddedGitea(stateDir, repoName string) (*EmbeddedGiteaInfo, error) 
 	//    privilege drop itself when called by root with the right
 	//    --config flag. We pass --config explicitly so install-mode
 	//    settings are picked up.
-	pass := randPassword(24)
+	//
+	// IMPORTANT: if credentials.json from a prior boot exists, REUSE
+	// the persisted password. Otherwise we'd regenerate a random pass,
+	// fail to update the existing admin row (admin create silently
+	// errors with "already exists"), then write the NEW pass to the
+	// state file — Gitea's DB still has the OLD pass and every future
+	// repo-create / clone fails with 401. Persist-first, generate-only-
+	// when-missing.
+	var pass string
+	if existing, err := loadGiteaCredsFromState(stateDir); err == nil && existing.AdminPass != "" {
+		pass = existing.AdminPass
+	} else {
+		pass = randPassword(24)
+	}
 	// Gitea writes the runtime config at /data/gitea/conf/app.ini (not
 	// /etc/gitea/app.ini as one might guess). Pass --config explicitly
 	// so `admin user create` finds the right DB config.
