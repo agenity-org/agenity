@@ -41,8 +41,17 @@ type Agent struct {
 	// /workspace inside every session attached to this agent.
 	PVCHandle string `json:"pvc_handle"`
 
-	// Lifecycle binding (#173 will mutate this through the handoff state
-	// machine). nil = unbound (no operator currently holds the agent).
+	// #194 — Skill IDs loaded onto this agent. First entry is the
+	// PRIMARY skill (drives system prompt + default tools + stat
+	// sheet); subsequent entries augment for multi-hat solo work.
+	// Order matters; empty slice = "raw agent, no skill assigned".
+	Skills []string `json:"skills,omitempty"`
+
+	// Lifecycle binding — tracks the operator that currently owns
+	// this agent. #173 (Handoff Protocol) was closed as not_planned
+	// 2026-05-27; always-resume identity match supersedes the
+	// request/release/bind state machine. Field stays for per-agent
+	// ownership tracking.
 	CurrentOperator *uuid.UUID `json:"current_operator,omitempty"`
 
 	// Append-only history of session attachments. Each entry is a
@@ -275,9 +284,23 @@ func (s *Store) SetLabel(id uuid.UUID, label string) error {
 	return s.Save(a)
 }
 
+// SetSkills replaces the agent's Skills list (#194). Order matters —
+// first entry is the primary skill driving system prompt composition.
+func (s *Store) SetSkills(id uuid.UUID, skillIDs []string) error {
+	a, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		return fmt.Errorf("agent.SetSkills: %s not found", id)
+	}
+	a.Skills = skillIDs
+	return s.Save(a)
+}
+
 // SetOperator binds (or unbinds with nil) the agent's CurrentOperator.
-// #173 will call this through the handoff state machine; for now any
-// caller may set it.
+// #173 closed as not_planned 2026-05-27 (always-resume model
+// supersedes); this setter remains as the direct binding mechanism.
 func (s *Store) SetOperator(id uuid.UUID, op *uuid.UUID) error {
 	a, err := s.Get(id)
 	if err != nil {

@@ -100,6 +100,28 @@ func TestAttachDetachSession(t *testing.T) {
 	}
 }
 
+// Verifies Skills field can be set + persists.
+func TestSetSkills(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	a := New("claude-code", "skilled", "")
+	_ = s.Save(a)
+	if err := s.SetSkills(a.ID, []string{"architect", "implementer"}); err != nil {
+		t.Fatalf("SetSkills: %v", err)
+	}
+	got, _ := s.Get(a.ID)
+	if len(got.Skills) != 2 || got.Skills[0] != "architect" || got.Skills[1] != "implementer" {
+		t.Fatalf("Skills not persisted in order: %+v", got.Skills)
+	}
+	// Clear
+	if err := s.SetSkills(a.ID, nil); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	got, _ = s.Get(a.ID)
+	if len(got.Skills) != 0 {
+		t.Fatalf("Skills not cleared: %+v", got.Skills)
+	}
+}
+
 // Verifies SetLabel + SetOperator.
 func TestSetters(t *testing.T) {
 	s, _ := NewStore(t.TempDir())

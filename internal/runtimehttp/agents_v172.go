@@ -102,26 +102,49 @@ func (s *Server) agentEntityByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, a)
 	case http.MethodPatch:
-		// Only label is mutable. Reject any other field with 400.
+		// label and skills are the only mutable fields. (#194 added
+		// skills.) Reject any other field with 400.
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
 		for k := range body {
-			if k != "label" {
-				http.Error(w, "field '"+k+"' is immutable; only 'label' may be patched", http.StatusBadRequest)
+			if k != "label" && k != "skills" {
+				http.Error(w, "field '"+k+"' is immutable; only 'label' and 'skills' may be patched", http.StatusBadRequest)
 				return
 			}
 		}
-		label, ok := body["label"].(string)
-		if !ok || label == "" {
-			http.Error(w, "label must be a non-empty string", http.StatusBadRequest)
-			return
+		if v, ok := body["label"]; ok {
+			label, isStr := v.(string)
+			if !isStr || label == "" {
+				http.Error(w, "label must be a non-empty string", http.StatusBadRequest)
+				return
+			}
+			if err := store.SetLabel(id, label); err != nil {
+				http.Error(w, "set-label: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
-		if err := store.SetLabel(id, label); err != nil {
-			http.Error(w, "set-label: "+err.Error(), http.StatusInternalServerError)
-			return
+		if v, ok := body["skills"]; ok {
+			arr, isArr := v.([]any)
+			if !isArr {
+				http.Error(w, "skills must be a string array", http.StatusBadRequest)
+				return
+			}
+			ids := make([]string, 0, len(arr))
+			for _, e := range arr {
+				s, isStr := e.(string)
+				if !isStr {
+					http.Error(w, "skills entries must be strings (skill IDs)", http.StatusBadRequest)
+					return
+				}
+				ids = append(ids, s)
+			}
+			if err := store.SetSkills(id, ids); err != nil {
+				http.Error(w, "set-skills: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		a, _ := store.Get(id)
 		writeJSON(w, http.StatusOK, a)
