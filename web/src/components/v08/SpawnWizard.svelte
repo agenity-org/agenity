@@ -109,7 +109,9 @@
   onMount(async () => {
     try { const r = await fetch(`${API}/templates`); templates = (await r.json()).templates || []; } catch {}
     try { const r = await fetch(`${API}/teams/saved`); savedTeams = ((await r.json()).teams || []).filter(t => !t.live); } catch {}
-    try { const r = await fetch(`${API}/agents`); agents = (await r.json()).agents || []; } catch {}
+    // #172 — /api/v1/agents now serves the first-class Agent entity
+    // CRUD; the agent-type catalog moved to /api/v1/agent-types.
+    try { const r = await fetch(`${API}/agent-types`); agents = (await r.json()).agents || []; } catch {}
     await loadProviders();
     await loadSessions();
     await loadClaudeTokens();
