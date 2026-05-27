@@ -24,19 +24,20 @@ import (
 
 // discoveryRouter dispatches /api/v1/discovery/{token-id}/* paths.
 //
-// The token-id format historically includes ":" and may include "/" when
-// derived from a repo URL. To avoid mux-collapsing those, the canonical
-// way to pass token-id is via the ?token-id= query param OR the
-// X-Token-Id header. The path-segment form is still accepted for short,
-// URL-safe IDs (e.g. "embedded").
+// Per #195 contract: {token-id} is the opaque vault entry ID of the
+// saved git provider record (URL-safe by construction — UUID or short
+// slug like "embedded"). UI MUST resolve to a vault UUID before
+// calling; never pass a "provider:URL" composite (PR #185 regression).
+//
+// Empty token-id, ":" / "/" inside token-id, or unknown ID all return
+// structured JSON 400/404 — never fall through to the global "unknown
+// API path" 404.
 func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 	if s.discovery == nil {
-		http.Error(w, "discovery service not initialised", http.StatusInternalServerError)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "discovery service not initialised"})
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/discovery/")
-	// Determine action: trailing /refresh or /repos. Anything else is
-	// the empty action (default: discover).
 	action := ""
 	tokenID := ""
 	switch {
@@ -49,21 +50,38 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 	default:
 		tokenID = path
 	}
-	// Override token-id from query or header to support colon/slash-bearing IDs.
-	if q := r.URL.Query().Get("token-id"); q != "" {
-		tokenID = q
+
+	// #195 — empty token-id must return 400 with structured JSON.
+	if tokenID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "token-id required",
+			"hint":  "pass the saved-provider's vault UUID as the path segment",
+		})
+		return
 	}
-	if h := r.Header.Get("X-Token-Id"); h != "" {
-		tokenID = h
+	// #195 — reject composite IDs containing ":" or "/" — UI must
+	// resolve to a vault UUID first.
+	if strings.ContainsAny(tokenID, ":/") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "token-id must be the saved-provider's opaque ID (no ':' or '/')",
+			"got":   tokenID,
+			"hint":  "look up the saved git-provider's id via GET /api/v1/git-providers and pass that UUID",
+		})
+		return
 	}
 
 	kind, secret, err := s.resolveProviderToken(tokenID)
 	if err != nil {
-		http.Error(w, "token resolve: "+err.Error(), http.StatusBadRequest)
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error":  "token not found",
+			"detail": err.Error(),
+		})
 		return
 	}
 	if secret == "" {
-		http.Error(w, "saved provider has no token — re-paste it on the wizard", http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "saved provider has no token — re-paste it on the wizard",
+		})
 		return
 	}
 
