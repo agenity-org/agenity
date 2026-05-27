@@ -228,74 +228,61 @@
       <li class="card">
         <header>
           <span class="a-label">{a.label}</span>
-          <span class="a-state">
-            {#if resume}↻ resumes{:else}★ fresh{/if}
+          <button
+            type="button"
+            class="chip role"
+            onclick={() => pickerOpenForSlot = i}
+            title="Change role"
+          >{role ? role.name : (a.role_id || 'pick role')}</button>
+          <span class="a-state" title={resume ? 'resuming prior PVC' : 'fresh PVC will be provisioned'}>
+            {#if resume}↻{:else}★{/if}
           </span>
           <button type="button" class="x" onclick={() => removeAgent(i)} aria-label="remove">×</button>
         </header>
 
-        <label class="row">
-          <span class="row-label">Agent</span>
-          <select
-            onchange={(e) => {
-              const v = e.target.value;
-              agents[i] = {
-                ...agents[i],
-                agent_type: v,
-                account_class: (v === 'codex') ? 'openai' : 'anthropic',
-                account_id: '',
-              };
-            }}
-          >
-            {#each AGENT_TYPES as at}
-              <option value={at.id} selected={a.agent_type === at.id}>{at.label}</option>
-            {/each}
-          </select>
-        </label>
-
-        <div class="row">
-          <div class="row-label">Role</div>
-          <div class="chips">
-            <button type="button" class="chip role" onclick={() => pickerOpenForSlot = i}>
-              {role ? role.name : (a.role_id || 'pick a role')}
-            </button>
-          </div>
+        <div class="skill-chips">
+          {#each a.owned_skills as sid}
+            {@const s = skillByID(sid)}
+            {#if s}
+              <span class="chip" title={a.owned_skills_scope?.[sid] ? `${s.name} (${a.owned_skills_scope[sid]})` : s.name}>
+                {s.name}
+                <button type="button" class="chip-x" onclick={() => removeOwnedSkill(i, sid)} aria-label="remove skill">×</button>
+              </span>
+            {/if}
+          {/each}
+          <button type="button" class="chip add" onclick={() => skillPickerForAgent = i}>+</button>
         </div>
 
-        <div class="row">
-          <div class="row-label">Skills</div>
-          <div class="chips">
-            {#each a.owned_skills as sid}
-              {@const s = skillByID(sid)}
-              {#if s}
-                <span class="chip">
-                  {s.name}
-                  {#if a.owned_skills_scope?.[sid]}
-                    <em>({a.owned_skills_scope[sid]})</em>
-                  {/if}
-                  <button type="button" class="chip-x" onclick={() => removeOwnedSkill(i, sid)} aria-label="remove skill">×</button>
-                </span>
-              {/if}
-            {/each}
-            <button type="button" class="chip add" onclick={() => skillPickerForAgent = i}>+ skill</button>
-          </div>
-        </div>
-
-        <label class="row">
-          <span class="row-label">Account</span>
-          <select onchange={(e) => setAccount(i, e.target.value)}>
-            <option value="">(default — newest matching {a.account_class})</option>
-            {#each vaultForAgent(a) as v}
-              <option value={v.id} selected={v.id === a.account_id}>⚓ {v.label || v.id}</option>
-            {/each}
-          </select>
-        </label>
-
-        {#if resume}
-          <p class="resume-hint">Will re-attach this agent's PVC ({a.label}) from a prior session.</p>
-        {:else}
-          <p class="resume-hint">New UUID + new PVC will be provisioned on launch.</p>
-        {/if}
+        <details class="advanced">
+          <summary>advanced</summary>
+          <label class="row">
+            <span class="row-label">Agent</span>
+            <select
+              onchange={(e) => {
+                const v = e.target.value;
+                agents[i] = {
+                  ...agents[i],
+                  agent_type: v,
+                  account_class: (v === 'codex') ? 'openai' : 'anthropic',
+                  account_id: '',
+                };
+              }}
+            >
+              {#each AGENT_TYPES as at}
+                <option value={at.id} selected={a.agent_type === at.id}>{at.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="row">
+            <span class="row-label">Account</span>
+            <select onchange={(e) => setAccount(i, e.target.value)}>
+              <option value="">(default — newest matching {a.account_class})</option>
+              {#each vaultForAgent(a) as v}
+                <option value={v.id} selected={v.id === a.account_id}>⚓ {v.label || v.id}</option>
+              {/each}
+            </select>
+          </label>
+        </details>
       </li>
     {/each}
   </ul>
@@ -418,23 +405,34 @@
   .empty-state p { color: var(--fg-muted, #888); margin: 0 0 0.6rem 0; }
   .primary { background: var(--accent-2, #87ceeb); border: 0; color: #0a0a0a; padding: 0.45rem 0.95rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
 
-  /* #200 Bug 4: 3-per-row compact card grid (not full-width rows).
-     Squad (8 agents) renders as 3+3+2 in a 3-col layout. */
+  /* #200 Bug 4 + operator walk: 3-per-row compact card grid.
+     Each card: header (label + role + state + remove) → skill chips
+     → collapsed advanced (agent type + account). Squad renders as
+     3+3+2 rows of 3-col layout. */
   .agents {
     list-style: none; padding: 0; margin: 0;
     display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.55rem;
+    gap: 0.5rem;
   }
   .card {
     background: var(--bg-elevated, #1a1a1a); border: 1px solid var(--border, #2a2a2a);
-    border-radius: 6px; padding: 0.5rem 0.65rem; margin: 0;
-    display: flex; flex-direction: column; gap: 0.3rem;
+    border-radius: 5px; padding: 0.4rem 0.55rem 0.45rem; margin: 0;
+    display: flex; flex-direction: column; gap: 0.32rem;
     font-size: 0.78rem; min-width: 0;
   }
-  .card header { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.15rem 0; }
-  .a-label { font-weight: 600; font-size: 0.82rem; }
-  .a-state { font-size: 0.78rem; color: var(--fg-muted, #aaa); margin-left: 0.3rem; }
-  .x { margin-left: auto; background: transparent; border: 0; color: var(--fg-muted, #888); cursor: pointer; font-size: 1.05rem; padding: 0 0.3rem; }
+  .card header { display: flex; align-items: center; gap: 0.35rem; margin: 0; flex-wrap: wrap; }
+  .a-label { font-weight: 600; font-size: 0.78rem; color: var(--fg, #f5f5f5); }
+  .skill-chips { display: flex; flex-wrap: wrap; gap: 0.18rem; }
+  .advanced { font-size: 0.7rem; }
+  .advanced summary {
+    cursor: pointer; color: var(--fg-muted, #888); padding: 0;
+    list-style: revert; user-select: none;
+  }
+  .advanced summary:hover { color: var(--accent-2, #87ceeb); }
+  .advanced[open] { padding-top: 0.2rem; border-top: 1px dashed var(--border, #2a2a2a); }
+  .advanced .row { margin-top: 0.18rem; }
+  .a-state { font-size: 0.85rem; color: var(--accent-2, #87ceeb); margin-left: auto; }
+  .x { background: transparent; border: 0; color: var(--fg-muted, #888); cursor: pointer; font-size: 1.05rem; padding: 0 0.2rem; line-height: 1; }
   .x:hover { color: var(--danger, #e74c3c); }
 
   /* #200 Bug 4: compact rows for 3-per-row grid */

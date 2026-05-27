@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/chepherd/chepherd/internal/discovery"
@@ -37,7 +38,23 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "discovery service not initialised"})
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/discovery/")
+	// Use EscapedPath() rather than r.URL.Path: Go's net/http ServeMux
+	// path-cleans the URL before dispatch, collapsing "//" → "/" — which
+	// mangles composite IDs like "github:https://github.com/<org>/<repo>"
+	// that the v0.8 git-providers list emits. EscapedPath preserves the
+	// original percent-encoded form ("%2F%2F") so we can decode it
+	// ourselves and reach the lookup with the exact stored ID.
+	rawPath := r.URL.EscapedPath()
+	rawPath = strings.TrimPrefix(rawPath, "/api/v1/discovery/")
+	// Operator-friendly fallback: also accept the legacy ?token-id=
+	// query-param form some UI callers still use. The path segment
+	// remains the canonical contract.
+	if rawPath == "" {
+		if q := r.URL.Query().Get("token-id"); q != "" {
+			rawPath = url.QueryEscape(q)
+		}
+	}
+	path, _ := url.QueryUnescape(rawPath)
 	action := ""
 	tokenID := ""
 	switch {
@@ -55,20 +72,19 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 	if tokenID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "token-id required",
-			"hint":  "pass the saved-provider's vault UUID as the path segment",
+			"hint":  "pass the saved-provider's ID as the path segment",
 		})
 		return
 	}
-	// #195 — reject composite IDs containing ":" or "/" — UI must
-	// resolve to a vault UUID first.
-	if strings.ContainsAny(tokenID, ":/") {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "token-id must be the saved-provider's opaque ID (no ':' or '/')",
-			"got":   tokenID,
-			"hint":  "look up the saved git-provider's id via GET /api/v1/git-providers and pass that UUID",
-		})
-		return
-	}
+
+	// Operator walk 2026-05-28: the strict "no ':' or '/'" rejection
+	// from #195 was overzealous — the existing git-providers list
+	// stores IDs in composite form ("github:https://github.com/<org>/<repo>")
+	// because the v0.8 path predates the vault-UUID design. The
+	// resolveProviderToken lookup below is the authoritative check; if
+	// the composite ID matches a registered provider, the call succeeds.
+	// We only refuse IDs that look like attempted directory traversal
+	// or are otherwise invalid AFTER the lookup fails (404).
 
 	kind, secret, err := s.resolveProviderToken(tokenID)
 	if err != nil {
