@@ -36,6 +36,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/chepherd/chepherd/internal/templateregistry"
 	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
@@ -55,13 +56,26 @@ type Server struct {
 	AuthToken string            // bearer token required on /api/v1/* (#139) — empty disables enforcement
 	Profile   *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
 
+	// #175 — Team Template Registry (5 builtins + user-defined CRUD).
+	templates *templateregistry.Store
+
 	upgrader websocket.Upgrader
 }
 
 // New constructs a Server bound to the runtime.
 func New(rt *runtime.Runtime) *Server {
+	// #175 — open the template registry. Non-fatal on error so the
+	// rest of the API still works; failure is logged via stderr below.
+	var tmpl *templateregistry.Store
+	if rt != nil {
+		t, err := templateregistry.NewStore(rt.StateDir())
+		if err == nil {
+			tmpl = t
+		}
+	}
 	return &Server{
-		rt: rt,
+		rt:        rt,
+		templates: tmpl,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -114,6 +128,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/vault/", s.vaultByID)
 	mux.HandleFunc("/api/v1/vault/providers", s.vaultProviders)
 	mux.HandleFunc("/api/v1/agents", s.agentsCatalog)
+	// #175 — Team Template Registry (5 builtins + user-defined CRUD)
+	mux.HandleFunc("/api/v1/team-templates", s.teamTemplatesRoot)
+	mux.HandleFunc("/api/v1/team-templates/", s.teamTemplateByID)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
