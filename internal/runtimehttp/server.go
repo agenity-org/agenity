@@ -37,6 +37,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/skills"
+	"github.com/chepherd/chepherd/internal/templateregistry"
 	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
@@ -59,6 +60,10 @@ type Server struct {
 	// #194 — Skill Library (12 builtins + user-defined CRUD).
 	skills *skills.Store
 
+	// #175 — Team Template Registry (6 visible + 3 hidden builtins +
+	// user-defined CRUD). Templates compose Skills from #194.
+	templates *templateregistry.Store
+
 	upgrader websocket.Upgrader
 }
 
@@ -76,10 +81,14 @@ func New(rt *runtime.Runtime) *Server {
 			},
 		},
 	}
-	// #194 — Skill Library.
 	if rt != nil {
+		// #194 — Skill Library.
 		if sk, err := skills.NewStore(rt.StateDir()); err == nil {
 			s.skills = sk
+		}
+		// #175 — Team Template Registry.
+		if tmpl, err := templateregistry.NewStore(rt.StateDir()); err == nil {
+			s.templates = tmpl
 		}
 	}
 	return s
@@ -131,6 +140,9 @@ func (s *Server) Handler() http.Handler {
 	// #194 — Skill Library
 	mux.HandleFunc("/api/v1/skills", s.skillsRoot)
 	mux.HandleFunc("/api/v1/skills/", s.skillByID)
+	// #175 — Team Template Registry (Skill-composing templates)
+	mux.HandleFunc("/api/v1/team-templates", s.teamTemplatesRoot)
+	mux.HandleFunc("/api/v1/team-templates/", s.teamTemplateByID)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
