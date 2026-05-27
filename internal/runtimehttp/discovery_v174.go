@@ -24,6 +24,7 @@ import (
 
 // discoveryRouter dispatches /api/v1/discovery/{token-id}/* paths.
 //
+<<<<<<< HEAD
 // Per #195 contract: {token-id} is the opaque vault entry ID of the
 // saved git provider record (URL-safe by construction — UUID or short
 // slug like "embedded"). UI MUST resolve to a vault UUID before
@@ -38,6 +39,21 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/discovery/")
+=======
+// The token-id format historically includes ":" and may include "/" when
+// derived from a repo URL. To avoid mux-collapsing those, the canonical
+// way to pass token-id is via the ?token-id= query param OR the
+// X-Token-Id header. The path-segment form is still accepted for short,
+// URL-safe IDs (e.g. "embedded").
+func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
+	if s.discovery == nil {
+		http.Error(w, "discovery service not initialised", http.StatusInternalServerError)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/discovery/")
+	// Determine action: trailing /refresh or /repos. Anything else is
+	// the empty action (default: discover).
+>>>>>>> d0b588b (feat(v0.9 #174): Discovery Layer — auto-enumerate orgs + repos from saved tokens)
 	action := ""
 	tokenID := ""
 	switch {
@@ -50,6 +66,7 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 	default:
 		tokenID = path
 	}
+<<<<<<< HEAD
 
 	// #195 — empty token-id must return 400 with structured JSON.
 	if tokenID == "" {
@@ -68,10 +85,19 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 			"hint":  "look up the saved git-provider's id via GET /api/v1/git-providers and pass that UUID",
 		})
 		return
+=======
+	// Override token-id from query or header to support colon/slash-bearing IDs.
+	if q := r.URL.Query().Get("token-id"); q != "" {
+		tokenID = q
+	}
+	if h := r.Header.Get("X-Token-Id"); h != "" {
+		tokenID = h
+>>>>>>> d0b588b (feat(v0.9 #174): Discovery Layer — auto-enumerate orgs + repos from saved tokens)
 	}
 
 	kind, secret, err := s.resolveProviderToken(tokenID)
 	if err != nil {
+<<<<<<< HEAD
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"error":  "token not found",
 			"detail": err.Error(),
@@ -82,6 +108,13 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "saved provider has no token — re-paste it on the wizard",
 		})
+=======
+		http.Error(w, "token resolve: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if secret == "" {
+		http.Error(w, "saved provider has no token — re-paste it on the wizard", http.StatusBadRequest)
+>>>>>>> d0b588b (feat(v0.9 #174): Discovery Layer — auto-enumerate orgs + repos from saved tokens)
 		return
 	}
 

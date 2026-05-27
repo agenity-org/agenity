@@ -36,6 +36,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/chepherd/chepherd/internal/discovery"
 	"github.com/chepherd/chepherd/internal/skills"
 	"github.com/chepherd/chepherd/internal/templateregistry"
 	"github.com/chepherd/chepherd/internal/catalog"
@@ -64,13 +65,24 @@ type Server struct {
 	// user-defined CRUD). Templates compose Skills from #194.
 	templates *templateregistry.Store
 
+	// #174 — Discovery Layer service. Initialised in New(); registers
+	// the 4 builtin providers (GitHub, GitLab, Bitbucket, Gitea) so
+	// SpawnWizard Stage-2 can auto-enumerate orgs + repos.
+	discovery *discovery.Service
+
 	upgrader websocket.Upgrader
 }
 
 // New constructs a Server bound to the runtime.
 func New(rt *runtime.Runtime) *Server {
+	// #174 — Discovery service with 4 builtin providers.
+	disc := discovery.NewService()
+	disc.RegisterProvider(discovery.NewGitHubProvider())
+	disc.RegisterProvider(discovery.NewGitLabProvider())
+	disc.RegisterProvider(discovery.NewBitbucketProvider())
 	s := &Server{
-		rt: rt,
+		rt:        rt,
+		discovery: disc,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -143,6 +155,8 @@ func (s *Server) Handler() http.Handler {
 	// #175 — Team Template Registry (Skill-composing templates)
 	mux.HandleFunc("/api/v1/team-templates", s.teamTemplatesRoot)
 	mux.HandleFunc("/api/v1/team-templates/", s.teamTemplateByID)
+	// #174 — discovery layer (auto-enumerate orgs + repos from saved tokens)
+	mux.HandleFunc("/api/v1/discovery/", s.discoveryRouter)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
