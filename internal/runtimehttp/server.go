@@ -120,6 +120,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/agents", s.agentsEntity)
 	mux.HandleFunc("/api/v1/agents/", s.agentEntityByID)
 	mux.HandleFunc("/api/v1/agent-types", s.agentsCatalog)
+	// #173 — admin-only force-release. Normal handoff actions
+	// (handoff/release/bind/handoffs) are intercepted inside
+	// agentEntityByID via handoffRouter.
+	mux.HandleFunc("/api/v1/admin/agents/", s.adminForceRelease)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
@@ -920,6 +924,11 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			AgentArgs:     args,
 			ClaudeTokenID: req.ClaudeTokenID,
 			Env:           spawnEnv,
+			// #173 — thread X-Operator-Id into the SpawnSpec so the
+			// minted Agent is Bound to the correct operator from the
+			// first instant. Falls back to the legacy sentinel if the
+			// header is absent (handled in runtime.Spawn).
+			OperatorID: operatorFromRequest(r),
 		})
 		if err == nil && req.Team != "" {
 			_, _ = s.rt.JoinTeam(req.Name, req.Team, runtime.MembershipRole(req.Role), "")

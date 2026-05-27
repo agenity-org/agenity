@@ -430,6 +430,13 @@ type HumanInboxEntry struct {
 	Read bool      `json:"read"`
 }
 
+// legacySpawnerOperator is the stable UUID used for spawn paths that
+// don't yet thread an operator-id (legacy CLI, single-operator deploys).
+// Deterministic so it persists across daemon restarts; downstream code
+// can treat it as the "default operator" until a real Operator entity
+// lands (#173 + future identity work).
+var legacySpawnerOperator = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
 // New constructs an empty Runtime rooted at stateDir.
 func New(stateDir string) (*Runtime, error) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "sessions"), 0o700); err != nil {
@@ -471,7 +478,31 @@ func New(stateDir string) (*Runtime, error) {
 		sessionToAgent:   make(map[string]uuid.UUID),
 	}
 	r.cond = sync.NewCond(&r.mu)
+	// #173 — background sweep for HANDOFF_PENDING agents whose 60-second
+	// release timer has expired. Cheap (one List() per tick) — only
+	// kicks in when a pending handoff exists.
+	go r.handoffSweepLoop()
 	return r, nil
+}
+
+// handoffSweepLoop runs the timeout sweeper. Ticks every second; the
+// actual timeout window lives in agent.HandoffTimeout.
+func (r *Runtime) handoffSweepLoop() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if r.agentRegistry == nil {
+			continue
+		}
+		if n, _ := r.agentRegistry.SweepTimeouts(time.Now().UTC()); n > 0 {
+			r.RecordEvent(Event{
+				Kind:  "handoff_timeout",
+				Actor: "runtime",
+				Body:  fmt.Sprintf("auto-released %d agent(s) past handoff timeout", n),
+				Meta:  map[string]any{"count": n},
+			})
+		}
+	}
 }
 
 // SpawnSpec describes how to bring up a new session.
@@ -493,6 +524,12 @@ type SpawnSpec struct {
 
 	// RingBytes overrides ptyhost.Session default (1 MiB).
 	RingBytes int
+
+	// OperatorID identifies the operator initiating this spawn (#173).
+	// Bound to the resulting Agent so future handoff can release from
+	// the right holder. uuid.Nil → falls back to legacySpawnerOperator
+	// (single-operator instances + legacy CLI paths).
+	OperatorID uuid.UUID
 
 	// ClaudeTokenID picks which Claude OAuth credential from the vault
 	// gets mounted at /run/secrets/claude-credentials. "" = pick the most
@@ -612,6 +649,18 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	ag := agententity.New(spec.AgentSlug, spec.Name, "")
 	if err := r.agentRegistry.Save(ag); err != nil {
 		fmt.Fprintf(os.Stderr, "runtime: agent registry save %s: %v\n", spec.Name, err)
+	}
+	// #173 — fresh agents are immediately Bound to the spawning operator
+	// so handoff has a CurrentOperator to release from. spec.OperatorID
+	// is the binder; falls back to a stable sentinel if the caller
+	// didn't thread an operator-id (legacy CLI path / single-operator
+	// instances without explicit identity).
+	binder := spec.OperatorID
+	if binder == uuid.Nil {
+		binder = legacySpawnerOperator
+	}
+	if err := r.agentRegistry.Bind(ag.ID, binder); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: agent bind %s: %v\n", spec.Name, err)
 	}
 	env = append(env, "CHEPHERD_PVC_HANDLE="+ag.PVCHandle)
 	// Delegate to the configured AgentSpawner (#127). The local path

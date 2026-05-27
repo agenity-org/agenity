@@ -76,10 +76,15 @@ func (s *Server) agentsEntity(w http.ResponseWriter, r *http.Request) {
 }
 
 // agentEntityByID handles single-record routes: /api/v1/agents/{id}.
+// /api/v1/agents/{id}/<action> paths are intercepted by handoffRouter
+// (#173) before this falls through to the entity CRUD.
 func (s *Server) agentEntityByID(w http.ResponseWriter, r *http.Request) {
 	store := s.rt.AgentRegistry()
 	if store == nil {
 		http.Error(w, "agent registry not initialised", http.StatusInternalServerError)
+		return
+	}
+	if s.handoffRouter(w, r) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/agents/")

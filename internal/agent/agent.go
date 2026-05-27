@@ -22,6 +22,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// State is the Agent's lifecycle state machine (#173). Drives the
+// operator-to-operator handoff protocol:
+//
+//	ACTIVE(op=A) → HANDOFF_PENDING(from=A, to=B) → UNBOUND → ACTIVE(op=B)
+type State string
+
+const (
+	StateActive          State = "active"
+	StateHandoffPending  State = "handoff_pending"
+	StateUnbound         State = "unbound"
+)
+
 // Agent is the first-class entity. UUID is the stable PK; Label is the
 // human-facing handle (mutable). Every operator-facing surface should
 // resolve by UUID and DISPLAY Label.
@@ -41,9 +53,19 @@ type Agent struct {
 	// /workspace inside every session attached to this agent.
 	PVCHandle string `json:"pvc_handle"`
 
-	// Lifecycle binding (#173 will mutate this through the handoff state
-	// machine). nil = unbound (no operator currently holds the agent).
+	// Lifecycle state (#173 handoff state machine).
+	State State `json:"state"`
+
+	// Lifecycle binding — mutated through the handoff state machine.
+	// nil = unbound (no operator currently holds the agent).
 	CurrentOperator *uuid.UUID `json:"current_operator,omitempty"`
+
+	// PendingHandoffTo is set only while State == StateHandoffPending.
+	// Identifies which operator initiated the request and is awaiting
+	// the bind step. Cleared on release / completion / timeout.
+	PendingHandoffTo     *uuid.UUID `json:"pending_handoff_to,omitempty"`
+	PendingHandoffReason string     `json:"pending_handoff_reason,omitempty"`
+	PendingHandoffAt     *time.Time `json:"pending_handoff_at,omitempty"`
 
 	// Append-only history of session attachments. Each entry is a
 	// SessionRef = {SessionID, AttachedAt, DetachedAt}. The latest
@@ -95,6 +117,11 @@ func New(agentType, label, creatorAccount string) *Agent {
 		Label:          label,
 		PVCHandle:      PVCName(id),
 		LastActiveAt:   now,
+		// Fresh agents start UNBOUND — runtime.Spawn binds them to the
+		// caller's operator-id immediately after, via the handoff
+		// state machine entry point Bind() (no formal request needed
+		// since there's no prior holder to release from).
+		State: StateUnbound,
 	}
 }
 
