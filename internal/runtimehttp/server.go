@@ -594,10 +594,12 @@ func (s *Server) claudeStatusHandler(w http.ResponseWriter, r *http.Request) {
 // at apply time — pick a specific resume UUID, swap cwd, or replace the
 // per-role prompt without forking the YAML.
 type MemberOverrideReq struct {
-	ResumeUUID string `json:"resume_uuid,omitempty"`
-	Cwd        string `json:"cwd,omitempty"`
-	Prompt     string `json:"prompt,omitempty"`
-	Fresh      bool   `json:"fresh,omitempty"` // explicit opt-out from resume_strategy
+	ResumeUUID    string `json:"resume_uuid,omitempty"`
+	Cwd           string `json:"cwd,omitempty"`
+	Prompt        string `json:"prompt,omitempty"`
+	Fresh         bool   `json:"fresh,omitempty"` // explicit opt-out from resume_strategy
+	Agent         string `json:"agent,omitempty"` // override agent CLI for this member (#164)
+	ClaudeTokenID string `json:"claude_token_id,omitempty"` // override Claude OAuth credential (#164)
 }
 
 // promptsHandler returns the default system prompt for a given role so
@@ -1855,13 +1857,14 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		}
 		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:         m.Name,
-			AgentSlug:    m.Agent,
-			Team:         team,
-			Role:         role,
-			Cwd:          memberCwd,
-			SystemPrompt: sysPrompt,
-			StatSheet:    m.StatSheet,
-			AgentArgs:    agentArgs,
+			AgentSlug:     firstNonEmpty(ov.Agent, m.Agent),
+			Team:          team,
+			Role:          role,
+			Cwd:           memberCwd,
+			SystemPrompt:  sysPrompt,
+			StatSheet:     m.StatSheet,
+			AgentArgs:     agentArgs,
+			ClaudeTokenID: ov.ClaudeTokenID,
 		})
 		res := spawned{Name: m.Name, Role: string(m.Role)}
 		if err != nil {

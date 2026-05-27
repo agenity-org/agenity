@@ -39,6 +39,7 @@
   let regName = $state('');
   let regBusy = $state(false);
   let regError = $state('');
+  let regSavedOK = $state(false);  // ✓ tick after auto-save (#165)
 
   let pickedResurrect = $state(null);
 
@@ -235,12 +236,16 @@
     return t ? (t.member_specs || []) : [];
   }
   function setMember(name, val) {
-    memberOverrides = { ...memberOverrides, [name]: { resume_uuid: val } };
+    memberOverrides = { ...memberOverrides, [name]: { ...(memberOverrides[name] || {}), resume_uuid: val } };
+  }
+  // #164 — generic per-member field setter (agent/claude_token_id/resume_uuid).
+  function setMemberField(name, key, val) {
+    memberOverrides = { ...memberOverrides, [name]: { ...(memberOverrides[name] || {}), [key]: val } };
   }
 
   function pickShape(s) {
     shape = s;
-    teamName = s;
+    teamName = '';   // cleared — set by smart-default on stage 3
     stage = 2;
   }
 
@@ -267,10 +272,14 @@
     regBusy = false;
   }
 
-  // #161 — single-button: validate + register + advance in one click.
-  async function registerAndAdvance() {
+  // #165 — auto-save on token-field blur. No Save&Continue button; only
+  // the wizard footer Next moves to stage 3. ✓ tick on success.
+  async function autoSaveProvider() {
+    regError = ''; regSavedOK = false;
+    if (!regUrl) return; // empty URL = nothing to save
+    if (detectedKind !== 'embedded' && !regToken) return; // wait for token
     await registerProvider();
-    if (!regError && selectedProviderId) { next(); }
+    if (!regError) { regSavedOK = true; }
   }
 
   // #162 — first-time setup shortcut: spawn the embedded Gitea via the
@@ -314,40 +323,66 @@
       const provider = providers.find(p => p.id === selectedProviderId);
       if (!provider) throw new Error('No git repo selected.');
 
-      // claude_token_id: "" means runtime picks most-recent claude-oauth from
-      // vault, or falls back to host filesystem. Synthetic "host" id maps to
-      // the same empty-→host-fallback path.
-      const claudeTokenId = (selectedClaudeTokenId && selectedClaudeTokenId !== 'host') ? selectedClaudeTokenId : '';
+      const effectiveTeam = teamName || defaultTeamName;
 
       if (shape === 'solo') {
-        const soloName = teamName || 'solo';
+        const soloName = effectiveTeam || 'solo';
+        const ov = memberOverrides[soloName] || memberOverrides['solo'] || {};
         const body = {
-          name: soloName, agent: selectedAgentSlug || 'claude-code',
-          team: teamName || 'default', role: 'worker',
+          name: soloName,
+          agent: ov.agent || 'claude-code',
+          team: effectiveTeam,
+          role: 'worker',
           provider_id: selectedProviderId,
           use_default_prompt: true,
-          claude_token_id: claudeTokenId,
+          claude_token_id: ov.claude_token_id || '',
         };
-        const ov = memberOverrides[soloName] || {};
         if (ov.resume_uuid) body.resume_uuid = ov.resume_uuid;
         const r = await fetch(`${API}/sessions`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
+        if (!r.ok) {
+          // #163 — surface BOTH structured + raw error so silent failures
+          // become visible. Some endpoints return text/plain (auth errors)
+          // and we were treating those as "ok" because .json() threw.
+          let msg = '';
+          const ct = r.headers.get('Content-Type') || '';
+          if (ct.includes('json')) {
+            const e = await r.json().catch(() => ({}));
+            msg = e.error || JSON.stringify(e);
+          } else {
+            msg = await r.text();
+          }
+          throw new Error(`spawn ${r.status}: ${msg || 'unknown error'}`);
+        }
       } else {
+        // #164 — forward per-member overrides (agent + claude_token_id +
+        // fresh/resume) to the backend's MemberOverrideReq.
         const mo = {};
         for (const [k, v] of Object.entries(memberOverrides)) {
           const entry = {};
           if (v.resume_uuid === 'FRESH') entry.fresh = true;
           else if (v.resume_uuid) entry.resume_uuid = v.resume_uuid;
+          if (v.agent) entry.agent = v.agent;
+          if (v.claude_token_id) entry.claude_token_id = v.claude_token_id;
           if (Object.keys(entry).length) mo[k] = entry;
         }
         const r = await fetch(`${API}/templates/${shape}/apply`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ team: teamName || shape, provider_id: selectedProviderId, topology, member_overrides: mo, claude_token_id: claudeTokenId }),
+          body: JSON.stringify({ team: effectiveTeam, provider_id: selectedProviderId, topology, member_overrides: mo }),
         });
-        if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || `HTTP ${r.status}`); }
+        if (!r.ok) {
+          let msg = '';
+          const ct = r.headers.get('Content-Type') || '';
+          if (ct.includes('json')) {
+            const e = await r.json().catch(() => ({}));
+            msg = e.error || JSON.stringify(e);
+          } else {
+            msg = await r.text();
+          }
+          throw new Error(`apply ${r.status}: ${msg || 'unknown error'}`);
+        }
       }
       onLaunched?.(); onClose?.();
     } catch (e) { error = e.message || String(e); }
@@ -366,34 +401,45 @@
     if (stage === 1) return !!shape;
     if (stage === 2 && shape === 'resurrect') return !!pickedResurrect;
     if (stage === 2) return !!selectedProviderId;
-    if (stage === 4) {
-      // Stage 4 is the Claude-account picker. Need at least one token
-      // OR a host fallback (the "host" synthetic entry counts).
-      return claudeTokens.length > 0;
-    }
+    if (stage === 3) return !!(teamName || defaultTeamName);
     return true;
   }
   function next() {
     if (stage === 2 && shape === 'resurrect') { doResurrect(); return; }
-    if (stage === 2 && shape === 'custom-yaml') { stage = 5; return; }
-    // Auto-skip stage 4 (Claude account) when the selected agent doesn't
-    // use claude-oauth at all (e.g. qwen-code, aider, opencode).
-    if (stage === 3 && !needsClaudeAccount) {
-      selectedClaudeTokenId = '';
-      stage = 5;
-      return;
-    }
-    // Auto-skip stage 4 when exactly one Claude token exists — no decision needed.
-    if (stage === 3 && claudeTokens.length === 1) {
-      selectedClaudeTokenId = claudeTokens[0].id === 'host' ? '' : claudeTokens[0].id;
-      stage = 5;
-      return;
+    if (stage === 2 && shape === 'custom-yaml') { stage = 4; return; }
+    // Advancing 2 → 3: apply the smart team default.
+    if (stage === 2 && !teamName) {
+      teamName = defaultTeamName;
     }
     stage += 1;
   }
 
   let selectedProvider = $derived(providers.find(p => p.id === selectedProviderId) || null);
-  let selectedClaudeToken = $derived(claudeTokens.find(t => t.id === selectedClaudeTokenId) || null);
+  // #166 — smart team default. Scan live sessions for any matching the
+  // selected provider; if found, default to joining that team. Otherwise
+  // use the provider's display_name or shape id.
+  let matchingExistingTeams = $derived.by(() => {
+    if (!selectedProvider || !availableSessions) return [];
+    const want = selectedProvider.repo_url || selectedProvider.id;
+    const set = new Set();
+    for (const s of (availableSessions || [])) {
+      if (!s.team) continue;
+      if (s.github_url === want || s.cwd?.includes(want)) set.add(s.team);
+    }
+    return Array.from(set);
+  });
+  // Sanitise to a valid container/team identifier — alnum + dash only.
+  function sanitiseTeam(s) {
+    if (!s) return '';
+    return s.toString().toLowerCase().replace(/^https?:\/\//,'').replace(/\.git$/,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0, 40);
+  }
+  let defaultTeamName = $derived(
+    matchingExistingTeams[0]
+    || sanitiseTeam(selectedProvider?.display_name)
+    || (selectedProvider?.repo_url ? sanitiseTeam(selectedProvider.repo_url.split('/').slice(-1)[0]) : '')
+    || shape
+    || ''
+  );
 </script>
 
 <!-- #152: backdrop click does NOT silently close — require an explicit
@@ -403,12 +449,12 @@
   <div class="modal" on:click|stopPropagation>
     <header>
       <h2>+ new {shape ? '· ' + shape : ''}</h2>
+      <!-- 4-stage flow (#167): shape → repo → members → launch -->
       <div class="dots">
         <span class:active={stage===1}></span>
         <span class:active={stage===2}></span>
-        {#if shape && shape !== 'custom-yaml' && shape !== 'resurrect'}<span class:active={stage===3}></span>{/if}
-        {#if shape !== 'resurrect'}<span class:active={stage===4}></span>{/if}
-        <span class:active={stage===5}></span>
+        {#if shape && shape !== 'resurrect'}<span class:active={stage===3}></span>{/if}
+        <span class:active={stage===4}></span>
       </div>
       <button class="close-btn" on:click={onClose}>×</button>
     </header>
@@ -465,26 +511,19 @@
           </div>
         {/if}
 
-      <!-- ── STAGE 2: Agent type + Git repo ──────────────────────────────── -->
+      <!-- ── STAGE 2: Git repo (only) — #164/#165 ─────────────────────────── -->
       {:else if stage === 2}
-        <h3>Which agent will work here?</h3>
-        <p class="prose">Pick the CLI each team member will run. Different agents need different credentials — chepherd will surface only the ones that matter on later stages.</p>
-        <div class="agent-grid">
-          {#each agents as a}
-            <button class="agent-card" class:active={selectedAgentSlug===a.slug}
-                    on:click={() => selectedAgentSlug = a.slug}>
-              <div class="a-name">{a.label}</div>
-              <div class="a-desc">{a.description}</div>
-              {#if a.requires_auth}
-                <div class="a-auth">🔑 {a.requires_auth}</div>
-              {/if}
-            </button>
-          {/each}
-        </div>
+        <h3>Which repo will they work in?</h3>
 
-        <h3 style="margin-top:1.2rem">Which repo will they work in?</h3>
-
-        {#if providers.length > 0 && !showRegisterForm}
+        <!-- #165 — Embedded Gitea CTA ALWAYS visible, even after other
+             providers are registered. One click → boot Gitea + advance. -->
+        <button class="embedded-cta" on:click={useEmbeddedGitea} disabled={regBusy}>
+          <div class="cta-title">⚡ Use chepherd's built-in Gitea</div>
+          <div class="cta-blurb">No external account needed. chepherd boots a local Gitea container and creates the repo for you.</div>
+          {#if regBusy && !regUrl}<div class="cta-status">Starting Gitea…</div>{/if}
+        </button>
+        {#if providers.length > 0}
+          <p class="prose" style="text-align:center;margin:0.8rem 0">— or pick a registered repo —</p>
           <div class="provider-grid">
             {#each providers as p}
               <button class="provider-card" class:active={selectedProviderId===p.id}
@@ -495,60 +534,51 @@
               </button>
             {/each}
           </div>
-          <button class="add-repo-btn" on:click={() => { showRegisterForm = true; regError = ''; }}>
-            + Add repo
-          </button>
         {/if}
 
-        {#if providers.length === 0 && !showRegisterForm}
-          <!-- #162 — prominent embedded-Gitea affordance. First-time
-               operator with no external git account → one click → done. -->
-          <button class="embedded-cta" on:click={useEmbeddedGitea} disabled={regBusy}>
-            <div class="cta-title">⚡ Use chepherd's built-in Gitea</div>
-            <div class="cta-blurb">No external account needed. chepherd boots a local Gitea container and creates the repo for you.</div>
-            {#if regBusy}<div class="cta-status">Starting Gitea…</div>{/if}
-          </button>
-          <p class="prose" style="text-align:center;margin:0.8rem 0">— or connect an existing repo —</p>
-        {/if}
-
-        {#if providers.length === 0 || showRegisterForm}
-          <div class="register-form">
-            <label class="field-label">Repo URL
-              <input bind:value={regUrl} placeholder="https://github.com/org/repo" autofocus />
-              {#if regUrl}
-                <div class="detected-kind">
-                  <span class="kind-badge">{detectedKind}</span> detected
-                  {#if tLink}<span class="sep">·</span><a class="token-link" href={tLink.url} target="_blank" rel="noopener">{tLink.label} ↗</a>{/if}
-                </div>
-              {:else}
-                <div class="detected-kind muted">Paste a URL — provider type is auto-detected</div>
-              {/if}
-            </label>
-            {#if detectedKind !== 'embedded'}
-              <label class="field-label">Access token
-                <input type="password" bind:value={regToken} placeholder="ghp_… or similar" />
-              </label>
+        <p class="prose" style="text-align:center;margin:0.8rem 0">— or connect a new repo —</p>
+        <div class="register-form">
+          <label class="field-label">Repo URL
+            <input bind:value={regUrl} placeholder="https://github.com/org/repo" />
+            {#if regUrl}
+              <div class="detected-kind">
+                <span class="kind-badge">{detectedKind}</span> detected
+                {#if tLink}<span class="sep">·</span><a class="token-link" href={tLink.url} target="_blank" rel="noopener">{tLink.label} ↗</a>{/if}
+              </div>
             {:else}
-              <p class="prose">chepherd will spin up an embedded Gitea container. No external account needed.</p>
+              <div class="detected-kind muted">Paste a URL — provider type is auto-detected</div>
             {/if}
-            <!-- #159 + #160 — dropped Label / Embedded-repo-name fields. URL
-                 (external) or team name (embedded) is the obvious label. -->
-            {#if regError}<div class="error">{regError}</div>{/if}
-            <div class="reg-actions">
-              {#if showRegisterForm && providers.length > 0}
-                <button class="ghost" on:click={() => { showRegisterForm = false; regError = ''; }}>Cancel</button>
-              {/if}
-              <!-- #161 — single button does both: save the provider AND
-                   advance to the next wizard stage. -->
-              <button class="primary" on:click={registerAndAdvance} disabled={regBusy || (detectedKind !== 'embedded' && !regUrl)}>
-                {regBusy ? 'Saving…' : 'Save & continue →'}
-              </button>
-            </div>
-          </div>
-        {/if}
+          </label>
+          {#if detectedKind !== 'embedded'}
+            <!-- #165 — token auto-saves on blur (no Save&Continue button).
+                 Spinner during validation; ✓ when saved. -->
+            <label class="field-label">Access token
+              <span class="token-wrap">
+                <input type="password" bind:value={regToken} on:blur={autoSaveProvider} placeholder="paste ghp_… and tab away" />
+                {#if regBusy}<span class="token-status spinner-inline" title="saving…"></span>{/if}
+                {#if regSavedOK && !regBusy}<span class="token-status ok" title="saved">✓</span>{/if}
+              </span>
+            </label>
+          {/if}
+          {#if regError}<div class="error">{regError}</div>{/if}
+        </div>
 
-        <label class="field-label" style="margin-top:1rem">Team name
-          <input bind:value={teamName} placeholder={shape} />
+      <!-- ── STAGE 3 (#164/#166): team name + per-member agent+cred+fresh ── -->
+      {:else if stage === 3}
+        {@const ms = membersOfShape()}
+
+        <!-- #166 — team name with smart default. existingTeam is preset from
+             live agents that share the chosen repo; operator can override
+             to create a new team. -->
+        <h3>Team</h3>
+        {#if matchingExistingTeams.length > 0}
+          <p class="prose">A team already runs on this repo. Add the new agent(s) to it, or pick another name to create a fresh team.</p>
+        {/if}
+        <label class="field-label">Team name
+          <input bind:value={teamName} placeholder={defaultTeamName} list="existing-teams" />
+          <datalist id="existing-teams">
+            {#each matchingExistingTeams as t}<option value={t}></option>{/each}
+          </datalist>
         </label>
         {#if shape !== 'solo' && shape !== 'custom-yaml'}
           <label class="field-label">Topology
@@ -560,115 +590,96 @@
           </label>
         {/if}
 
-      <!-- ── STAGE 3: Fresh or resume ────────────────────────────────────── -->
-      {:else if stage === 3}
-        {@const ms = membersOfShape()}
-        <h3>{ms.length === 1 ? 'Fresh or resume?' : `${ms.length} members — fresh or resume?`}</h3>
-        <p class="prose">Leave on Fresh for a clean start, or pick a prior session to resume.</p>
+        <h3 style="margin-top:1.2rem">{ms.length === 1 ? 'Agent' : `${ms.length} members`}</h3>
+        <p class="prose">Each member runs its own CLI with its own credentials. Defaults match the template; adjust per-row as needed.</p>
         <div class="members">
           {#each ms as m}
-            <div class="member-row">
+            {@const mo = memberOverrides[m.name] || {}}
+            {@const agentSlug = mo.agent || m.agent || 'claude-code'}
+            {@const agentObj = agents.find(a => a.slug === agentSlug)}
+            <div class="member-row-grid">
               <div class="m-head">
                 <span class="m-icon" class:shepherd={m.role==='shepherd'}>{m.role==='shepherd' ? '✻' : '●'}</span>
                 <span class="m-name">{m.name}</span>
                 <span class="m-role">· {m.role}</span>
               </div>
-              <select on:change={(e) => setMember(m.name, e.target.value)}>
-                <option value="">⊕ Fresh (default)</option>
-                {#each availableSessions.slice(0, 25) as s}
-                  <!-- #146 — privacy: don't leak first-message previews
-                       from unrelated workspaces. Show only UUID + when
-                       last modified. The full message can leak operator
-                       project secrets across spawn flows. -->
-                  <option value={s.uuid}>↻ {s.uuid.slice(0,8)} · {new Date(s.modified).toLocaleString()}</option>
-                {/each}
-              </select>
+              <div class="m-grid">
+                <label class="m-sub">Agent
+                  <select on:change={(e) => setMemberField(m.name, 'agent', e.target.value)}>
+                    {#each agents as a}<option value={a.slug} selected={a.slug === agentSlug}>{a.label}</option>{/each}
+                  </select>
+                </label>
+                {#if agentObj?.requires_auth === 'claude-oauth'}
+                  <label class="m-sub">Claude account
+                    <select on:change={(e) => setMemberField(m.name, 'claude_token_id', e.target.value)}>
+                      <option value="">(auto — newest vault token)</option>
+                      {#each claudeTokens as t}<option value={t.id === 'host' ? '' : t.id} selected={(mo.claude_token_id || '') === (t.id === 'host' ? '' : t.id)}>{t.label || t.id}</option>{/each}
+                    </select>
+                  </label>
+                {/if}
+                <label class="m-sub">Session
+                  <select on:change={(e) => setMemberField(m.name, 'resume_uuid', e.target.value)}>
+                    <option value="">⊕ Fresh</option>
+                    {#each availableSessions.slice(0, 25) as s}
+                      <option value={s.uuid} selected={mo.resume_uuid === s.uuid}>↻ {s.uuid.slice(0,8)} · {new Date(s.modified).toLocaleString()}</option>
+                    {/each}
+                  </select>
+                </label>
+              </div>
             </div>
           {/each}
         </div>
-
-      <!-- ── STAGE 4: Claude account picker (R5 / #136) ─────────────────── -->
-      {:else if stage === 4}
-        <h3>Which Claude account?</h3>
-        {#if claudeTokens.length === 0}
-          <p class="prose">No Claude credentials registered yet. Click <strong>+ Log in to Claude</strong> below to start a guided login — chepherd will surface the Claude login URL and capture the token.</p>
-        {:else if multipleClaudeTokens}
-          <p class="prose">Pick which Claude account this team will use. Tokens are shared across all subsequent spawns until you change them.</p>
-        {:else}
-          <p class="prose">One Claude credential available — selected automatically. Add more if you want to switch accounts per agent.</p>
+        {#if agents.some(a => a.requires_auth === 'claude-oauth') && claudeTokens.length === 0}
+          <!-- Inline OAuth-login affordance — if any member needs Claude
+               but no token exists, prompt to log in here rather than a
+               dedicated stage. -->
+          <div class="login-inline">
+            <button class="add-repo-btn" on:click={beginOAuthLogin} disabled={oauthBusy}>+ Log in to Claude</button>
+            <span class="prose tiny" style="margin-left:.6rem">No Claude credentials yet — you'll need one for the claude-code agent(s).</span>
+          </div>
         {/if}
 
-        {#if !oauthMode}
-          <div class="provider-grid">
-            {#each claudeTokens as t}
-              <button class="provider-card" class:active={selectedClaudeTokenId===t.id}
-                      on:click={() => selectedClaudeTokenId = t.id}>
-                <div class="p-kind">{t.id === 'host' ? 'HOST' : 'VAULT'}</div>
-                <div class="p-name">{t.label || t.id}</div>
-                {#if t.id !== 'host' && t.created_at}
-                  <div class="p-token">added {new Date(t.created_at).toLocaleDateString()}</div>
-                {/if}
-              </button>
-            {/each}
-          </div>
-          <button class="add-repo-btn" on:click={beginOAuthLogin}>
-            + Log in to Claude
-          </button>
-        {:else}
-          <div class="register-form">
-            <p class="prose" style="margin-top:0">
-              <strong>Step 1.</strong> Click the link below to open Claude's login page in a new tab. Authorise chepherd. Claude will redirect you to a page that shows an <em>authorisation code</em>.
-            </p>
+      <!-- (#167 — old stage 4 deleted; Claude account now per-member on stage 3) -->
+      <!-- ── STAGE 4: Confirm + Launch ───────────────────────────────────── -->
+      {:else if stage === 4}
+        <h3>Ready to launch</h3>
+        <ul class="confirm">
+          <li><strong>Shape:</strong> {shape}</li>
+          <li><strong>Team:</strong> {teamName || defaultTeamName || shape}</li>
+          <li><strong>Repo:</strong> {selectedProvider?.display_name || selectedProvider?.repo_url || '—'} <span class="p-badge">{selectedProvider?.kind || ''}</span></li>
+          <li><strong>Members:</strong>
+            <ul>
+              {#each membersOfShape() as m}
+                {@const mo = memberOverrides[m.name] || {}}
+                <li>{m.name} ({m.role}) — agent: {mo.agent || m.agent || 'claude-code'} — {mo.resume_uuid ? '↻ resume' : '⊕ fresh'}{#if mo.claude_token_id} — claude token: {(claudeTokens.find(t => t.id === mo.claude_token_id)?.label) || mo.claude_token_id}{/if}</li>
+              {/each}
+            </ul>
+          </li>
+        </ul>
+
+        <!-- OAuth-capture form (inline) — surfaces when operator clicked
+             '+ Log in to Claude' on stage 3 but the flow is still mid-air. -->
+        {#if oauthMode}
+          <div class="register-form" style="margin-top:1rem">
+            <p class="prose" style="margin-top:0"><strong>Step 1.</strong> Authorise chepherd at the link below, then paste the code Claude shows you.</p>
             {#if oauthBusy && !oauthURL}
               <div class="login-status">{oauthStatus}</div>
               <div class="spinner-row"><div class="spinner"></div></div>
             {:else if oauthURL}
-              <a class="oauth-link" href={oauthURL} target="_blank" rel="noopener">
-                🔑 Open Claude login →
-              </a>
-              <p class="prose" style="margin-top:1rem">
-                <strong>Step 2.</strong> Paste the code Claude shows you after authorising.
-              </p>
+              <a class="oauth-link" href={oauthURL} target="_blank" rel="noopener">🔑 Open Claude login →</a>
               <label class="field-label">Authorisation code
-                <input bind:value={oauthCode} placeholder="(paste the code from Claude's page)" autofocus />
-              </label>
-              <label class="field-label">Label this account <small>(optional)</small>
-                <input bind:value={oauthLabel} placeholder="e.g. work-claude-max" />
+                <input bind:value={oauthCode} placeholder="(paste the code)" />
               </label>
             {/if}
             {#if oauthError}<div class="error">{oauthError}</div>{/if}
             <div class="reg-actions">
-              <button class="ghost" on:click={cancelOAuthLogin} disabled={oauthBusy && !oauthURL}>Cancel</button>
+              <button class="ghost" on:click={cancelOAuthLogin}>Cancel</button>
               {#if oauthURL}
-                <button class="primary" on:click={submitOAuthCode} disabled={oauthBusy || !oauthCode}>
-                  {oauthBusy ? 'Capturing…' : 'Save & continue'}
-                </button>
+                <button class="primary" on:click={submitOAuthCode} disabled={oauthBusy || !oauthCode}>{oauthBusy ? 'Capturing…' : 'Save token'}</button>
               {/if}
             </div>
           </div>
         {/if}
-
-      <!-- ── STAGE 5: Confirm ────────────────────────────────────────────── -->
-      {:else if stage === 5}
-        <h3>Ready to launch</h3>
-        <ul class="confirm">
-          <li><strong>Shape:</strong> {shape}</li>
-          <li><strong>Agent:</strong> {selectedAgent?.label || selectedAgentSlug}</li>
-          <li><strong>Team:</strong> {teamName || shape}</li>
-          <li><strong>Repo:</strong> {selectedProvider?.display_name || selectedProvider?.repo_url || '—'} <span class="p-badge">{selectedProvider?.kind || ''}</span></li>
-          {#if needsClaudeAccount}
-            <li><strong>Claude account:</strong> {selectedClaudeToken?.label || (selectedClaudeTokenId === '' ? '(auto — newest vault token)' : selectedClaudeTokenId)}</li>
-          {/if}
-          {#if shape !== 'solo' && shape !== 'custom-yaml'}
-            <li><strong>Members:</strong>
-              <ul>
-                {#each membersOfShape() as m}
-                  <li>{m.name} ({m.role}) — {memberOverrides[m.name]?.resume_uuid ? '↻ resume' : '⊕ fresh'}</li>
-                {/each}
-              </ul>
-            </li>
-          {/if}
-        </ul>
       {/if}
 
       {#if error}<div class="error">{error}</div>{/if}
@@ -678,7 +689,7 @@
       <button class="ghost" on:click={back} disabled={stage===1}>← Back</button>
       <div class="spacer"></div>
       <button class="ghost" on:click={onClose}>Cancel</button>
-      {#if stage < 5}
+      {#if stage < 4}
         <button class="primary" on:click={next} disabled={!nextEnabled()}>Next →</button>
       {:else}
         <button class="primary" on:click={launch} disabled={busy}>{busy ? 'Launching…' : '🚀 Launch'}</button>
@@ -741,7 +752,19 @@
   .st-head small { color: var(--fg-muted); }
   .st-meta { color: var(--fg-muted); margin-top: 0.2rem; font-size: 0.82rem; }
   .m-list { margin: 0.35rem 0 0; padding-left: 1.2rem; color: var(--fg-muted); font-size: 0.82rem; }
-  /* Members */
+  /* #164 — per-member grid: agent + creds + fresh/resume row */
+  .member-row-grid { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.55rem 0.7rem; margin-bottom: 0.5rem; }
+  .member-row-grid .m-head { margin-bottom: 0.4rem; }
+  .m-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.45rem; }
+  .m-sub { display: block; color: var(--fg-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .m-sub select { width: 100%; margin-top: 0.18rem; padding: 0.32rem 0.45rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; cursor: pointer; }
+  .login-inline { display: flex; align-items: center; margin-top: 0.6rem; }
+  /* #165 — token field inline save status */
+  .token-wrap { position: relative; display: block; }
+  .token-status { position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%); font-size: 0.9rem; }
+  .token-status.ok { color: #5cd57f; font-weight: 700; }
+  .token-status.spinner-inline { width: 14px; height: 14px; border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: chep-spin 0.8s linear infinite; }
+  /* Legacy single-column member row */
   .members { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.4rem; }
   .member-row { display: grid; grid-template-columns: 1fr 1.6fr; gap: 0.6rem; align-items: center; padding: 0.4rem 0.6rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
   .m-head { display: flex; align-items: center; gap: 0.3rem; }
