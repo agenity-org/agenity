@@ -103,7 +103,23 @@
     // line endings on terminal-style output; setting convertEol: true
     // adds a CR before EVERY LF including ones in PTY-managed escape
     // sequences, which mangles claude-code's box-drawing output.
-    term = new Terminal({ convertEol: false, fontFamily: 'ui-monospace, monospace', fontSize: currentWsFont(), theme: sel, cursorBlink: true, cols: 120, rows: 32 });
+    // Font: prefer common terminal-emulator monospace fonts that render
+    // half-block + box-drawing glyphs cleanly (claude-code's mascot uses
+    // U+2580/2584 half-blocks). ui-monospace on linux falls back to a
+    // font that renders these as solid blocks → the welcome-banner robot
+    // collapses into a colored rectangle. Standard terminal fonts handle
+    // them correctly.
+    term = new Terminal({
+      convertEol: false,
+      fontFamily: '"DejaVu Sans Mono", "Liberation Mono", "Menlo", "Consolas", "Cascadia Code", "Fira Code", monospace',
+      fontSize: currentWsFont(),
+      lineHeight: 1.0,
+      letterSpacing: 0,
+      theme: sel,
+      cursorBlink: true,
+      cols: 120,
+      rows: 32,
+    });
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
