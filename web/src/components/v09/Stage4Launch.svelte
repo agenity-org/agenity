@@ -95,17 +95,20 @@
     return [...counts.entries()].map(([k, n]) => ({ account: k, count: n }));
   });
 
-  // Coverage — same calculation as Stage 3 (10 LEAN builtins covered
-  // across the team). Informational only at this stage.
+  // Coverage — same calculation as Stage 3 with team_only filter
+  // (#200 Bug 3). Informational only at this stage; Launch stays
+  // enabled regardless.
   const coverage = $derived.by(() => {
     const owned = new Set();
     for (const m of selection?.members || []) {
       for (const sk of memberOwnedSkills(m)) owned.add(sk);
     }
+    const teamSize = (selection?.members || []).length;
     const builtins = Object.values(skillCache).filter(s => s.read_only);
-    const total = builtins.length || 10;
-    const covered = builtins.filter(s => owned.has(s.id));
-    const missing = builtins.filter(s => !owned.has(s.id));
+    const applicable = builtins.filter(s => !(s.team_only && teamSize < 2));
+    const total = applicable.length || 10;
+    const covered = applicable.filter(s => owned.has(s.id));
+    const missing = applicable.filter(s => !owned.has(s.id));
     return {
       total,
       coveredCount: covered.length,

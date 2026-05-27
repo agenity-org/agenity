@@ -45,7 +45,7 @@ func builtinSet() []Skill {
 	planStat := map[string]any{"model_tier": "sonnet", "context_budget": 200_000, "velocity_expect": "medium"}
 	processStat := map[string]any{"model_tier": "haiku", "context_budget": 100_000, "velocity_expect": "low"}
 
-	return []Skill{
+	out := []Skill{
 		mk(
 			"tdd", "Test-Driven Development", "TestTube2",
 			"Red-green-refactor: write the failing test first, then the code that makes it pass.",
@@ -137,4 +137,14 @@ func builtinSet() []Skill {
 			processStat, 9,
 		),
 	}
+
+	// Mark team-only skills per architect's #200 Bug 3 spec: Solo
+	// coverage = X/8 ✓, Pair+ coverage = X/10. Team-orchestration +
+	// process-coaching are nonsensical for a 1-agent team.
+	for i := range out {
+		if out[i].ID == "team-orchestration" || out[i].ID == "process-coaching" {
+			out[i].TeamOnly = true
+		}
+	}
+	return out
 }

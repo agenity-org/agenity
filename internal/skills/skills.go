@@ -64,8 +64,17 @@ type Skill struct {
 	Tags            []string       `json:"tags,omitempty"`
 	ReadOnly        bool           `json:"read_only"`
 	SortOrder       int            `json:"sort_order"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+
+	// TeamOnly = true means this skill is only applicable when there's
+	// more than one agent on the team (e.g. team-orchestration +
+	// process-coaching make no sense for a Solo team of 1). Coverage
+	// panel uses this to compute applicable-skill denominator per
+	// team size — Solo coverage shows X/8, Pair+ shows X/10.
+	// Architect's #200 Bug 3 spec: "Solo coverage = 8/8 ✓".
+	TeamOnly bool `json:"team_only,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // EffectiveBody returns the body the agent should actually see at

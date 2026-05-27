@@ -160,17 +160,22 @@
     return vault.filter(v => !v.provider || v.provider === cls);
   }
 
-  // Coverage panel — count which of the 10 LEAN skills are owned by
-  // anyone on the team. Cyan check at 10/10, amber warn below.
+  // Coverage panel — count which of the APPLICABLE LEAN skills are
+  // owned by anyone on the team. Per architect's #200 Bug 3 spec:
+  // Solo (1 agent) excludes team_only skills (team-orchestration +
+  // process-coaching) → 8/8 ✓; Pair+ counts all 10 → up to 10/10.
+  // Cyan check at full coverage, amber warn below.
   const coverage = $derived.by(() => {
     const owned = new Set();
     for (const a of agents) {
       for (const sk of a.owned_skills || []) owned.add(sk);
     }
+    const teamSize = agents.length;
     const builtins = allSkills.filter(s => s.read_only);
-    const total = builtins.length || 10;
-    const covered = builtins.filter(s => owned.has(s.id));
-    const missing = builtins.filter(s => !owned.has(s.id));
+    const applicable = builtins.filter(s => !(s.team_only && teamSize < 2));
+    const total = applicable.length || 10;
+    const covered = applicable.filter(s => owned.has(s.id));
+    const missing = applicable.filter(s => !owned.has(s.id));
     return {
       total,
       coveredCount: covered.length,
