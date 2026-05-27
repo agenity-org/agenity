@@ -12,13 +12,55 @@ func TestVisibleBuiltinsAre6(t *testing.T) {
 	if len(vis) != 6 {
 		t.Fatalf("expected 6 visible builtins, got %d", len(vis))
 	}
-	wantIDs := []string{"solo", "pair", "trio", "scrum", "review", "custom"}
+	wantIDs := []string{"solo", "pair", "trio", "scrum", "squad", "custom"}
 	for i, want := range wantIDs {
 		if vis[i].ID != want {
 			t.Errorf("position %d: got %q, want %q", i, vis[i].ID, want)
 		}
 		if !vis[i].ReadOnly {
 			t.Errorf("builtin %s must be ReadOnly", vis[i].ID)
+		}
+	}
+}
+
+// TestFibonacciSizeLabels locks the architect's 2026-05-28 spec:
+// solo=1, pair=2, trio=3, scrum=5, squad=8, custom=0. The SizeLabel
+// is rendered in the Stage 1 grid as a small badge.
+func TestFibonacciSizeLabels(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	want := map[string]string{
+		"solo": "1", "pair": "2", "trio": "3",
+		"scrum": "5", "squad": "8", "custom": "0",
+	}
+	for id, w := range want {
+		tm, _ := s.Get(id)
+		if tm == nil {
+			t.Errorf("template %s missing", id)
+			continue
+		}
+		if tm.SizeLabel != w {
+			t.Errorf("template %s SizeLabel = %q, want %q", id, tm.SizeLabel, w)
+		}
+	}
+}
+
+// TestSlotCountsMatchSizeLabels verifies the actual Slots length
+// matches the displayed Fibonacci size (except Custom which is
+// operator-composed).
+func TestSlotCountsMatchSizeLabels(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	wantSlots := map[string]int{
+		"solo": 1, "pair": 2, "trio": 3,
+		"scrum": 5, "squad": 8, "custom": 0,
+	}
+	for id, n := range wantSlots {
+		tm, _ := s.Get(id)
+		if tm == nil {
+			t.Errorf("template %s missing", id)
+			continue
+		}
+		if len(tm.Slots) != n {
+			t.Errorf("template %s slot count = %d, want %d", id, len(tm.Slots), n)
 		}
 	}
 }
@@ -43,41 +85,105 @@ func TestAllBuiltinsCountInclHidden(t *testing.T) {
 	}
 }
 
-func TestNoStackTrioAnywhere(t *testing.T) {
+// TestNoBannedVocab guards #194 banned-vocab rule across template IDs,
+// names, descriptions, when-to-use copy, icons, slot labels, role IDs,
+// and owned skill IDs.
+func TestNoBannedVocab(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
 	all, _ := s.List(ListOpts{})
+	banned := []string{
+		"shepherd", "stack trio", "stack-trio", "stack_trio",
+		"raci",
+	}
 	for _, tmpl := range all {
-		body := strings.ToLower(strings.Join([]string{
-			tmpl.ID, tmpl.Name, tmpl.Description, tmpl.WhenToUse, tmpl.Icon,
-		}, " "))
-		if strings.Contains(body, "stack trio") || strings.Contains(body, "stack-trio") || strings.Contains(body, "stack_trio") {
-			t.Fatalf("forbidden 'stack trio' string in template %s: %q", tmpl.ID, body)
+		parts := []string{tmpl.ID, tmpl.Name, tmpl.Description, tmpl.WhenToUse, tmpl.Icon}
+		for _, slot := range tmpl.Slots {
+			parts = append(parts, slot.Label, slot.RoleID)
+			parts = append(parts, slot.OwnedSkills...)
+		}
+		body := strings.ToLower(strings.Join(parts, " "))
+		for _, b := range banned {
+			if strings.Contains(body, b) {
+				t.Fatalf("forbidden vocab %q in template %s: %q", b, tmpl.ID, body)
+			}
 		}
 	}
 }
 
-func TestSlotsReferenceValidSkills(t *testing.T) {
-	// Valid skill IDs from #194 — must match the builtin set there.
+// TestSlotsReferenceValidRolesAndSkills locks the cross-package
+// contract: every Slot.RoleID must be one of the 12 builtin roles;
+// every OwnedSkills entry must be one of the 10 LEAN skills.
+func TestSlotsReferenceValidRolesAndSkills(t *testing.T) {
+	validRoles := map[string]bool{
+		"product-owner": true, "architect": true, "tech-lead": true,
+		"scrum-master": true, "generalist": true,
+		"full-stack-developer": true, "frontend-developer": true, "backend-developer": true,
+		"devops-sre": true,
+		"qa-engineer": true, "security-engineer": true, "code-reviewer": true,
+	}
 	validSkills := map[string]bool{
-		"scrum-master": true, "product-owner": true, "tech-lead": true,
-		"architect": true, "implementer": true, "frontend-impl": true,
-		"backend-impl": true, "code-reviewer": true, "security-reviewer": true,
-		"qa-tester": true, "docs-writer": true, "shepherd": true,
+		"tdd": true, "code-review": true, "debugging": true,
+		"security-review": true, "planning": true, "spec-driven": true,
+		"api-design": true, "e2e-testing": true,
+		"team-orchestration": true, "process-coaching": true,
 	}
 	s, _ := NewStore(t.TempDir())
 	all, _ := s.List(ListOpts{})
 	for _, tmpl := range all {
 		for _, slot := range tmpl.Slots {
-			if slot.PrimarySkill != "" && !validSkills[slot.PrimarySkill] {
-				t.Errorf("template %s slot %s references unknown PrimarySkill %q",
-					tmpl.ID, slot.Label, slot.PrimarySkill)
+			if slot.RoleID != "" && !validRoles[slot.RoleID] {
+				t.Errorf("template %s slot %s references unknown RoleID %q",
+					tmpl.ID, slot.Label, slot.RoleID)
 			}
-			for _, alt := range slot.AltSkills {
-				if !validSkills[alt] {
-					t.Errorf("template %s slot %s alt-skill %q is unknown",
-						tmpl.ID, slot.Label, alt)
+			for _, sk := range slot.OwnedSkills {
+				if !validSkills[sk] {
+					t.Errorf("template %s slot %s OwnedSkills contains unknown %q",
+						tmpl.ID, slot.Label, sk)
 				}
 			}
+			for sk := range slot.OwnedSkillsScope {
+				if !validSkills[sk] {
+					t.Errorf("template %s slot %s OwnedSkillsScope keys contains unknown skill %q",
+						tmpl.ID, slot.Label, sk)
+				}
+			}
+		}
+	}
+}
+
+// TestPairAbsorbsLeadershipSkills locks the Pair-conditional rule
+// (architect 2026-05-28): in the 2-person Pair template, the
+// code-reviewer slot MUST own team-orchestration + process-coaching
+// (no dedicated Scrum Master / Tech Lead present).
+func TestPairAbsorbsLeadershipSkills(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	pair, _ := s.Get("pair")
+	if pair == nil {
+		t.Fatal("pair template missing")
+	}
+	if len(pair.Slots) != 2 {
+		t.Fatalf("pair must have exactly 2 slots, got %d", len(pair.Slots))
+	}
+	var rev *Slot
+	for i := range pair.Slots {
+		if pair.Slots[i].RoleID == "code-reviewer" {
+			rev = &pair.Slots[i]
+			break
+		}
+	}
+	if rev == nil {
+		t.Fatal("pair must contain a code-reviewer slot")
+	}
+	want := map[string]bool{
+		"code-review": false, "security-review": false,
+		"team-orchestration": false, "process-coaching": false,
+	}
+	for _, sk := range rev.OwnedSkills {
+		want[sk] = true
+	}
+	for sk, present := range want {
+		if !present {
+			t.Errorf("pair code-reviewer must own %q (Pair-conditional rule)", sk)
 		}
 	}
 }
@@ -108,7 +214,10 @@ func TestUserCreateUpdateDelete(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
 	created, err := s.Create(Template{
 		Name: "MyTeam",
-		Slots: []SkillSlot{{Label: "a", PrimarySkill: "implementer", AgentTypeDefault: "claude-code"}},
+		Slots: []Slot{{
+			Label: "a", RoleID: "full-stack-developer",
+			OwnedSkills: []string{"tdd"}, AgentTypeDefault: "claude-code",
+		}},
 	}, "operator@example.com")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -132,7 +241,10 @@ func TestPersistAcrossReopen(t *testing.T) {
 	s1, _ := NewStore(dir)
 	_, _ = s1.Create(Template{
 		Name: "Persistent",
-		Slots: []SkillSlot{{Label: "x", PrimarySkill: "implementer"}},
+		Slots: []Slot{{
+			Label: "x", RoleID: "generalist",
+			OwnedSkills: []string{"tdd", "code-review"},
+		}},
 	}, "")
 	s2, _ := NewStore(dir)
 	all, _ := s2.List(ListOpts{})

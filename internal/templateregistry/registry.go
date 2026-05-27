@@ -1,16 +1,27 @@
-// Package templateregistry — Team Template Registry for v0.9 (#175,
-// architect re-spec 2026-05-27).
+// Package templateregistry — Team Template Registry for v0.9.1 (#175
+// re-re-do, architect 2026-05-28 FINAL+).
 //
-// Templates compose Skills (#194) into team shapes. They do NOT embed
-// hard-coded role strings; each slot points to a Skill ID. On spawn,
-// each slot becomes one Agent with the slot's primary skill loaded.
+// Templates compose Roles (#194) + Skills (#194) into team shapes.
+// Each slot pairs ONE Role (from internal/roles, 12 builtins) with
+// the SKILLS that role owns on this team (from internal/skills, 10
+// LEAN). The slot's RoleID determines identity; OwnedSkills determine
+// composable disciplines; OwnedSkillsScope refines scope when a Role
+// + Skill combination is ambiguous (e.g. tdd with full-stack-developer
+// can scope to "frontend", "backend", or "both").
 //
-// Visible builtins in v0.9: exactly 6 — solo / pair / trio / scrum /
-// review / custom. Hidden builtins (solo-supervised / council /
-// multi-team) exist in catalog/ but don't render on the wizard grid;
-// admins can re-enable them via /admin/templates.
+// On spawn, each slot becomes one Agent with:
+//   - PrimaryPrompt = role.PrimaryPrompt (from internal/roles)
+//   - Effective skill bodies = skill.EffectiveBody() per OwnedSkills
+//   - Canon (Layer 1, from internal/canon) prepended once
 //
-// "Stack Trio" — BANNED. Not a template ID, not a name, not anywhere.
+// Visible builtins (Fibonacci sizing per architect 2026-05-28):
+//   solo (1) · pair (2) · trio (3) · scrum (5) · squad (8) · custom (0)
+//
+// Hidden builtins (catalog only; admin can flip via /admin/templates):
+//   solo-supervised · council · multi-team
+//
+// Banned vocabulary: NO "shepherd" / "Stack Trio" / "RACI" — enforced
+// by TestNoBannedVocab in registry_test.go.
 package templateregistry
 
 import (
@@ -28,29 +39,45 @@ import (
 
 // Template is the persistent unit.
 type Template struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Icon        string      `json:"icon"`
-	WhenToUse   string      `json:"when_to_use"`
-	SortOrder   int         `json:"sort_order"`
-	Slots       []SkillSlot `json:"slots"`
-	ReadOnly    bool        `json:"read_only"`
-	Visible     bool        `json:"visible"` // false = hidden from wizard grid (admin only)
-	AuthorRef   string      `json:"author_ref"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Icon        string    `json:"icon"`
+	WhenToUse   string    `json:"when_to_use"`
+	SizeLabel   string    `json:"size_label,omitempty"` // Fibonacci sizing display: "1", "2", "3", "5", "8", "0"
+	SortOrder   int       `json:"sort_order"`
+	Slots       []Slot    `json:"slots"`
+	ReadOnly    bool      `json:"read_only"`
+	Visible     bool      `json:"visible"` // false = hidden from wizard grid (admin only)
+	AuthorRef   string    `json:"author_ref"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// SkillSlot is one team-position. Each slot becomes one Agent on spawn.
-type SkillSlot struct {
-	Label               string   `json:"label"`
-	PrimarySkill        string   `json:"primary_skill"`
-	AltSkills           []string `json:"alt_skills,omitempty"`
-	AdditionalSkills    []string `json:"additional_skills,omitempty"`
-	AgentTypeDefault    string   `json:"agent_type_default"`
-	AccountClassDefault string   `json:"account_class_default"`
+// Slot is one team-position. Each slot becomes one Agent on spawn.
+//
+// Per architect 2026-05-28 FINAL+: Agent identity = Role + N owned
+// Skills. Slot.RoleID names the Role (one of 12 builtins from
+// internal/roles); OwnedSkills lists the engineering practices this
+// agent owns on this team (subset of the 10 LEAN skills from
+// internal/skills); OwnedSkillsScope refines scope when ambiguous
+// (e.g. {"tdd": "backend"} narrows TDD discipline to backend code
+// for a full-stack-developer slot).
+type Slot struct {
+	Label               string            `json:"label"`
+	RoleID              string            `json:"role_id"`
+	OwnedSkills         []string          `json:"owned_skills"`
+	OwnedSkillsScope    map[string]string `json:"owned_skills_scope,omitempty"`
+	AgentTypeDefault    string            `json:"agent_type_default"`
+	AccountClassDefault string            `json:"account_class_default"`
 }
+
+// SkillSlot is the v0.8/v0.9.0 legacy alias for Slot. Kept as a type
+// alias so any out-of-tree consumer that imported the old name still
+// compiles; new code MUST use Slot.
+//
+// Deprecated: use Slot.
+type SkillSlot = Slot
 
 // Store is file-backed persistence + in-memory builtin seed.
 type Store struct {
