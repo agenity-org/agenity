@@ -36,7 +36,9 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/chepherd/chepherd/internal/canon"
 	"github.com/chepherd/chepherd/internal/discovery"
+	"github.com/chepherd/chepherd/internal/roles"
 	"github.com/chepherd/chepherd/internal/skills"
 	"github.com/chepherd/chepherd/internal/templateregistry"
 	"github.com/chepherd/chepherd/internal/catalog"
@@ -58,11 +60,17 @@ type Server struct {
 	AuthToken string            // bearer token required on /api/v1/* (#139) — empty disables enforcement
 	Profile   *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
 
-	// #194 — Skill Library (12 builtins + user-defined CRUD).
+	// #194 — Skill Library (10 LEAN builtins + user-defined CRUD).
 	skills *skills.Store
 
+	// #194 — Role catalog (12 builtins + user-defined CRUD).
+	roles *roles.Store
+
+	// #198 — Operator Canon (Layer 1 of the 3-layer agent context).
+	canon *canon.Store
+
 	// #175 — Team Template Registry (6 visible + 3 hidden builtins +
-	// user-defined CRUD). Templates compose Skills from #194.
+	// user-defined CRUD). Templates compose Roles + Skills.
 	templates *templateregistry.Store
 
 	// #174 — Discovery Layer service. Initialised in New(); registers
@@ -97,6 +105,14 @@ func New(rt *runtime.Runtime) *Server {
 		// #194 — Skill Library.
 		if sk, err := skills.NewStore(rt.StateDir()); err == nil {
 			s.skills = sk
+		}
+		// #194 — Role catalog.
+		if r, err := roles.NewStore(rt.StateDir()); err == nil {
+			s.roles = r
+		}
+		// #198 — Operator Canon.
+		if c, err := canon.NewStore(rt.StateDir()); err == nil {
+			s.canon = c
 		}
 		// #175 — Team Template Registry.
 		if tmpl, err := templateregistry.NewStore(rt.StateDir()); err == nil {
@@ -152,6 +168,13 @@ func (s *Server) Handler() http.Handler {
 	// #194 — Skill Library
 	mux.HandleFunc("/api/v1/skills", s.skillsRoot)
 	mux.HandleFunc("/api/v1/skills/", s.skillByID)
+	// #194 — Role catalog
+	mux.HandleFunc("/api/v1/roles", s.rolesRoot)
+	mux.HandleFunc("/api/v1/roles/", s.roleByID)
+	// #198 — Operator Canon (Layer 1 of 3-layer agent context)
+	mux.HandleFunc("/api/v1/canon", s.canonRoot)
+	mux.HandleFunc("/api/v1/canon/history", s.canonHistory)
+	mux.HandleFunc("/api/v1/canon/rollback", s.canonRollback)
 	// #175 — Team Template Registry (Skill-composing templates)
 	mux.HandleFunc("/api/v1/team-templates", s.teamTemplatesRoot)
 	mux.HandleFunc("/api/v1/team-templates/", s.teamTemplateByID)
