@@ -55,6 +55,7 @@ exec podman run \
   -v "${CLAUDE_DIR}:/home/chepherd/.claude:ro" \
   -v "${HOME}/.claude.json:/home/chepherd/.claude.json:ro" \
   -v "${REPOS_DIR}:/home/chepherd/repos:rw" \
+  -v "$(pwd)/web/dist:/app/web/dist:ro" \
   --device /dev/fuse \
   --security-opt label=disable \
   -e CHEPHERD_MCP_LISTEN=0.0.0.0:9090 \

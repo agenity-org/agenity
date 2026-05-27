@@ -247,14 +247,11 @@
   async function registerProvider() {
     regBusy = true; regError = '';
     try {
-      // R3 (#134) — embedded providers don't have a URL; use the team name
-      // as the default repo name so the field is never blank. Falls back
-      // to the shape id if no team name set yet.
-      let displayName = regName;
-      if (!displayName && regKind === 'embedded') {
-        displayName = teamName || shape || 'embedded-repo';
-      }
-      if (!displayName) displayName = regUrl;
+      // #159 + #160 — no separate Label / Embedded-repo-name fields.
+      // Embedded providers derive name from team; external use the URL.
+      const displayName = regKind === 'embedded'
+        ? (teamName || shape || 'workspace')
+        : regUrl;
       const body = { kind: regKind, repo_url: regUrl, token: regToken, display_name: displayName };
       const r = await fetch(`${API}/git-providers`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -265,7 +262,32 @@
       await loadProviders();
       selectedProviderId = d.id;
       showRegisterForm = false;
-      regUrl = ''; regToken = ''; regName = '';
+      regUrl = ''; regToken = '';
+    } catch (e) { regError = e.message || String(e); }
+    regBusy = false;
+  }
+
+  // #161 — single-button: validate + register + advance in one click.
+  async function registerAndAdvance() {
+    await registerProvider();
+    if (!regError && selectedProviderId) { next(); }
+  }
+
+  // #162 — first-time setup shortcut: spawn the embedded Gitea via the
+  // existing /git-providers POST with kind=embedded (server bootstraps
+  // the container on first agent spawn), then advance.
+  async function useEmbeddedGitea() {
+    regBusy = true; regError = '';
+    try {
+      const r = await fetch(`${API}/git-providers`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'embedded', display_name: teamName || shape || 'workspace' }),
+      });
+      if (!r.ok) { throw new Error(await r.text()); }
+      const d = await r.json();
+      await loadProviders();
+      selectedProviderId = d.id;
+      next();
     } catch (e) { regError = e.message || String(e); }
     regBusy = false;
   }
@@ -478,10 +500,18 @@
           </button>
         {/if}
 
+        {#if providers.length === 0 && !showRegisterForm}
+          <!-- #162 — prominent embedded-Gitea affordance. First-time
+               operator with no external git account → one click → done. -->
+          <button class="embedded-cta" on:click={useEmbeddedGitea} disabled={regBusy}>
+            <div class="cta-title">⚡ Use chepherd's built-in Gitea</div>
+            <div class="cta-blurb">No external account needed. chepherd boots a local Gitea container and creates the repo for you.</div>
+            {#if regBusy}<div class="cta-status">Starting Gitea…</div>{/if}
+          </button>
+          <p class="prose" style="text-align:center;margin:0.8rem 0">— or connect an existing repo —</p>
+        {/if}
+
         {#if providers.length === 0 || showRegisterForm}
-          {#if providers.length === 0}
-            <p class="prose">No repos registered yet. Connect one to get started.</p>
-          {/if}
           <div class="register-form">
             <label class="field-label">Repo URL
               <input bind:value={regUrl} placeholder="https://github.com/org/repo" autofocus />
@@ -501,18 +531,17 @@
             {:else}
               <p class="prose">chepherd will spin up an embedded Gitea container. No external account needed.</p>
             {/if}
-            <label class="field-label">
-              {detectedKind === 'embedded' ? 'Embedded repo name' : 'Label'}
-              <small>(optional — shown in provider list)</small>
-              <input bind:value={regName} placeholder={detectedKind === 'embedded' ? (teamName || shape || 'embedded-repo') : (regUrl || 'my-repo')} />
-            </label>
+            <!-- #159 + #160 — dropped Label / Embedded-repo-name fields. URL
+                 (external) or team name (embedded) is the obvious label. -->
             {#if regError}<div class="error">{regError}</div>{/if}
             <div class="reg-actions">
               {#if showRegisterForm && providers.length > 0}
                 <button class="ghost" on:click={() => { showRegisterForm = false; regError = ''; }}>Cancel</button>
               {/if}
-              <button class="primary" on:click={registerProvider} disabled={regBusy || (detectedKind !== 'embedded' && !regUrl)}>
-                {regBusy ? 'Registering…' : 'Register repo'}
+              <!-- #161 — single button does both: save the provider AND
+                   advance to the next wizard stage. -->
+              <button class="primary" on:click={registerAndAdvance} disabled={regBusy || (detectedKind !== 'embedded' && !regUrl)}>
+                {regBusy ? 'Saving…' : 'Save & continue →'}
               </button>
             </div>
           </div>
@@ -734,6 +763,13 @@
   button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
   button.ghost { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.45rem 0.95rem; cursor: pointer; font-size: 0.9rem; }
   button.ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* #162 — embedded-Gitea call-to-action card */
+  .embedded-cta { display: block; width: 100%; padding: 1rem 1.2rem; background: color-mix(in srgb, var(--accent) 12%, var(--bg)); border: 1px solid var(--accent); border-radius: 10px; cursor: pointer; text-align: left; color: var(--fg); margin-bottom: 0.5rem; transition: background 0.1s; }
+  .embedded-cta:hover { background: color-mix(in srgb, var(--accent) 20%, var(--bg)); }
+  .embedded-cta:disabled { opacity: 0.7; cursor: progress; }
+  .cta-title { font-weight: 600; color: var(--accent); font-size: 1rem; margin-bottom: 0.3rem; }
+  .cta-blurb { color: var(--fg-muted); font-size: 0.85rem; line-height: 1.4; }
+  .cta-status { color: var(--accent-2); font-size: 0.8rem; margin-top: 0.4rem; }
   /* Agent type cards */
   .agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.5rem; margin-bottom: 0.5rem; }
   .agent-card { padding: 0.7rem 0.85rem; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; cursor: pointer; text-align: left; color: var(--fg); transition: border 0.1s; }

@@ -314,10 +314,57 @@
     await refresh();
   }
 
+  // --- auth (#157) — wrap window.fetch so every /api/* request gets the
+  // bearer token. Token is stored in localStorage; if missing, prompt for it.
+  function getStoredToken() {
+    if (typeof localStorage === 'undefined') return '';
+    try { return localStorage.getItem('chepherd-token') || ''; } catch { return ''; }
+  }
+  // Plain $state(false) — Astro SSR runs this on the server (no localStorage),
+  // so initialising with an expression that touches `window` would lock the
+  // value to false during hydration. Instead we flip it on mount.
+  let needLogin = $state(false);
+  let loginTokenInput = $state('');
+  let loginError = $state('');
+  function installFetchAuth() {
+    const origFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input?.url || '');
+      if (url.startsWith('/api/') || url.startsWith('/api-v08/')) {
+        const tok = getStoredToken();
+        init = init || {};
+        init.headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined));
+        if (tok && !init.headers.has('Authorization')) {
+          init.headers.set('Authorization', 'Bearer ' + tok);
+        }
+        return origFetch(input, init).then(async r => {
+          if (r.status === 401) { needLogin = true; }
+          return r;
+        });
+      }
+      return origFetch(input, init);
+    };
+  }
+  async function saveLoginToken() {
+    if (!loginTokenInput.trim()) { loginError = 'paste the bootstrap token'; return; }
+    try { localStorage.setItem('chepherd-token', loginTokenInput.trim()); } catch {}
+    // Test the token via /healthz (public) + then /api/v1/sessions (gated).
+    try {
+      const r = await fetch('/api-v08/v1/sessions');
+      if (r.status === 401) { loginError = 'token rejected'; return; }
+    } catch (e) { loginError = String(e); return; }
+    needLogin = false; loginError = ''; loginTokenInput = '';
+    refresh();
+  }
+
   // --- mount ---
   onMount(() => {
     try { theme = localStorage.getItem('chepherd-theme') || 'dark'; document.documentElement.dataset.theme = theme; } catch {}
     try { const f = +(localStorage.getItem('chepherd-font') || 14); applyFontSize(f); } catch { applyFontSize(14); }
+    installFetchAuth();
+    console.log('[chepherd] onMount tok=', getStoredToken(), 'needLogin pre=', needLogin);
+    if (!getStoredToken()) { needLogin = true; }
+    console.log('[chepherd] onMount needLogin post=', needLogin);
     refresh();
     listSavedLayouts();
     const intv = setInterval(refresh, 2500);
@@ -427,6 +474,21 @@
   </div>
 </div>
 
+{#if needLogin}
+  <!-- #157 — bootstrap-token login modal. Operator pastes the JWT
+       printed at chepherd startup; stored in localStorage so subsequent
+       page loads skip this screen. -->
+  <div class="backdrop">
+    <div class="modal-login">
+      <h2>🔑 chepherd login</h2>
+      <p class="prose">Paste the bootstrap token chepherd printed at startup.</p>
+      <p class="prose tiny">Find it with: <code>podman exec chepherd cat /home/chepherd/.local/state/chepherd/auth.printed</code></p>
+      <textarea bind:value={loginTokenInput} placeholder="eyJhbGc…" rows="4"></textarea>
+      {#if loginError}<div class="error">{loginError}</div>{/if}
+      <button class="primary" on:click={saveLoginToken}>Sign in</button>
+    </div>
+  </div>
+{/if}
 {#if showWizard}
   <SpawnWizard onClose={() => (showWizard = false)} onLaunched={refresh} defaultCwd={projectCwd} />
 {/if}
@@ -562,6 +624,14 @@
   button.primary-sm:disabled { opacity: 0.4; cursor: default; }
   .canvas { flex: 1; min-height: 0; overflow: hidden; }
   .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
+  /* #157 login modal */
+  .modal-login { width: min(560px, 94vw); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 10px; padding: 1.3rem 1.5rem; }
+  .modal-login h2 { margin: 0 0 0.7rem 0; color: var(--accent); }
+  .modal-login textarea { width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 0.8rem; resize: vertical; }
+  .modal-login .error { margin-top: 0.6rem; padding: 0.5rem 0.7rem; background: rgba(255,107,107,0.1); border: 1px solid var(--danger); color: var(--danger); border-radius: 6px; font-size: 0.85rem; }
+  .modal-login button.primary { margin-top: 0.9rem; }
+  .modal-login .tiny { font-size: 0.78rem; }
+  .modal-login code { font-family: ui-monospace, monospace; background: var(--bg-input); padding: 0.1rem 0.35rem; border-radius: 3px; }
   .modal-saveas { width: min(420px, 92vw); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 10px; padding: 1.2rem 1.3rem; }
   .modal-saveas h3 { margin: 0 0 0.7rem 0; color: var(--accent); }
   .modal-saveas input { width: 100%; padding: 0.5rem 0.7rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; }
