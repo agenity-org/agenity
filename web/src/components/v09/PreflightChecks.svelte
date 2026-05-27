@@ -42,15 +42,17 @@
       out.push({ kind: 'repo', label: 'Embedded Gitea ready', state: 'pass' });
     }
 
-    // 3. agent slots — post-pivot data shape (#179). An agent slot is
-    // READY when it has a primary_skill (the always-resume rule
-    // decides Fresh vs Resume server-side via label-match; we don't
-    // need to ask the user).
+    // 3. agent slots — v0.9.1 shape (#194 architect 2026-05-28 FINAL+).
+    // An agent slot is READY when it has a role_id. owned_skills MAY
+    // be empty (a "raw role" agent is legal — the role's PrimaryPrompt
+    // alone is a valid agent identity). The always-resume rule decides
+    // Fresh vs Resume server-side via label-match. Backward-compat:
+    // accept legacy primary_skill as a fallback "role" indicator.
     const total = (selection?.members || []).length;
     let ready = 0;
     let unfilled = 0;
     for (const m of selection?.members || []) {
-      if (m.primary_skill) ready++;
+      if (m.role_id || m.primary_skill) ready++;
       else unfilled++;
     }
     out.push({

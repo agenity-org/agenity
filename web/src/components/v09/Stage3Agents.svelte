@@ -1,26 +1,29 @@
 <!--
-  Stage3Agents — v0.9 SpawnWizard Stage 3 (#179, architect pivot 2026-05-27).
+  Stage3Agents — v0.9.1 SpawnWizard Stage 3 (#179 architect 2026-05-28 FINAL+).
 
-  RENAMED from Stage3Members. Drastically simplified per architect:
+  Per-agent model is now Role + N owned Skills (not the v0.9.0 single
+  primary_skill + alt_skills):
 
-  DROPPED:
-   - Team-shape switcher (use Back to change shape)
-   - Fresh / Resume / Handoff mode picker (always-resume rule replaces)
-   - "+ Add member" button (Custom template handles ad-hoc via empty start)
-   - "Save as recipe" checkbox (moved to Stage 4)
+    agents[i] = {
+      label, role_id, owned_skills[], owned_skills_scope{}, account_id,
+      agent_type, account_class
+    }
 
-  KEPT / ADDED:
-   - Per-agent skill chips from #194 (primary + optional Additional)
-   - Per-agent account picker filtered by Skill's AgentTypeCompat
-   - Always-resume model: identity = (team_name, slot_label). If an
-     Agent with that identity exists owned by this operator → ↻ resume
-     (re-attach PVC). Otherwise → ★ fresh spawn.
+  Backward-compat: hydrates legacy v0.9.0 template slots (primary_skill,
+  alt_skills) into role_id + owned_skills, so the wizard works against
+  /api/v1/team-templates whether the server returns v0.9.0 or v0.9.1
+  shape.
+
+  Coverage panel: shows how many of the 10 LEAN skills are owned
+  somewhere on the team. 10/10 = ✓ full coverage. <10 = ⚠ partial
+  with the uncovered list shown. Launch is always enabled — the panel
+  is informational; the operator may intentionally ship a team that
+  doesn't own every practice.
 
   Props:
     template:    the Stage-1 selected Template (with slots[])
     agents:      $bindable — operator's current roster (becomes the
-                 launch payload). Each: { label, skills[], account_id,
-                 agent_type, primary_skill, alt_skills[] }
+                 launch payload).
     teamName:    $bindable — defaults to template-derived slug
 -->
 <script>
@@ -31,15 +34,27 @@
   } = $props();
 
   let allSkills = $state([]);
+  let allRoles = $state([]);
   let vault = $state([]);
-  let existingAgents = $state([]);     // from /api/v1/agents — for resume-detection
-  let pickerOpenForSlot = $state(-1);  // index of agent in `agents`, -1 = closed
-  let addPickerOpen = $state(false);   // Custom-path: skill picker for adding a new agent
+  let existingAgents = $state([]);
+  let pickerOpenForSlot = $state(-1);   // -1 = closed; ≥0 = swap role on agent i
+  let skillPickerForAgent = $state(-1); // -1 = closed; ≥0 = add owned skill to agent i
+  let addPickerOpen = $state(false);
 
   async function loadSkills() {
     try {
       const r = await fetch('/api-v08/v1/skills');
       if (r.ok) allSkills = (await r.json()).skills || [];
+    } catch {}
+  }
+  async function loadRoles() {
+    try {
+      const r = await fetch('/api-v08/v1/roles');
+      if (r.ok) {
+        const j = await r.json();
+        // /api/v1/roles returns a bare array per roles_v194.go.
+        allRoles = Array.isArray(j) ? j : (j.roles || []);
+      }
     } catch {}
   }
   async function loadVault() {
@@ -55,54 +70,55 @@
     } catch {}
   }
 
-  $effect(() => { loadSkills(); loadVault(); loadAgents(); });
+  $effect(() => { loadSkills(); loadRoles(); loadVault(); loadAgents(); });
 
-  // Initialise roster from the picked template's slots — runs once when
-  // agents is empty and template is known.
+  // Hydrate roster from the picked template's slots. Handles BOTH
+  // shapes — v0.9.1 (role_id + owned_skills + owned_skills_scope) and
+  // legacy v0.9.0 (primary_skill + alt_skills).
   $effect(() => {
     if (!template || agents.length > 0) return;
     if (!template.slots || template.slots.length === 0) {
-      // Custom template — leave empty; UI shows + Add agent
-      return;
+      return; // Custom — empty roster, operator adds via + Add agent
     }
     if (!teamName) {
       teamName = (template.name || '').toLowerCase().replace(/\s+/g, '-');
     }
     agents = template.slots.map(s => ({
       label: s.label,
-      primary_skill: s.primary_skill,
-      alt_skills: s.alt_skills || [],
-      additional_skills: [],
+      role_id: s.role_id || s.primary_skill || 'generalist',
+      owned_skills: s.owned_skills || (s.primary_skill ? [s.primary_skill] : []),
+      owned_skills_scope: s.owned_skills_scope || {},
       agent_type: s.agent_type_default || 'claude-code',
       account_id: '',
       account_class: s.account_class_default || 'anthropic',
     }));
   });
 
-  // Always-resume identity match — (team_name, slot_label) owned by op.
-  // Returns the matching existing agent or null.
   function resumeMatch(label) {
     if (!teamName) return null;
-    return existingAgents.find(a =>
-      a.label === label &&
-      // we don't have team-name on the Agent entity in this branch's API
-      // contract yet; identity match falls back to label+agent-type.
-      true
-    ) || null;
+    return existingAgents.find(a => a.label === label) || null;
   }
 
   function skillByID(id) { return allSkills.find(s => s.id === id) || null; }
+  function roleByID(id)  { return allRoles.find(r => r.id === id) || null; }
 
-  function setPrimarySkill(i, skillID) {
-    agents[i] = { ...agents[i], primary_skill: skillID };
+  function setRole(i, roleID) {
+    const role = roleByID(roleID);
+    // Setting the role refreshes default owned_skills from the role's
+    // DefaultSkills, but ONLY if the agent's current owned_skills is
+    // empty — never overwrite operator's manual chip picks.
+    const next = { ...agents[i], role_id: roleID };
+    if (!next.owned_skills?.length && role?.default_skills?.length) {
+      next.owned_skills = [...role.default_skills];
+    }
+    agents[i] = next;
   }
-  function addAdditionalSkill(i, skillID) {
-    if (agents[i].additional_skills.includes(skillID)) return;
-    if (agents[i].primary_skill === skillID) return;
-    agents[i] = { ...agents[i], additional_skills: [...agents[i].additional_skills, skillID] };
+  function addOwnedSkill(i, skillID) {
+    if (agents[i].owned_skills.includes(skillID)) return;
+    agents[i] = { ...agents[i], owned_skills: [...agents[i].owned_skills, skillID] };
   }
-  function removeAdditionalSkill(i, skillID) {
-    agents[i] = { ...agents[i], additional_skills: agents[i].additional_skills.filter(s => s !== skillID) };
+  function removeOwnedSkill(i, skillID) {
+    agents[i] = { ...agents[i], owned_skills: agents[i].owned_skills.filter(s => s !== skillID) };
   }
   function setAccount(i, accID) {
     agents[i] = { ...agents[i], account_id: accID };
@@ -111,42 +127,76 @@
     agents = agents.filter((_, idx) => idx !== i);
   }
 
-  // Custom-path: + Add agent
-  function addAgent(skillID) {
-    const sk = skillByID(skillID);
-    const label = (sk ? sk.id : 'agent') + '-' + (agents.length + 1);
+  function addAgent(roleID) {
+    const role = roleByID(roleID);
+    const label = (role ? role.id : 'agent') + '-' + (agents.length + 1);
     agents = [...agents, {
       label,
-      primary_skill: skillID,
-      alt_skills: [],
-      additional_skills: [],
-      agent_type: sk?.agent_type_compat?.[0] || 'claude-code',
+      role_id: roleID,
+      owned_skills: role?.default_skills ? [...role.default_skills] : [],
+      owned_skills_scope: {},
+      agent_type: 'claude-code',
       account_id: '',
       account_class: 'anthropic',
     }];
     addPickerOpen = false;
   }
 
-  function vaultForSkill(skill) {
-    // Filter by Skill's AgentTypeCompat — for now we approximate via
-    // account_class match. Claude-code skills → anthropic accounts.
-    if (!skill) return vault;
-    const cls = skill.agent_type_compat?.[0] === 'codex' ? 'openai' : 'anthropic';
+  function vaultForAgent(a) {
+    const cls = a?.account_class || 'anthropic';
     return vault.filter(v => !v.provider || v.provider === cls);
   }
+
+  // Coverage panel — count which of the 10 LEAN skills are owned by
+  // anyone on the team. Cyan check at 10/10, amber warn below.
+  const coverage = $derived.by(() => {
+    const owned = new Set();
+    for (const a of agents) {
+      for (const sk of a.owned_skills || []) owned.add(sk);
+    }
+    const builtins = allSkills.filter(s => s.read_only);
+    const total = builtins.length || 10;
+    const covered = builtins.filter(s => owned.has(s.id));
+    const missing = builtins.filter(s => !owned.has(s.id));
+    return {
+      total,
+      coveredCount: covered.length,
+      missing,
+      ok: covered.length === total,
+    };
+  });
 </script>
 
 <div class="stage3">
   <h2>Who's on the team?</h2>
-  <p class="lead">Skill chips drive each agent's behavior. Re-using an existing label resumes that agent's prior PVC.</p>
+  <p class="lead">Each agent has ONE role + N owned skills. Re-using a label resumes that agent's prior PVC.</p>
 
   <label class="field">
     <span>Team name</span>
     <input type="text" bind:value={teamName} placeholder="my-team" />
   </label>
 
+  {#if allSkills.length > 0}
+    <section class="coverage" class:warn={!coverage.ok}>
+      <header>
+        <span class="cov-icon" aria-hidden="true">{coverage.ok ? '✓' : '⚠'}</span>
+        <span class="cov-text">
+          <strong>{coverage.coveredCount}/{coverage.total}</strong> LEAN skills covered
+          {#if !coverage.ok} — your team will not own:{/if}
+        </span>
+      </header>
+      {#if !coverage.ok && coverage.missing.length}
+        <ul class="cov-missing">
+          {#each coverage.missing as m}
+            <li>{m.name}</li>
+          {/each}
+        </ul>
+        <p class="cov-hint">This is OK — Launch stays enabled. Add a chip below if you want full coverage.</p>
+      {/if}
+    </section>
+  {/if}
+
   {#if (!template || (template.slots && template.slots.length === 0)) && agents.length === 0}
-    <!-- Custom template, empty roster -->
     <div class="empty-state">
       <p>This is a Custom team — build your roster.</p>
       <button class="primary" onclick={() => addPickerOpen = true}>+ Add agent</button>
@@ -155,7 +205,7 @@
 
   <ul class="agents">
     {#each agents as a, i}
-      {@const primary = skillByID(a.primary_skill)}
+      {@const role = roleByID(a.role_id)}
       {@const resume = resumeMatch(a.label)}
       <li class="card">
         <header>
@@ -167,23 +217,30 @@
         </header>
 
         <div class="row">
+          <div class="row-label">Role</div>
+          <div class="chips">
+            <button type="button" class="chip role" onclick={() => pickerOpenForSlot = i}>
+              {role ? role.name : (a.role_id || 'pick a role')}
+            </button>
+          </div>
+        </div>
+
+        <div class="row">
           <div class="row-label">Skills</div>
           <div class="chips">
-            {#if primary}
-              <button type="button" class="chip primary" onclick={() => pickerOpenForSlot = i}>
-                {primary.name}
-              </button>
-            {/if}
-            {#each a.additional_skills as sid}
+            {#each a.owned_skills as sid}
               {@const s = skillByID(sid)}
               {#if s}
                 <span class="chip">
                   {s.name}
-                  <button type="button" class="chip-x" onclick={() => removeAdditionalSkill(i, sid)} aria-label="remove skill">×</button>
+                  {#if a.owned_skills_scope?.[sid]}
+                    <em>({a.owned_skills_scope[sid]})</em>
+                  {/if}
+                  <button type="button" class="chip-x" onclick={() => removeOwnedSkill(i, sid)} aria-label="remove skill">×</button>
                 </span>
               {/if}
             {/each}
-            <button type="button" class="chip add" onclick={() => pickerOpenForSlot = -1 - i /* sentinel for additional add */}>+ skill</button>
+            <button type="button" class="chip add" onclick={() => skillPickerForAgent = i}>+ skill</button>
           </div>
         </div>
 
@@ -191,7 +248,7 @@
           <span class="row-label">Account</span>
           <select onchange={(e) => setAccount(i, e.target.value)}>
             <option value="">(default — newest matching {a.account_class})</option>
-            {#each vaultForSkill(primary) as v}
+            {#each vaultForAgent(a) as v}
               <option value={v.id} selected={v.id === a.account_id}>⚓ {v.label || v.id}</option>
             {/each}
           </select>
@@ -210,28 +267,52 @@
     <p class="footer-hint">To change the team shape, go back to Step 1.</p>
   {/if}
 
-  <!-- Skill picker for primary swap (slot i ≥ 0) or additional-add (slot i = -1-real) -->
-  {#if pickerOpenForSlot !== -1}
-    {@const i = pickerOpenForSlot >= 0 ? pickerOpenForSlot : (-1 - pickerOpenForSlot)}
-    {@const isAdditional = pickerOpenForSlot < 0}
-    {@const slot = agents[i]}
-    {@const candidates = isAdditional ? allSkills : (slot?.alt_skills?.length > 0 ? allSkills.filter(s => s.id === slot.primary_skill || slot.alt_skills.includes(s.id)) : allSkills)}
+  <!-- Role picker -->
+  {#if pickerOpenForSlot >= 0}
     <div class="modal-bg" onclick={() => pickerOpenForSlot = -1}>
       <div class="modal" onclick={(e) => e.stopPropagation()}>
         <header>
-          <h3>{isAdditional ? 'Add additional skill' : 'Swap primary skill'}</h3>
+          <h3>Pick a role</h3>
           <button class="x" onclick={() => pickerOpenForSlot = -1} aria-label="close">×</button>
         </header>
         <ul class="skill-list">
-          {#each candidates as s}
+          {#each allRoles as r}
             <li>
               <button
                 type="button"
                 class="skill-row"
                 onclick={() => {
-                  if (isAdditional) addAdditionalSkill(i, s.id);
-                  else setPrimarySkill(i, s.id);
+                  setRole(pickerOpenForSlot, r.id);
                   pickerOpenForSlot = -1;
+                }}
+              >
+                <span class="sk-name">{r.name} <em class="cat">{r.category}</em></span>
+                <span class="sk-desc">{r.description}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Owned-skill picker -->
+  {#if skillPickerForAgent >= 0}
+    <div class="modal-bg" onclick={() => skillPickerForAgent = -1}>
+      <div class="modal" onclick={(e) => e.stopPropagation()}>
+        <header>
+          <h3>Add a skill</h3>
+          <button class="x" onclick={() => skillPickerForAgent = -1} aria-label="close">×</button>
+        </header>
+        <ul class="skill-list">
+          {#each allSkills as s}
+            <li>
+              <button
+                type="button"
+                class="skill-row"
+                onclick={() => {
+                  addOwnedSkill(skillPickerForAgent, s.id);
+                  skillPickerForAgent = -1;
                 }}
               >
                 <span class="sk-name">{s.name}</span>
@@ -244,20 +325,20 @@
     </div>
   {/if}
 
-  <!-- Add-agent picker (Custom path) -->
+  <!-- Add-agent picker (Custom path) — picks a role -->
   {#if addPickerOpen}
     <div class="modal-bg" onclick={() => addPickerOpen = false}>
       <div class="modal" onclick={(e) => e.stopPropagation()}>
         <header>
-          <h3>Pick a skill for the new agent</h3>
+          <h3>Pick a role for the new agent</h3>
           <button class="x" onclick={() => addPickerOpen = false} aria-label="close">×</button>
         </header>
         <ul class="skill-list">
-          {#each allSkills as s}
+          {#each allRoles as r}
             <li>
-              <button type="button" class="skill-row" onclick={() => addAgent(s.id)}>
-                <span class="sk-name">{s.name}</span>
-                <span class="sk-desc">{s.description}</span>
+              <button type="button" class="skill-row" onclick={() => addAgent(r.id)}>
+                <span class="sk-name">{r.name} <em class="cat">{r.category}</em></span>
+                <span class="sk-desc">{r.description}</span>
               </button>
             </li>
           {/each}
@@ -274,6 +355,27 @@
   .field { display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1rem; }
   .field > span { color: var(--fg-muted, #888); font-size: 0.85rem; }
   .field input { flex: 1; padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
+
+  /* Coverage panel — sits above the agent list */
+  .coverage {
+    padding: 0.55rem 0.85rem; border-radius: 6px;
+    background: rgba(135,206,235,0.06); border: 1px solid rgba(135,206,235,0.18);
+    margin: 0 0 0.9rem 0;
+  }
+  .coverage.warn {
+    background: rgba(255, 193, 7, 0.06); border-color: rgba(255, 193, 7, 0.28);
+  }
+  .coverage header { display: flex; align-items: center; gap: 0.5rem; }
+  .cov-icon { font-size: 1rem; color: var(--accent-2, #87ceeb); }
+  .coverage.warn .cov-icon { color: #f7b500; }
+  .cov-text { font-size: 0.85rem; color: var(--fg, #f5f5f5); }
+  .cov-missing { list-style: none; padding: 0; margin: 0.35rem 0 0 0; display: flex; flex-wrap: wrap; gap: 0.32rem; }
+  .cov-missing li {
+    font-size: 0.74rem; padding: 0.05rem 0.45rem; border-radius: 3px;
+    background: rgba(255,193,7,0.12); border: 1px solid rgba(255,193,7,0.3);
+    color: #f7b500;
+  }
+  .cov-hint { margin: 0.35rem 0 0 0; font-size: 0.74rem; color: var(--fg-muted, #aaa); font-style: italic; }
 
   .empty-state { text-align: center; padding: 1.5rem 1rem; background: var(--bg-elevated, #1a1a1a); border: 1px dashed var(--border, #2a2a2a); border-radius: 8px; margin-bottom: 1rem; }
   .empty-state p { color: var(--fg-muted, #888); margin: 0 0 0.6rem 0; }
@@ -292,15 +394,16 @@
   .row select { flex: 1; padding: 0.35rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .chip { display: inline-flex; align-items: center; gap: 0.32rem; background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a); color: var(--fg, #f5f5f5); padding: 0.28rem 0.65rem; border-radius: 999px; font-size: 0.82rem; cursor: pointer; font: inherit; }
-  .chip.primary { background: rgba(135,206,235,0.18); border-color: var(--accent-2, #87ceeb); color: var(--accent-2, #87ceeb); font-weight: 600; }
+  .chip.role { background: rgba(135,206,235,0.18); border-color: var(--accent-2, #87ceeb); color: var(--accent-2, #87ceeb); font-weight: 600; }
   .chip.add { color: var(--accent-2, #87ceeb); border-style: dashed; }
+  .chip em { color: var(--fg-muted, #aaa); font-style: italic; font-size: 0.7rem; }
   .chip-x { background: transparent; border: 0; color: inherit; cursor: pointer; padding: 0; font: inherit; opacity: 0.7; }
   .chip-x:hover { opacity: 1; }
   .resume-hint { color: var(--fg-faint, #666); font-size: 0.78rem; margin: 0.25rem 0 0 0; font-style: italic; }
 
   .footer-hint { color: var(--fg-muted, #888); font-size: 0.82rem; text-align: center; margin: 0.7rem 0 0 0; font-style: italic; }
 
-  /* Skill picker modal */
+  /* Role / skill picker modal */
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 200; }
   .modal { background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 10px; width: 520px; max-width: 92vw; max-height: 80vh; display: flex; flex-direction: column; }
   .modal header { display: flex; align-items: center; padding: 0.6rem 1rem; border-bottom: 1px solid #2a2a2a; }
@@ -309,5 +412,6 @@
   .skill-row { display: flex; flex-direction: column; align-items: flex-start; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #2a2a2a; padding: 0.55rem 1rem; cursor: pointer; font: inherit; color: var(--fg, #f5f5f5); }
   .skill-row:hover { background: rgba(135,206,235,0.06); }
   .sk-name { font-weight: 600; font-size: 0.92rem; }
+  .sk-name .cat { font-size: 0.72rem; color: var(--fg-muted, #888); font-style: italic; font-weight: 400; margin-left: 0.4rem; }
   .sk-desc { color: var(--fg-muted, #888); font-size: 0.8rem; margin-top: 0.18rem; }
 </style>
