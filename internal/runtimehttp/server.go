@@ -1871,6 +1871,15 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 			res.Err = err.Error()
 		} else {
 			_, _ = s.rt.JoinTeam(m.Name, team, m.Role, m.BriefOverride)
+			// Fire the first-run-prompts auto-dismisser for every
+			// claude-code member — without this, template-spawned
+			// agents sit on the "Yes, I trust this folder" prompt
+			// forever (the per-session POST handler fires this for
+			// solo spawns, but templateApply was missing it).
+			agentSlug := firstNonEmpty(ov.Agent, m.Agent)
+			if newSess != nil && (agentSlug == "" || agentSlug == "claude-code") {
+				go autoDismissClaudeFirstRunPrompts(newSess)
+			}
 			// If the spawned member is a shepherd, kick off its watch
 			// loop so it actually starts ticking (otherwise it'd sit at
 			// the trust prompt indefinitely).
