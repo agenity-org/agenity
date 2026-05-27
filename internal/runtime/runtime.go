@@ -1586,12 +1586,25 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	if chepBin == "" {
 		chepBin = "chepherd"
 	}
+	// Pass CHEPHERD_TOKEN + CHEPHERD_AGENT_NAME explicitly in the env
+	// block so claude-code's MCP spawner doesn't drop them. Empty env: {}
+	// caused "1 MCP server failed" because the bridge couldn't auth.
+	mcpEnv := map[string]string{
+		"CHEPHERD_AGENT_NAME": sessionName,
+	}
+	r.extraEnvMu.RLock()
+	if r.extraAgentEnv != nil {
+		if tok, ok := r.extraAgentEnv["CHEPHERD_TOKEN"]; ok && tok != "" {
+			mcpEnv["CHEPHERD_TOKEN"] = tok
+		}
+	}
+	r.extraEnvMu.RUnlock()
 	cfg := map[string]any{
 		"mcpServers": map[string]any{
 			"chepherd": map[string]any{
 				"command": chepBin,
 				"args":    []string{"mcp", "--url", mcpURL},
-				"env":     map[string]string{},
+				"env":     mcpEnv,
 			},
 		},
 	}

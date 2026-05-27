@@ -19,6 +19,35 @@
   import AgentSettings from './AgentSettings.svelte';
   import TeamSettings from './TeamSettings.svelte';
 
+  // #157 — install fetch-auth wrapper at module top-level, BEFORE any child
+  // widget's onMount fires. (Previously it lived inside Workspace.onMount,
+  // which runs AFTER children mount — so the first claude-status / sessions
+  // fetch bypassed the wrapper and 401'd.) Guard with __chepherdFetchPatched
+  // and an SSR-safe window check.
+  if (typeof window !== 'undefined' && !window.__chepherdFetchPatched) {
+    window.__chepherdFetchPatched = true;
+    const _origFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input?.url || '');
+      if (url.startsWith('/api/') || url.startsWith('/api-v08/')) {
+        let tok = '';
+        try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
+        init = init || {};
+        init.headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined));
+        if (tok && !init.headers.has('Authorization')) {
+          init.headers.set('Authorization', 'Bearer ' + tok);
+        }
+        return _origFetch(input, init).then(r => {
+          if (r.status === 401) {
+            try { window.dispatchEvent(new CustomEvent('chepherd-401')); } catch {}
+          }
+          return r;
+        });
+      }
+      return _origFetch(input, init);
+    };
+  }
+
   // --- clickOutside action (closes dropdowns when clicking elsewhere) ---
   function clickOutside(node, handler) {
     function handle(e) { if (!node.contains(e.target)) handler(); }
@@ -106,7 +135,9 @@
   let evStream = null;
   function startEventStream() {
     if (evStream) return;
-    evStream = new EventSource(`${API}/events/stream`);
+    const tok = getStoredToken();
+    const q = tok ? ('?token=' + encodeURIComponent(tok)) : '';
+    evStream = new EventSource(`${API}/events/stream${q}`);
     evStream.onmessage = (ev) => {
       try {
         const e = JSON.parse(ev.data);
@@ -326,25 +357,7 @@
   let needLogin = $state(false);
   let loginTokenInput = $state('');
   let loginError = $state('');
-  function installFetchAuth() {
-    const origFetch = window.fetch.bind(window);
-    window.fetch = (input, init) => {
-      const url = typeof input === 'string' ? input : (input?.url || '');
-      if (url.startsWith('/api/') || url.startsWith('/api-v08/')) {
-        const tok = getStoredToken();
-        init = init || {};
-        init.headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined));
-        if (tok && !init.headers.has('Authorization')) {
-          init.headers.set('Authorization', 'Bearer ' + tok);
-        }
-        return origFetch(input, init).then(async r => {
-          if (r.status === 401) { needLogin = true; }
-          return r;
-        });
-      }
-      return origFetch(input, init);
-    };
-  }
+  // installFetchAuth moved to module top-level (#157 timing fix).
   async function saveLoginToken() {
     if (!loginTokenInput.trim()) { loginError = 'paste the bootstrap token'; return; }
     try { localStorage.setItem('chepherd-token', loginTokenInput.trim()); } catch {}
@@ -361,10 +374,8 @@
   onMount(() => {
     try { theme = localStorage.getItem('chepherd-theme') || 'dark'; document.documentElement.dataset.theme = theme; } catch {}
     try { const f = +(localStorage.getItem('chepherd-font') || 14); applyFontSize(f); } catch { applyFontSize(14); }
-    installFetchAuth();
-    console.log('[chepherd] onMount tok=', getStoredToken(), 'needLogin pre=', needLogin);
     if (!getStoredToken()) { needLogin = true; }
-    console.log('[chepherd] onMount needLogin post=', needLogin);
+    window.addEventListener('chepherd-401', () => { needLogin = true; });
     refresh();
     listSavedLayouts();
     const intv = setInterval(refresh, 2500);

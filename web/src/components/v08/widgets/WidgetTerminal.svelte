@@ -156,7 +156,10 @@
     // backoff capped at 5s, gives up after 8 attempts (~30s).
     let wsReconnectAttempts = 0;
     const openWS = () => {
-      ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api-v08/v1/sessions/${name}/attach`);
+      let wsTok = '';
+      try { wsTok = localStorage.getItem('chepherd-token') || ''; } catch {}
+      const wsQ = wsTok ? ('?token=' + encodeURIComponent(wsTok)) : '';
+      ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api-v08/v1/sessions/${name}/attach${wsQ}`);
       ws.binaryType = 'arraybuffer';
       ws.onmessage = (ev) => {
         if (!term) return;
