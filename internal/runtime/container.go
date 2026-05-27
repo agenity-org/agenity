@@ -9,6 +9,20 @@ import (
 	"strings"
 )
 
+// extractEnv pulls one KEY out of a "KEY=VAL" slice. Returns "" if not
+// present. Used for threading runtime-side values (e.g. the per-agent
+// PVC handle minted by the Agent registry, #172) through the existing
+// ContainerRuntime.SpawnArgs interface without changing the signature.
+func extractEnv(env []string, key string) string {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return strings.TrimPrefix(kv, prefix)
+		}
+	}
+	return ""
+}
+
 // ContainerRuntime abstracts how agent processes are launched.
 // PodmanRuntime wraps each agent in a rootless Podman container.
 // BareExecRuntime runs agents directly on the host (fallback).
@@ -126,6 +140,22 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		"--workdir", cwd,
 	)
 
+	// #172 — per-agent PVC. Handle threaded from runtime.Spawn via env
+	// (CHEPHERD_PVC_HANDLE). Provisioned lazily — if the named volume
+	// doesn't exist yet, create it now in the same podman store. Mounts
+	// at /workspace so app scratch (build caches, generated files,
+	// agent-internal state) survives session crashes + resumes.
+	if pvcHandle := extractEnv(env, "CHEPHERD_PVC_HANDLE"); pvcHandle != "" {
+		storeArgs := []string{}
+		if _, err := os.Stat(agentStorageRoot); err == nil {
+			storeArgs = append(storeArgs, "--root", agentStorageRoot, "--runroot", agentRunRoot)
+		}
+		if exec.Command("podman", append(append([]string{}, storeArgs...), "volume", "exists", pvcHandle)...).Run() != nil {
+			_ = exec.Command("podman", append(append([]string{}, storeArgs...), "volume", "create", pvcHandle)...).Run()
+		}
+		podArgs = append(podArgs, "-v", pvcHandle+":/workspace:rw,U")
+	}
+
 	// Per-agent secrets — mounted at /run/secrets so the entrypoint script
 	// in the agent image can link /run/secrets/claude-credentials into the
 	// agent's home (R4). Once the token vault (#131) lands, all token
@@ -202,6 +232,15 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		"-e", "TERM=xterm-256color",
 		"-e", "COLORTERM=truecolor",
 		"-e", "DISABLE_AUTOUPDATER=1",
+	}
+	// #172 — same per-agent PVC mount as PodmanRuntime above. Docker
+	// has no equivalent of podman's --root scoping; create the named
+	// volume on the default Docker engine.
+	if pvcHandle := extractEnv(env, "CHEPHERD_PVC_HANDLE"); pvcHandle != "" {
+		if exec.Command("docker", "volume", "inspect", pvcHandle).Run() != nil {
+			_ = exec.Command("docker", "volume", "create", pvcHandle).Run()
+		}
+		dockerArgs = append(dockerArgs, "-v", pvcHandle+":/workspace:rw")
 	}
 	if agentSecretsDir != "" {
 		dockerArgs = append(dockerArgs, "-v", agentSecretsDir+":/run/secrets:ro")

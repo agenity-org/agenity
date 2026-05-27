@@ -19,8 +19,10 @@ import (
 	"sync"
 	"time"
 
+	agententity "github.com/chepherd/chepherd/internal/agent"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/google/uuid"
 )
 
 // Role is what an agent does inside its tribe.
@@ -38,6 +40,14 @@ type SessionInfo struct {
 	ID        string    `json:"id"`        // ptyhost session ID (stable across restart attempts)
 	Name      string    `json:"name"`      // canonical @-address (e.g. "iogrid-1")
 	AgentSlug string    `json:"agent"`     // claude-code, qwen-code, etc.
+
+	// #172 — first-class Agent entity backing this session. AgentID is
+	// the stable UUID; PVCHandle is the podman-volume / k8s-PVC mounted
+	// at /workspace inside the agent container. Both stay constant
+	// across resume / handoff (#173 / #STAGE-3); the live session ID
+	// (above) rotates per attach.
+	AgentID   string `json:"agent_id,omitempty"`
+	PVCHandle string `json:"pvc_handle,omitempty"`
 	Team      string    `json:"team"`      // team membership — workers in same team @-reach freely
 	Role      Role      `json:"role"`      // worker | shepherd
 	Cwd       string    `json:"cwd"`       // working directory the agent was spawned in
@@ -242,6 +252,17 @@ type Runtime struct {
 	// inject the operator's MCP bearer token (CHEPHERD_TOKEN) so the
 	// agent's bridge subprocess can authenticate (#139).
 	extraAgentEnv map[string]string
+
+	// agentRegistry is the first-class Agent entity store (#172). Every
+	// successful Spawn mints / re-binds an Agent record here, keyed by
+	// stable UUID. Session bookkeeping (attach / detach) flows through
+	// the registry so resume + handoff (#173) have a durable identity to
+	// reference.
+	agentRegistry *agententity.Store
+
+	// sessionToAgent maps live session ID → Agent UUID so DetachSession
+	// can find the right record without a registry scan.
+	sessionToAgent map[string]uuid.UUID
 	extraEnvMu    sync.RWMutex
 
 	// human-inbox sink
@@ -372,6 +393,26 @@ func (r *Runtime) StateDir() string {
 	return r.stateDir
 }
 
+// AgentRegistry exposes the first-class Agent store (#172) so the HTTP
+// layer + #173 handoff can query / mutate it without poking the runtime's
+// internals.
+func (r *Runtime) AgentRegistry() *agententity.Store {
+	return r.agentRegistry
+}
+
+// AgentForSession returns the registered Agent that the given live
+// session is currently attached to, or nil if the session predates
+// the v0.9 registry (legacy v0.8 spawn without UUID).
+func (r *Runtime) AgentForSession(sessionID string) (*agententity.Agent, error) {
+	r.mu.Lock()
+	id, ok := r.sessionToAgent[sessionID]
+	r.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	return r.agentRegistry.Get(id)
+}
+
 // AddSpawnHook registers a callback invoked after every successful Spawn.
 // Called synchronously in Spawn after persistence, before broadcast.
 func (r *Runtime) AddSpawnHook(hook func(*session.Session, string)) {
@@ -409,6 +450,11 @@ func New(stateDir string) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("spawner init: %w", err)
 	}
+	// #172 — open the Agent registry (file-backed JSON-per-UUID).
+	agentStore, err := agententity.NewStore(stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("agent registry init: %w", err)
+	}
 	r := &Runtime{
 		sessions:         make(map[string]*session.Session),
 		byName:           make(map[string]string),
@@ -421,6 +467,8 @@ func New(stateDir string) (*Runtime, error) {
 		events:           newEventBuffer(1000),
 		containerRuntime: cr,
 		spawner:          spawner,
+		agentRegistry:    agentStore,
+		sessionToAgent:   make(map[string]uuid.UUID),
 	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
@@ -556,6 +604,16 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime.Spawn: agent secrets: %w", err)
 	}
+	// #172 — mint the Agent UUID BEFORE the spawner runs so its PVC
+	// handle can be threaded into the container env. The container
+	// runtime sees CHEPHERD_PVC_HANDLE and provisions /workspace from
+	// a per-agent named volume. Record persistence happens here too;
+	// SessionRef gets appended after we know the session ID below.
+	ag := agententity.New(spec.AgentSlug, spec.Name, "")
+	if err := r.agentRegistry.Save(ag); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: agent registry save %s: %v\n", spec.Name, err)
+	}
+	env = append(env, "CHEPHERD_PVC_HANDLE="+ag.PVCHandle)
 	// Delegate to the configured AgentSpawner (#127). The local path
 	// returns argv ready for ptyhost to exec; future K8s paths return a
 	// PodName instead and the ptyhost streams from there.
@@ -632,11 +690,21 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	}
 
 	act := &sessionActivity{created: time.Now()}
+
+	// #172 — link this session to the Agent record created above
+	// (before spawner.Spawn so PVC handle could thread through env).
+	if err := r.agentRegistry.AttachSession(ag.ID, id); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: agent attach %s: %v\n", spec.Name, err)
+	}
+	info.AgentID = ag.ID.String()
+	info.PVCHandle = ag.PVCHandle
+
 	r.mu.Lock()
 	r.sessions[id] = s
 	r.byName[spec.Name] = id
 	r.info[id] = info
 	r.activity[id] = act
+	r.sessionToAgent[id] = ag.ID
 	hooks := append([]func(*session.Session, string){}, r.spawnHooks...)
 	r.mu.Unlock()
 
@@ -716,7 +784,14 @@ func (r *Runtime) markExited(id string) {
 	}
 	name := info.Name
 	code := info.ExitCode
+	agentID, hasAgent := r.sessionToAgent[id]
 	r.mu.Unlock()
+
+	// #172 — close out the SessionRef on the Agent record so resume
+	// can see the previous attach as ended.
+	if hasAgent {
+		_ = r.agentRegistry.DetachSession(agentID, id)
+	}
 	// Event: agent exited
 	r.RecordEvent(Event{
 		Kind: "exit", Actor: "runtime",

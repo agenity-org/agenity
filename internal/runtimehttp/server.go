@@ -113,7 +113,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/vault", s.vaultRoot)
 	mux.HandleFunc("/api/v1/vault/", s.vaultByID)
 	mux.HandleFunc("/api/v1/vault/providers", s.vaultProviders)
-	mux.HandleFunc("/api/v1/agents", s.agentsCatalog)
+	// #172 — first-class Agent entity CRUD. /api/v1/agents (list +
+	// create), /api/v1/agents/{id} (get + patch + delete). The earlier
+	// "agent type catalog" endpoint moves to /api/v1/agent-types so the
+	// short form is reserved for the entity API per architect handoff.
+	mux.HandleFunc("/api/v1/agents", s.agentsEntity)
+	mux.HandleFunc("/api/v1/agents/", s.agentEntityByID)
+	mux.HandleFunc("/api/v1/agent-types", s.agentsCatalog)
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
