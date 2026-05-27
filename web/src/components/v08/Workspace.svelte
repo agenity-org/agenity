@@ -16,6 +16,7 @@
   import '@xterm/xterm/css/xterm.css';
   import Pane from './Pane.svelte';
   import SpawnWizard from './SpawnWizard.svelte';
+  import SpawnWizardV9 from '../v09/SpawnWizardV9.svelte';
   import AgentSettings from './AgentSettings.svelte';
   import TeamSettings from './TeamSettings.svelte';
 
@@ -501,7 +502,13 @@
   </div>
 {/if}
 {#if showWizard}
-  <SpawnWizard onClose={() => (showWizard = false)} onLaunched={refresh} defaultCwd={projectCwd} />
+  <div class="wizard-overlay" role="dialog">
+    {#if typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('wizard') === 'v08'}
+      <SpawnWizard onClose={() => (showWizard = false)} onLaunched={refresh} defaultCwd={projectCwd} />
+    {:else}
+      <SpawnWizardV9 onclose={() => { showWizard = false; refresh(); }} />
+    {/if}
+  </div>
 {/if}
 {#if showAgentSettings && selectedAgent}
   {@const ag = sessions.find(s => s.name === selectedAgent)}
@@ -528,6 +535,12 @@
 {/if}
 
 <style>
+  .wizard-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
   :global(html[data-theme="dark"]) {
     --bg: #0a0a0a; --bg-elev: #111; --bg-input: #0a0a0a;
     --border: #1e1e1e; --border-strong: #2a2a2a;
