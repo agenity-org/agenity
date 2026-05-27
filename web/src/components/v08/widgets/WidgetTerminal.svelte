@@ -79,12 +79,18 @@
     const { Terminal } = await import('@xterm/xterm');
     const { FitAddon } = await import('@xterm/addon-fit');
     const { WebLinksAddon } = await import('@xterm/addon-web-links');
-    // #133 / 2026-05-27 walk: do NOT theme the 16 ANSI slots — claude-code
-    // (and many other TUI programs) ships its logo + box-drawing assuming
-    // the STANDARD xterm-256 palette. Overriding red/yellow/magenta breaks
-    // the welcome-banner robot, syntax highlights, and progress spinners.
-    // We only set the bg/fg/cursor; everything else inherits xterm.js's
-    // default 16-slot palette which matches what claude-code expects.
+    // #133 R5 (2026-05-27 operator review): SURGICAL palette restore —
+    // the original #133/bec5e28 palette gave claude-code's /usage its
+    // light-blue tone + tuned cyan/blue/green/yellow throughout the TUI.
+    // The wholesale revert in b1e211b nuked all 16 slots which broke
+    // every tuned color (operator: "all the other colors are also ruined").
+    //
+    // Root cause of the welcome-banner robot breakage was specifically
+    // magenta (`#d75faf` pink) — claude-code's robot ART uses ANSI
+    // magenta and expects the standard xterm purple, not chepherd-pink.
+    // Solution: restore all 14 "tuned" slots and leave ONLY magenta /
+    // brightMagenta / red / brightRed at xterm.js defaults so the
+    // claude-code mascot renders correctly.
     const isLight = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light';
     const sel = isLight ? {
       background:          '#fafafa',
@@ -92,12 +98,40 @@
       cursor:              '#1a1a1a',
       cursorAccent:        '#fafafa',
       selectionBackground: '#cbd5e1',
+      // 14 tuned slots for light theme (magenta + red intentionally
+      // omitted → xterm.js defaults preserve claude-code's robot).
+      black:        '#1a1a1a',
+      green:        '#1e7e34',
+      yellow:       '#b8860b',
+      blue:         '#0066cc',
+      cyan:         '#008a8a',
+      white:        '#dcdcdc',
+      brightBlack:  '#666666',
+      brightGreen:  '#28a745',
+      brightYellow: '#daa520',
+      brightBlue:   '#3498db',
+      brightCyan:   '#17a2b8',
+      brightWhite:  '#1a1a1a',
     } : {
       background:          '#0a0a0a',
       foreground:          '#f5f5f5',
       cursor:              '#f5f5f5',
       cursorAccent:        '#0a0a0a',
       selectionBackground: '#2a3540',
+      // 14 tuned slots for dark theme — cyan #5fd7ff is the
+      // light-blue operator expects to see in /usage output.
+      black:        '#0a0a0a',
+      green:        '#5fd75f',
+      yellow:       '#ffa500', // chepherd accent
+      blue:         '#5fafff',
+      cyan:         '#5fd7ff',
+      white:        '#dadada',
+      brightBlack:  '#5a5a5a',
+      brightGreen:  '#87ff87',
+      brightYellow: '#ffd75f',
+      brightBlue:   '#87afff',
+      brightCyan:   '#afffff',
+      brightWhite:  '#ffffff',
     };
     // #150 — convertEol: false. The native PTY already emits CRLF for
     // line endings on terminal-style output; setting convertEol: true
