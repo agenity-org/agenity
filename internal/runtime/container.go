@@ -148,6 +148,12 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 
 	// Override HOME so claude-code writes to the mounted home dir.
 	podArgs = append(podArgs, "-e", "HOME=/home/agent")
+	// TERM=xterm-256color so claude-code uses 256-color escapes (dusty-pink
+	// mascot, light-blue /usage bar). Default TERM=xterm forces the 16-color
+	// fallback path which renders the mascot as harsh ANSI red + bars as
+	// bright-white. xterm.js in the browser fully supports 256-color.
+	podArgs = append(podArgs, "-e", "TERM=xterm-256color")
+	podArgs = append(podArgs, "-e", "COLORTERM=truecolor")
 
 	podArgs = append(podArgs, "chepherd-agent:latest")
 	podArgs = append(podArgs, argv...)
@@ -185,6 +191,8 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		"-v", cwd + ":" + cwd + ":rw",
 		"--workdir", cwd,
 		"-e", "HOME=/home/agent",
+		"-e", "TERM=xterm-256color",
+		"-e", "COLORTERM=truecolor",
 	}
 	if agentSecretsDir != "" {
 		dockerArgs = append(dockerArgs, "-v", agentSecretsDir+":/run/secrets:ro")
