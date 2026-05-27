@@ -154,6 +154,14 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// bright-white. xterm.js in the browser fully supports 256-color.
 	podArgs = append(podArgs, "-e", "TERM=xterm-256color")
 	podArgs = append(podArgs, "-e", "COLORTERM=truecolor")
+	// claude-code ships an "auto-updater" that runs `npm i -g
+	// @anthropic-ai/claude-code` on every start. In chepherd's containerised
+	// agents this is wrong on three counts: (1) the agent user (UID 1000) has
+	// no write perms on /usr/lib/node_modules so it always fails; (2) the
+	// container is ephemeral — any successful update would be lost next
+	// spawn; (3) the canonical update path is bumping the chepherd-agent
+	// image tag, not mutating a running container. Disable the noisy banner.
+	podArgs = append(podArgs, "-e", "DISABLE_AUTOUPDATER=1")
 
 	podArgs = append(podArgs, "chepherd-agent:latest")
 	podArgs = append(podArgs, argv...)
@@ -193,6 +201,7 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		"-e", "HOME=/home/agent",
 		"-e", "TERM=xterm-256color",
 		"-e", "COLORTERM=truecolor",
+		"-e", "DISABLE_AUTOUPDATER=1",
 	}
 	if agentSecretsDir != "" {
 		dockerArgs = append(dockerArgs, "-v", agentSecretsDir+":/run/secrets:ro")
