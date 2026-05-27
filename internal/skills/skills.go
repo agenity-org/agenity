@@ -35,16 +35,46 @@ type Skill struct {
 	Name            string         `json:"name"`
 	Description     string         `json:"description"`
 	Icon            string         `json:"icon"`
-	PromptOverride  string         `json:"prompt_override"`
+
+	// PromptOverride is the agent-system-prompt fragment for this skill
+	// at Layer 2 of the v0.9 context model. Historically named
+	// "PromptOverride" before the canon work added Layer 1 — kept for
+	// JSON-on-disk compat. Conceptually = "PromptBody" per #194 spec.
+	PromptOverride string `json:"prompt_override"`
+
+	// OrgOverrideBody is the admin-edited Layer-2 override (#194 spec).
+	// When non-empty, supersedes PromptOverride at spawn-time merge.
+	OrgOverrideBody string `json:"org_override_body,omitempty"`
+
+	// UpstreamSource pins where this skill body was sourced from.
+	// "chepherd@v0.9" for native; "addyosmani/agent-skills@<ref>" or
+	// "affaan-m/ECC@<ref>" for imports.
+	UpstreamSource string `json:"upstream_source,omitempty"`
+
+	// UpstreamPath is the SKILL.md path inside the upstream repo.
+	UpstreamPath string `json:"upstream_path,omitempty"`
+
+	// Frontmatter holds YAML frontmatter parsed from upstream SKILL.md.
+	Frontmatter map[string]any `json:"frontmatter,omitempty"`
+
 	DefaultTools    []string       `json:"default_tools,omitempty"`
 	AgentTypeCompat []string       `json:"agent_type_compat,omitempty"` // ["any"] for unrestricted
 	StatSheet       map[string]any `json:"stat_sheet,omitempty"`
-	Source          string         `json:"source"` // "chepherd" | "user-{uuid}" | "import:gstack" | …
+	Source          string         `json:"source"`
 	Tags            []string       `json:"tags,omitempty"`
 	ReadOnly        bool           `json:"read_only"`
 	SortOrder       int            `json:"sort_order"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
+}
+
+// EffectiveBody returns the body the agent should actually see at
+// spawn — Layer 2 override if present, else upstream PromptOverride.
+func (s *Skill) EffectiveBody() string {
+	if s.OrgOverrideBody != "" {
+		return s.OrgOverrideBody
+	}
+	return s.PromptOverride
 }
 
 // Store is the persistence layer. File-backed JSON-per-skill under
@@ -56,13 +86,28 @@ type Store struct {
 	builtins []Skill // immutable; seeded once in NewStore
 }
 
-// NewStore initialises the registry directory + seeds the 12 builtins.
+// NewStore initialises the registry directory + seeds the 10 LEAN
+// builtins (v0.9.1, #194). Layer-2 overrides for builtins live as
+// {id}.override.json sidecars and are re-applied at boot.
 func NewStore(stateDir string) (*Store, error) {
 	dir := filepath.Join(stateDir, "skills-registry")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("skills.NewStore: %w", err)
 	}
-	return &Store{dir: dir, builtins: builtinSet()}, nil
+	s := &Store{dir: dir, builtins: builtinSet()}
+	// Reapply any persisted Layer-2 overrides for builtins.
+	for i := range s.builtins {
+		path := filepath.Join(dir, s.builtins[i].ID+".override.json")
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var rec map[string]string
+		if json.Unmarshal(b, &rec) == nil {
+			s.builtins[i].OrgOverrideBody = rec["override_body"]
+		}
+	}
+	return s, nil
 }
 
 // ListOpts filters List results.
@@ -219,6 +264,59 @@ func (s *Store) Update(id string, patch Skill) (*Skill, error) {
 		return nil, err
 	}
 	return existing, nil
+}
+
+// SetOverride saves an admin-edited Layer-2 override body. Allowed on
+// builtins (this is how operators customise upstream skills without
+// editing the canonical body). Returns the updated skill.
+//
+// For builtins, the override lives in a sidecar file under
+// $stateDir/skills-registry/{id}.override.json — the in-memory builtin
+// stays read-only.
+func (s *Store) SetOverride(id, body string) (*Skill, error) {
+	existing, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, ErrNotFound
+	}
+	existing.OrgOverrideBody = body
+	existing.UpdatedAt = time.Now().UTC()
+	if existing.ReadOnly {
+		// Sidecar-write for builtins.
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		path := filepath.Join(s.dir, id+".override.json")
+		data, _ := json.MarshalIndent(map[string]string{
+			"override_body": body,
+		}, "", "  ")
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			return nil, err
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			return nil, err
+		}
+		// Mutate the in-memory builtin so future Get/List reflect it.
+		for i := range s.builtins {
+			if s.builtins[i].ID == id {
+				s.builtins[i].OrgOverrideBody = body
+				s.builtins[i].UpdatedAt = existing.UpdatedAt
+				break
+			}
+		}
+		return existing, nil
+	}
+	if err := s.save(existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
+// ClearOverride removes the Layer-2 override and reverts to upstream.
+func (s *Store) ClearOverride(id string) (*Skill, error) {
+	return s.SetOverride(id, "")
 }
 
 // Delete removes a user-defined Skill. Builtins → ErrReadOnly.
