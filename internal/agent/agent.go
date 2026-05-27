@@ -41,11 +41,25 @@ type Agent struct {
 	// /workspace inside every session attached to this agent.
 	PVCHandle string `json:"pvc_handle"`
 
-	// #194 — Skill IDs loaded onto this agent. First entry is the
-	// PRIMARY skill (drives system prompt + default tools + stat
-	// sheet); subsequent entries augment for multi-hat solo work.
-	// Order matters; empty slice = "raw agent, no skill assigned".
+	// #194 (architect 2026-05-28 FINAL+) — Role this agent fills.
+	// Refs internal/roles (12 builtins) or "user-<uuid>" for custom.
+	// Drives the agent's PrimaryPrompt (identity + scope). Empty =
+	// "raw agent, no role assigned" — legal but discouraged; default
+	// is "generalist" when unspecified at spawn time.
+	RoleID string `json:"role_id,omitempty"`
+
+	// #194 — Skill IDs OWNED by this agent on its team. Refs
+	// internal/skills (10 LEAN builtins) or "user-<uuid>" for custom.
+	// These are the engineering practices composed onto the role's
+	// PrimaryPrompt as Layer 2 of the 3-layer context model. Per-skill
+	// scope can be narrowed via OwnedSkillsScope. Order is informational
+	// only; empty slice = "role with no practice chips".
 	Skills []string `json:"skills,omitempty"`
+
+	// #194 — Per-skill scope narrowing. Keyed by skill ID, value is
+	// scope hint (e.g. {"tdd": "backend"} for a full-stack-developer
+	// who has been narrowed to backend TDD on this team).
+	OwnedSkillsScope map[string]string `json:"owned_skills_scope,omitempty"`
 
 	// Lifecycle binding — tracks the operator that currently owns
 	// this agent. #173 (Handoff Protocol) was closed as not_planned
@@ -284,8 +298,9 @@ func (s *Store) SetLabel(id uuid.UUID, label string) error {
 	return s.Save(a)
 }
 
-// SetSkills replaces the agent's Skills list (#194). Order matters —
-// first entry is the primary skill driving system prompt composition.
+// SetSkills replaces the agent's OwnedSkills list (#194). Order is
+// informational only — the agent's identity comes from RoleID
+// (PrimaryPrompt); skills are composable disciplines layered on top.
 func (s *Store) SetSkills(id uuid.UUID, skillIDs []string) error {
 	a, err := s.Get(id)
 	if err != nil {
@@ -295,6 +310,46 @@ func (s *Store) SetSkills(id uuid.UUID, skillIDs []string) error {
 		return fmt.Errorf("agent.SetSkills: %s not found", id)
 	}
 	a.Skills = skillIDs
+	return s.Save(a)
+}
+
+// SetRole sets the agent's RoleID (#194 architect 2026-05-28 FINAL+).
+// Empty string clears the role (agent reverts to "raw / no role").
+// Caller is responsible for ensuring the role exists in
+// internal/roles — this setter does NOT validate against the catalog
+// to keep the agent package roles-package-independent.
+func (s *Store) SetRole(id uuid.UUID, roleID string) error {
+	a, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		return fmt.Errorf("agent.SetRole: %s not found", id)
+	}
+	a.RoleID = roleID
+	return s.Save(a)
+}
+
+// SetSkillScope sets a per-skill scope hint on the agent's
+// OwnedSkillsScope map. Pass empty string for `scope` to delete the
+// entry. Used by template-driven spawn to narrow a generalist skill
+// (e.g. tdd) to a specific area (frontend / backend / iac).
+func (s *Store) SetSkillScope(id uuid.UUID, skillID, scope string) error {
+	a, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		return fmt.Errorf("agent.SetSkillScope: %s not found", id)
+	}
+	if a.OwnedSkillsScope == nil {
+		a.OwnedSkillsScope = map[string]string{}
+	}
+	if scope == "" {
+		delete(a.OwnedSkillsScope, skillID)
+	} else {
+		a.OwnedSkillsScope[skillID] = scope
+	}
 	return s.Save(a)
 }
 

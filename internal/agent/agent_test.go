@@ -100,16 +100,17 @@ func TestAttachDetachSession(t *testing.T) {
 	}
 }
 
-// Verifies Skills field can be set + persists.
+// Verifies OwnedSkills field can be set + persists. Uses the 10 LEAN
+// skill IDs from #194 (architect 2026-05-28 FINAL+).
 func TestSetSkills(t *testing.T) {
 	s, _ := NewStore(t.TempDir())
 	a := New("claude-code", "skilled", "")
 	_ = s.Save(a)
-	if err := s.SetSkills(a.ID, []string{"architect", "implementer"}); err != nil {
+	if err := s.SetSkills(a.ID, []string{"tdd", "code-review"}); err != nil {
 		t.Fatalf("SetSkills: %v", err)
 	}
 	got, _ := s.Get(a.ID)
-	if len(got.Skills) != 2 || got.Skills[0] != "architect" || got.Skills[1] != "implementer" {
+	if len(got.Skills) != 2 || got.Skills[0] != "tdd" || got.Skills[1] != "code-review" {
 		t.Fatalf("Skills not persisted in order: %+v", got.Skills)
 	}
 	// Clear
@@ -119,6 +120,65 @@ func TestSetSkills(t *testing.T) {
 	got, _ = s.Get(a.ID)
 	if len(got.Skills) != 0 {
 		t.Fatalf("Skills not cleared: %+v", got.Skills)
+	}
+}
+
+// Verifies RoleID field can be set + persists (#194 — agent identity
+// is one Role + N owned Skills).
+func TestSetRole(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	a := New("claude-code", "role-test", "")
+	_ = s.Save(a)
+	if a.RoleID != "" {
+		t.Fatalf("new agent should have empty RoleID, got %q", a.RoleID)
+	}
+	if err := s.SetRole(a.ID, "backend-developer"); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	got, _ := s.Get(a.ID)
+	if got.RoleID != "backend-developer" {
+		t.Fatalf("RoleID not persisted: %q", got.RoleID)
+	}
+	// Clear
+	if err := s.SetRole(a.ID, ""); err != nil {
+		t.Fatalf("SetRole(empty): %v", err)
+	}
+	got, _ = s.Get(a.ID)
+	if got.RoleID != "" {
+		t.Fatalf("RoleID not cleared: %q", got.RoleID)
+	}
+}
+
+// Verifies OwnedSkillsScope set / overwrite / delete semantics.
+func TestSetSkillScope(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	a := New("claude-code", "scope-test", "")
+	_ = s.Save(a)
+
+	if err := s.SetSkillScope(a.ID, "tdd", "backend"); err != nil {
+		t.Fatalf("SetSkillScope: %v", err)
+	}
+	got, _ := s.Get(a.ID)
+	if got.OwnedSkillsScope["tdd"] != "backend" {
+		t.Fatalf("scope not set: %+v", got.OwnedSkillsScope)
+	}
+
+	// Overwrite
+	if err := s.SetSkillScope(a.ID, "tdd", "frontend"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get(a.ID)
+	if got.OwnedSkillsScope["tdd"] != "frontend" {
+		t.Fatalf("scope not overwritten: %+v", got.OwnedSkillsScope)
+	}
+
+	// Delete via empty scope
+	if err := s.SetSkillScope(a.ID, "tdd", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get(a.ID)
+	if _, exists := got.OwnedSkillsScope["tdd"]; exists {
+		t.Fatalf("empty scope should delete entry, got %+v", got.OwnedSkillsScope)
 	}
 }
 
