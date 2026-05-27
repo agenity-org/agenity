@@ -28,7 +28,13 @@
     loading = true;
     error = '';
     try {
-      const url = force ? `/api-v08/v1/discovery/${encodeURIComponent(tokenID)}/refresh` : `/api-v08/v1/discovery/?token-id=${encodeURIComponent(tokenID)}`;
+      // #200 Bug 6 fix: discovery API expects {token-id} as PATH
+      // segment per #195 contract, NOT as ?token-id= query param.
+      // Sending the legacy query-param form returned 400 "token-id
+      // required" because the path segment was empty.
+      const url = force
+        ? `/api-v08/v1/discovery/${encodeURIComponent(tokenID)}/refresh`
+        : `/api-v08/v1/discovery/${encodeURIComponent(tokenID)}`;
       const r = await fetch(url, { method: force ? 'POST' : 'GET' });
       if (!r.ok) {
         const t = await r.text();

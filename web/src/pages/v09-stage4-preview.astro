@@ -45,11 +45,11 @@ import '../styles/global.css';
           repo: { kind: 'builtin', full_name: 'chepherd-admin/scrum-walk', default_branch: 'main' },
           teamName: 'scrum-team',
           members: [
-            { label: 'po-1', primary_skill: 'product-owner', additional_skills: [], account_class: 'anthropic' },
-            { label: 'arch-1', primary_skill: 'architect', additional_skills: [], account_class: 'anthropic' },
-            { label: 'impl-1', primary_skill: 'implementer', additional_skills: [], account_class: 'anthropic' },
-            { label: 'qa-1', primary_skill: 'qa-tester', additional_skills: [], account_class: 'anthropic' },
-            { label: 'shepherd-1', primary_skill: 'shepherd', additional_skills: [], account_class: 'anthropic' },
+            { label: 'po-1',   role_id: 'product-owner',        owned_skills: ['spec-driven','planning'], account_class: 'anthropic' },
+            { label: 'sm-1',   role_id: 'scrum-master',         owned_skills: ['team-orchestration','process-coaching'], account_class: 'anthropic' },
+            { label: 'arch-1', role_id: 'architect',            owned_skills: ['planning','api-design','security-review','code-review'], account_class: 'anthropic' },
+            { label: 'impl-1', role_id: 'full-stack-developer', owned_skills: ['tdd','debugging','api-design','e2e-testing'], account_class: 'anthropic' },
+            { label: 'qa-1',   role_id: 'qa-engineer',          owned_skills: ['e2e-testing'], account_class: 'anthropic' },
           ]
         }}
       />

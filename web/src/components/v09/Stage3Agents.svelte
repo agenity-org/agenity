@@ -41,6 +41,19 @@
   let skillPickerForAgent = $state(-1); // -1 = closed; ≥0 = add owned skill to agent i
   let addPickerOpen = $state(false);
 
+  // #200 Bug 7: per-agent AgentType picker (default claude-code).
+  // The agent type drives which CLI binary spawns inside the pod.
+  // Account-class on the Account dropdown follows the agent type
+  // (anthropic for claude-code; openai for codex; etc.).
+  const AGENT_TYPES = [
+    { id: 'claude-code', label: 'claude-code (default)' },
+    { id: 'codex',       label: 'codex' },
+    { id: 'aider',       label: 'aider' },
+    { id: 'opencode',    label: 'opencode' },
+    { id: 'gemini-cli',  label: 'gemini-cli' },
+    { id: 'goose',       label: 'goose' },
+  ];
+
   async function loadSkills() {
     try {
       const r = await fetch('/api-v08/v1/skills');
@@ -216,6 +229,25 @@
           <button type="button" class="x" onclick={() => removeAgent(i)} aria-label="remove">×</button>
         </header>
 
+        <label class="row">
+          <span class="row-label">Agent</span>
+          <select
+            onchange={(e) => {
+              const v = e.target.value;
+              agents[i] = {
+                ...agents[i],
+                agent_type: v,
+                account_class: (v === 'codex') ? 'openai' : 'anthropic',
+                account_id: '',
+              };
+            }}
+          >
+            {#each AGENT_TYPES as at}
+              <option value={at.id} selected={a.agent_type === at.id}>{at.label}</option>
+            {/each}
+          </select>
+        </label>
+
         <div class="row">
           <div class="row-label">Role</div>
           <div class="chips">
@@ -381,25 +413,37 @@
   .empty-state p { color: var(--fg-muted, #888); margin: 0 0 0.6rem 0; }
   .primary { background: var(--accent-2, #87ceeb); border: 0; color: #0a0a0a; padding: 0.45rem 0.95rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
 
-  .agents { list-style: none; padding: 0; margin: 0; }
-  .card { background: var(--bg-elevated, #1a1a1a); border: 1px solid var(--border, #2a2a2a); border-radius: 8px; padding: 0.65rem 0.85rem; margin-bottom: 0.6rem; }
-  .card header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
-  .a-label { font-weight: 600; }
+  /* #200 Bug 4: 3-per-row compact card grid (not full-width rows).
+     Squad (8 agents) renders as 3+3+2 in a 3-col layout. */
+  .agents {
+    list-style: none; padding: 0; margin: 0;
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+  .card {
+    background: var(--bg-elevated, #1a1a1a); border: 1px solid var(--border, #2a2a2a);
+    border-radius: 6px; padding: 0.5rem 0.65rem; margin: 0;
+    display: flex; flex-direction: column; gap: 0.3rem;
+    font-size: 0.78rem; min-width: 0;
+  }
+  .card header { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.15rem 0; }
+  .a-label { font-weight: 600; font-size: 0.82rem; }
   .a-state { font-size: 0.78rem; color: var(--fg-muted, #aaa); margin-left: 0.3rem; }
   .x { margin-left: auto; background: transparent; border: 0; color: var(--fg-muted, #888); cursor: pointer; font-size: 1.05rem; padding: 0 0.3rem; }
   .x:hover { color: var(--danger, #e74c3c); }
 
-  .row { display: flex; align-items: flex-start; gap: 0.65rem; margin-bottom: 0.5rem; }
-  .row-label { color: var(--fg-muted, #888); font-size: 0.78rem; min-width: 70px; padding-top: 0.3rem; }
-  .row select { flex: 1; padding: 0.35rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
-  .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-  .chip { display: inline-flex; align-items: center; gap: 0.32rem; background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a); color: var(--fg, #f5f5f5); padding: 0.28rem 0.65rem; border-radius: 999px; font-size: 0.82rem; cursor: pointer; font: inherit; }
+  /* #200 Bug 4: compact rows for 3-per-row grid */
+  .row { display: flex; align-items: flex-start; gap: 0.4rem; margin: 0; min-width: 0; }
+  .row-label { color: var(--fg-muted, #888); font-size: 0.7rem; min-width: 44px; padding-top: 0.2rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .row select { flex: 1; min-width: 0; padding: 0.18rem 0.32rem; border-radius: 3px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; font-size: 0.74rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.22rem; flex: 1; min-width: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 0.22rem; background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a); color: var(--fg, #f5f5f5); padding: 0.12rem 0.4rem; border-radius: 999px; font-size: 0.72rem; cursor: pointer; font: inherit; }
   .chip.role { background: rgba(135,206,235,0.18); border-color: var(--accent-2, #87ceeb); color: var(--accent-2, #87ceeb); font-weight: 600; }
   .chip.add { color: var(--accent-2, #87ceeb); border-style: dashed; }
-  .chip em { color: var(--fg-muted, #aaa); font-style: italic; font-size: 0.7rem; }
+  .chip em { color: var(--fg-muted, #aaa); font-style: italic; font-size: 0.62rem; }
   .chip-x { background: transparent; border: 0; color: inherit; cursor: pointer; padding: 0; font: inherit; opacity: 0.7; }
   .chip-x:hover { opacity: 1; }
-  .resume-hint { color: var(--fg-faint, #666); font-size: 0.78rem; margin: 0.25rem 0 0 0; font-style: italic; }
+  .resume-hint { color: var(--fg-faint, #666); font-size: 0.68rem; margin: 0.15rem 0 0 0; font-style: italic; }
 
   .footer-hint { color: var(--fg-muted, #888); font-size: 0.82rem; text-align: center; margin: 0.7rem 0 0 0; font-style: italic; }
 

@@ -173,38 +173,46 @@
 
   {#if mode === 'builtin'}
     <section class="below">
-      <h3>Existing sandboxes</h3>
+      <h3>Existing repos</h3>
       {#if builtinSandboxes.length === 0}
-        <p class="hint">No sandboxes yet. Name one below and click Create.</p>
+        <p class="hint">No repos yet. Name a new one below — valid name auto-commits.</p>
       {:else}
-        <ul class="sandboxes">
+        <div class="sandbox-grid">
           {#each builtinSandboxes as p}
-            <li>
-              <button
-                type="button"
-                class="sandbox-row"
-                class:selected={selectedRepo?.full_name?.endsWith('/' + (p.display_name || p.id))}
-                onclick={() => pickBuiltin(p.display_name || p.id)}
-              >
-                <span class="sand-name">⌘ {p.display_name || p.id}</span>
-                <span class="sand-when">embedded · {new Date(p.registered_at || Date.now()).toLocaleDateString()}</span>
-              </button>
-            </li>
+            <button
+              type="button"
+              class="sandbox-card"
+              class:selected={selectedRepo?.full_name?.endsWith('/' + (p.display_name || p.id))}
+              onclick={() => pickBuiltin(p.display_name || p.id)}
+            >
+              <span class="sand-name">⌘ {p.display_name || p.id}</span>
+              <span class="sand-when">{new Date(p.registered_at || Date.now()).toLocaleDateString()}</span>
+            </button>
           {/each}
-        </ul>
+        </div>
       {/if}
 
       <div class="newsandbox">
-        <label for="new-sb">Or create a new one</label>
-        <div class="newsandbox-row">
-          <input id="new-sb" type="text" bind:value={newSandboxName} placeholder="my-sandbox" />
-          <button
-            type="button"
-            class="primary"
-            disabled={!newSandboxName.trim()}
-            onclick={() => pickBuiltin(newSandboxName.trim())}
-          >Create</button>
-        </div>
+        <label for="new-sb">Or create a new repo</label>
+        <input
+          id="new-sb"
+          type="text"
+          bind:value={newSandboxName}
+          placeholder="my-repo"
+          onblur={() => {
+            const v = newSandboxName.trim();
+            if (/^[a-z0-9-]{3,40}$/.test(v)) pickBuiltin(v);
+          }}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              const v = newSandboxName.trim();
+              if (/^[a-z0-9-]{3,40}$/.test(v)) pickBuiltin(v);
+            }
+          }}
+        />
+        {#if newSandboxName && !/^[a-z0-9-]{3,40}$/.test(newSandboxName.trim())}
+          <p class="hint name-hint">Use lowercase letters, digits, hyphens — 3 to 40 chars.</p>
+        {/if}
       </div>
 
       {#if selectedRepo?.kind === 'builtin'}
@@ -310,21 +318,26 @@
   .card .name { font-weight: 600; font-size: 0.92rem; }
   .card .sub { color: var(--fg-muted, #888); font-size: 0.74rem; }
   .below { background: var(--bg-elevated, #1a1a1a); border: 1px solid var(--border, #2a2a2a); border-radius: 8px; padding: 0.85rem 1rem; }
-  .sandboxes { list-style: none; padding: 0; margin: 0 0 0.75rem 0; }
-  .sandbox-row {
-    display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left;
-    background: transparent; border: 1px solid var(--border, #2a2a2a);
-    color: var(--fg, #f5f5f5); padding: 0.42rem 0.7rem; border-radius: 4px;
-    cursor: pointer; font: inherit; margin-bottom: 0.32rem;
+  /* #200 Bug 5: compact 3-per-row card grid for existing repos */
+  .sandbox-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem;
+    margin: 0 0 0.75rem 0;
   }
-  .sandbox-row:hover { border-color: var(--accent-2, #87ceeb); }
-  .sandbox-row.selected { background: rgba(135,206,235,0.12); border-color: var(--accent-2, #87ceeb); }
-  .sand-name { font-weight: 600; flex: 1; }
-  .sand-when { color: var(--fg-muted, #888); font-size: 0.78rem; }
+  .sandbox-card {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0.2rem;
+    background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a);
+    color: var(--fg, #f5f5f5); padding: 0.45rem 0.6rem; border-radius: 5px;
+    cursor: pointer; font: inherit; text-align: left;
+    transition: border-color 80ms;
+  }
+  .sandbox-card:hover { border-color: var(--accent-2, #87ceeb); }
+  .sandbox-card.selected { background: rgba(135,206,235,0.12); border-color: var(--accent-2, #87ceeb); }
+  .sand-name { font-weight: 600; font-size: 0.84rem; }
+  .sand-when { color: var(--fg-muted, #888); font-size: 0.72rem; }
   .newsandbox { margin-top: 0.6rem; }
   .newsandbox label { color: var(--fg-muted, #888); font-size: 0.82rem; margin-bottom: 0.3rem; display: block; }
-  .newsandbox-row { display: flex; gap: 0.5rem; }
-  .newsandbox input { flex: 1; padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
+  .newsandbox input { width: 100%; box-sizing: border-box; padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
+  .name-hint { color: var(--danger, #e74c3c); font-size: 0.74rem; margin: 0.3rem 0 0 0; font-style: italic; }
   .primary { background: var(--accent-2, #87ceeb); border: 0; color: #0a0a0a; padding: 0.45rem 0.95rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
   .primary:disabled { opacity: 0.4; cursor: not-allowed; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.65rem; }
