@@ -43,7 +43,7 @@
   {/each}
 
   <!-- Axis spokes -->
-  {#each axes as _, i (i)}
+  {#each axes as a, i (a.label + '-spoke')}
     <line
       x1={cx} y1={cy}
       x2={gridPoint(i, axes.length, 1.0).x}
@@ -59,14 +59,14 @@
       class="data"
     />
     <!-- Data points -->
-    {#each axes as a, i (i)}
+    {#each axes as a, i (a.label + '-dot')}
       {@const p = pointFor(i, axes.length, a.value)}
       <circle cx={p.x} cy={p.y} r="3" class="data-dot" />
     {/each}
   {/if}
 
   <!-- Labels -->
-  {#each axes as a, i (i)}
+  {#each axes as a, i (a.label + '-lbl')}
     {@const l = labelFor(i, axes.length)}
     <text x={l.x} y={l.y} class="label" text-anchor={l.x < cx - 4 ? 'end' : (l.x > cx + 4 ? 'start' : 'middle')}>
       {a.label}
