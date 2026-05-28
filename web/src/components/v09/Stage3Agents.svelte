@@ -27,11 +27,15 @@
     teamName:    $bindable — defaults to template-derived slug
 -->
 <script>
+  import ClaudeAccountConnect from './ClaudeAccountConnect.svelte';
+
   let {
     template = null,
     agents = $bindable([]),
     teamName = $bindable(''),
   } = $props();
+
+  let showClaudeConnect = $state(false);
 
   let allSkills = $state([]);
   let allRoles = $state([]);
@@ -164,6 +168,28 @@
   // owned by anyone on the team. Per architect's #200 Bug 3 spec:
   // Solo (1 agent) excludes team_only skills (team-orchestration +
   // process-coaching) → 8/8 ✓; Pair+ counts all 10 → up to 10/10.
+  // Any agent expects a claude-anthropic account but the vault has
+  // none? Surface the inline OAuth-connect flow so the operator
+  // doesn't have to leave the wizard.
+  const claudeVaultEntries = $derived(vault.filter(v => v.provider === 'claude-oauth' || v.provider === 'anthropic'));
+  const needsClaudeAccount = $derived(
+    claudeVaultEntries.length === 0 &&
+    agents.some(a => (a.agent_type || 'claude-code') === 'claude-code')
+  );
+
+  async function reloadVaultAndSelect(newID) {
+    await loadVault();
+    // Preselect the new vault entry for any claude-code agent
+    // missing an account_id.
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      if ((a.agent_type || 'claude-code') === 'claude-code' && !a.account_id) {
+        agents[i] = { ...a, account_id: newID };
+      }
+    }
+    showClaudeConnect = false;
+  }
+
   // Cyan check at full coverage, amber warn below.
   const coverage = $derived.by(() => {
     const owned = new Set();
@@ -193,6 +219,25 @@
     <span>Team name</span>
     <input type="text" bind:value={teamName} placeholder="my-team" />
   </label>
+
+  {#if needsClaudeAccount}
+    <section class="claude-banner" class:expanded={showClaudeConnect}>
+      {#if !showClaudeConnect}
+        <header>
+          <span class="banner-icon">⚓</span>
+          <span class="banner-text">
+            Your team uses <strong>claude-code</strong> but no Claude account is connected.
+          </span>
+          <button class="primary" onclick={() => showClaudeConnect = true}>+ Connect Claude account</button>
+        </header>
+      {:else}
+        <ClaudeAccountConnect
+          oncomplete={(id) => reloadVaultAndSelect(id)}
+          oncancel={() => showClaudeConnect = false}
+        />
+      {/if}
+    </section>
+  {/if}
 
   {#if allSkills.length > 0}
     <section class="coverage" class:warn={!coverage.ok}>
@@ -379,6 +424,20 @@
   .field { display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1rem; }
   .field > span { color: var(--fg-muted, #888); font-size: 0.85rem; }
   .field input { flex: 1; padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
+
+  /* Claude-account connect banner (top of Stage 3 when vault has no
+     claude credentials AND any agent is claude-code). */
+  .claude-banner { margin: 0 0 0.85rem 0; }
+  .claude-banner header {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.55rem 0.8rem;
+    background: rgba(255, 193, 7, 0.06); border: 1px solid rgba(255, 193, 7, 0.3);
+    border-radius: 5px;
+  }
+  .claude-banner.expanded header { background: transparent; border: 0; padding: 0; }
+  .banner-icon { color: #f7b500; font-size: 1rem; }
+  .banner-text { flex: 1; font-size: 0.85rem; color: var(--fg, #f5f5f5); }
+  .primary { background: var(--accent-2, #87ceeb); border: 0; color: #0a0a0a; padding: 0.4rem 0.85rem; border-radius: 4px; cursor: pointer; font-weight: 600; font: inherit; font-size: 0.82rem; }
 
   /* Coverage panel — sits above the agent list */
   .coverage {
