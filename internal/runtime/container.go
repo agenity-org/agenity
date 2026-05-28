@@ -185,8 +185,15 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	hostSecrets := toHostPath(agentSecretsDir)
 	hostCwd := toHostPath(cwd)
 
+	// --replace: if a previous container with this name still exists
+	// (running OR exited but not cleaned up), stop + remove it before
+	// the new spawn. Without this, every re-spawn of the same agent
+	// name fails with exit 125 ("name is already in use") — operator
+	// hit this directly during 2026-05-28 walk after my own test runs
+	// left stale containers behind. --rm covers cleanup-on-exit;
+	// --replace covers reuse-after-prior-leak. Both are needed.
 	podArgs := append(podmanArgs(),
-		"run", "--rm", "--interactive", "--tty",
+		"run", "--rm", "--replace", "--interactive", "--tty",
 		"--name", "chepherd-agent-"+agentName,
 		// Default bridge network — sibling to chepherd on host podman.
 		"--network", "bridge",
