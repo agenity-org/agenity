@@ -57,7 +57,22 @@ func NewStore(stateDir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("roles.NewStore: %w", err)
 	}
-	return &Store{dir: dir, builtins: builtinSet()}, nil
+	s := &Store{dir: dir, builtins: builtinSet()}
+	// Reapply persisted default_skills overrides for builtins.
+	for i := range s.builtins {
+		path := filepath.Join(dir, s.builtins[i].ID+".default_skills.json")
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var rec struct {
+			DefaultSkills []string `json:"default_skills"`
+		}
+		if json.Unmarshal(b, &rec) == nil && rec.DefaultSkills != nil {
+			s.builtins[i].DefaultSkills = rec.DefaultSkills
+		}
+	}
+	return s, nil
 }
 
 // List returns builtins (sort_order asc) then user-defined (updated_at desc).
@@ -157,6 +172,62 @@ func (s *Store) Update(id string, patch Role) (*Role, error) {
 		existing.DefaultSkills = patch.DefaultSkills
 	}
 	existing.UpdatedAt = time.Now().UTC()
+	if err := s.save(existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
+// SetDefaultSkills updates the role's DefaultSkills list. Unlike
+// Update, this is ALLOWED on builtin roles — operators routinely
+// tune which skills each role brings to a team (e.g. via the
+// 🎮 roles matrix widget). The role's identity (name, prompt,
+// category) stays code-defined and ReadOnly; only the skill
+// assignment is operator-tunable.
+//
+// For builtins, the override lives in a sidecar
+// $stateDir/roles-registry/{id}.default_skills.json — the
+// in-memory builtin gets its DefaultSkills mutated AND the sidecar
+// is reloaded on next boot (see NewStore).
+//
+// For user-defined roles, the update lands on the disk file
+// directly (no sidecar needed).
+func (s *Store) SetDefaultSkills(id string, defaults []string) (*Role, error) {
+	existing, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, ErrNotFound
+	}
+	if defaults == nil {
+		defaults = []string{}
+	}
+	existing.DefaultSkills = defaults
+	existing.UpdatedAt = time.Now().UTC()
+	if existing.ReadOnly {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		path := filepath.Join(s.dir, id+".default_skills.json")
+		data, _ := json.MarshalIndent(map[string][]string{
+			"default_skills": defaults,
+		}, "", "  ")
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			return nil, err
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			return nil, err
+		}
+		for i := range s.builtins {
+			if s.builtins[i].ID == id {
+				s.builtins[i].DefaultSkills = defaults
+				s.builtins[i].UpdatedAt = existing.UpdatedAt
+				break
+			}
+		}
+		return existing, nil
+	}
 	if err := s.save(existing); err != nil {
 		return nil, err
 	}

@@ -18,6 +18,7 @@
   import WidgetAgentSkills from './widgets/WidgetAgentSkills.svelte';
   import WidgetAgentDetails from './widgets/WidgetAgentDetails.svelte';
   import WidgetAccounts from './widgets/WidgetAccounts.svelte';
+  import WidgetRoleMatrix from './widgets/WidgetRoleMatrix.svelte';
   import WidgetAgentIdentity from './widgets/WidgetAgentIdentity.svelte';
   import WidgetAgentRuntime from './widgets/WidgetAgentRuntime.svelte';
   import WidgetCanon from './widgets/WidgetCanon.svelte';
@@ -77,6 +78,7 @@
     'agent-skills': '🎮 skills',
     'kanban': '⊞ kanban',
     'accounts': '⚓ accounts',
+    'role-matrix': '🎮 roles',
   };
 
   // Per-pane derived agent for the terminal widget header chips.
@@ -205,6 +207,8 @@
         <WidgetKanban agent={selectedAgentObject()} {sessions} />
       {:else if node.widget === 'accounts'}
         <WidgetAccounts />
+      {:else if node.widget === 'role-matrix'}
+        <WidgetRoleMatrix />
       {:else}
         <div class="empty">widget: {node.widget}</div>
       {/if}

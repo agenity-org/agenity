@@ -212,34 +212,43 @@
     showClaudeConnect = false;
   }
 
-  // Cyan check at full coverage, amber warn below.
-  const coverage = $derived.by(() => {
-    const owned = new Set();
-    for (const a of agents) {
-      for (const sk of a.owned_skills || []) owned.add(sk);
+  // Team-level account picker. Single dropdown applies to every
+  // claude-code agent in the team. Operator's 2026-05-28 simplification
+  // ask: 99% of teams use one Claude account; per-agent override is
+  // rare and can come back later if needed.
+  let teamAccountID = $state('');
+  const teamAccountOptions = $derived(
+    vault.filter(v => v.provider === 'claude-oauth' || v.provider === 'anthropic-api' || v.provider === 'anthropic')
+  );
+  // When the operator picks an account, propagate it to every agent
+  // so the launch payload threads claude_token_id correctly.
+  $effect(() => {
+    if (!agents.length) return;
+    for (let i = 0; i < agents.length; i++) {
+      if (agents[i].account_id !== teamAccountID) {
+        agents[i] = { ...agents[i], account_id: teamAccountID };
+      }
     }
-    const teamSize = agents.length;
-    const builtins = allSkills.filter(s => s.read_only);
-    const applicable = builtins.filter(s => !(s.team_only && teamSize < 2));
-    const total = applicable.length || 10;
-    const covered = applicable.filter(s => owned.has(s.id));
-    const missing = applicable.filter(s => !owned.has(s.id));
-    return {
-      total,
-      coveredCount: covered.length,
-      missing,
-      ok: covered.length === total,
-    };
   });
 </script>
 
 <div class="stage3">
   <h2>Who's on the team?</h2>
-  <p class="lead">Each agent has ONE role + N owned skills. Re-using a label resumes that agent's prior PVC.</p>
+  <p class="lead">Re-using a label resumes that agent's prior PVC. Tune which skills each role brings via the <strong>🎮 roles</strong> dashboard pane.</p>
 
   <label class="field">
     <span>Team name</span>
     <input type="text" bind:value={teamName} placeholder="my-team" />
+  </label>
+
+  <label class="field">
+    <span>Account</span>
+    <select bind:value={teamAccountID}>
+      <option value="">(default — newest connected Claude account)</option>
+      {#each teamAccountOptions as v}
+        <option value={v.id}>⚓ {v.label || v.id}</option>
+      {/each}
+    </select>
   </label>
 
   {#if needsClaudeAccount}
@@ -255,29 +264,9 @@
       {:else}
         <ClaudeAccountConnect
           autostart={true}
-          oncomplete={(id) => reloadVaultAndSelect(id)}
+          oncomplete={(id) => { teamAccountID = id; reloadVaultAndSelect(id); }}
           oncancel={() => showClaudeConnect = false}
         />
-      {/if}
-    </section>
-  {/if}
-
-  {#if allSkills.length > 0}
-    <section class="coverage" class:warn={!coverage.ok}>
-      <header>
-        <span class="cov-icon" aria-hidden="true">{coverage.ok ? '✓' : '⚠'}</span>
-        <span class="cov-text">
-          <strong>{coverage.coveredCount}/{coverage.total}</strong> LEAN skills covered
-          {#if !coverage.ok} — your team will not own:{/if}
-        </span>
-      </header>
-      {#if !coverage.ok && coverage.missing.length}
-        <ul class="cov-missing">
-          {#each coverage.missing as m}
-            <li>{m.name}</li>
-          {/each}
-        </ul>
-        <p class="cov-hint">This is OK — Launch stays enabled. Add a chip below if you want full coverage.</p>
       {/if}
     </section>
   {/if}
@@ -294,63 +283,17 @@
       {@const role = roleByID(a.role_id)}
       {@const resume = resumeMatch(a.label)}
       <li class="card">
-        <header>
-          <span class="a-label">{a.label}</span>
-          <button
-            type="button"
-            class="chip role"
-            onclick={() => pickerOpenForSlot = i}
-            title="Change role"
-          >{role ? role.name : (a.role_id || 'pick role')}</button>
-          <span class="a-state" title={resume ? 'resuming prior PVC' : 'fresh PVC will be provisioned'}>
-            {#if resume}↻{:else}★{/if}
-          </span>
-          <button type="button" class="x" onclick={() => removeAgent(i)} aria-label="remove">×</button>
-        </header>
-
-        <div class="skill-chips">
-          {#each a.owned_skills as sid}
-            {@const s = skillByID(sid)}
-            {#if s}
-              <span class="chip" title={a.owned_skills_scope?.[sid] ? `${s.name} (${a.owned_skills_scope[sid]})` : s.name}>
-                {s.name}
-                <button type="button" class="chip-x" onclick={() => removeOwnedSkill(i, sid)} aria-label="remove skill">×</button>
-              </span>
-            {/if}
-          {/each}
-          <button type="button" class="chip add" onclick={() => skillPickerForAgent = i}>+</button>
-        </div>
-
-        <details class="advanced">
-          <summary>advanced</summary>
-          <label class="row">
-            <span class="row-label">Agent</span>
-            <select
-              onchange={(e) => {
-                const v = e.target.value;
-                agents[i] = {
-                  ...agents[i],
-                  agent_type: v,
-                  account_class: (v === 'codex') ? 'openai' : 'anthropic',
-                  account_id: '',
-                };
-              }}
-            >
-              {#each AGENT_TYPES as at}
-                <option value={at.id} selected={a.agent_type === at.id}>{at.label}</option>
-              {/each}
-            </select>
-          </label>
-          <label class="row">
-            <span class="row-label">Account</span>
-            <select onchange={(e) => setAccount(i, e.target.value)}>
-              <option value="">(default — newest matching {a.account_class})</option>
-              {#each vaultForAgent(a) as v}
-                <option value={v.id} selected={v.id === a.account_id}>⚓ {v.label || v.id}</option>
-              {/each}
-            </select>
-          </label>
-        </details>
+        <span class="a-label">{a.label}</span>
+        <button
+          type="button"
+          class="chip role"
+          onclick={() => pickerOpenForSlot = i}
+          title="Change role"
+        >{role ? role.name : (a.role_id || 'pick role')}</button>
+        <span class="a-state" title={resume ? 'resuming prior PVC' : 'fresh PVC will be provisioned'}>
+          {#if resume}↻{:else}★{/if}
+        </span>
+        <button type="button" class="x" onclick={() => removeAgent(i)} aria-label="remove">×</button>
       </li>
     {/each}
   </ul>

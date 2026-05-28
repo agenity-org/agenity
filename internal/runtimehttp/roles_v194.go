@@ -16,6 +16,7 @@ package runtimehttp
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -77,9 +78,40 @@ func (s *Server) roleByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, role)
 	case http.MethodPut:
+		// Decode twice: once into the typed struct (for Update),
+		// once into a raw map so we can detect default_skills-only
+		// patches and route them through SetDefaultSkills (which is
+		// allowed on builtin roles — operators tune which skills a
+		// role brings to a team via the 🎮 roles matrix widget).
+		raw, _ := io.ReadAll(r.Body)
+		var rawMap map[string]any
+		_ = json.Unmarshal(raw, &rawMap)
 		var patch roles.Role
-		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		if err := json.Unmarshal(raw, &patch); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		onlyDefaults := false
+		if len(rawMap) > 0 {
+			onlyDefaults = true
+			for k := range rawMap {
+				if k != "default_skills" {
+					onlyDefaults = false
+					break
+				}
+			}
+		}
+		if onlyDefaults && patch.DefaultSkills != nil {
+			upd, err := s.roles.SetDefaultSkills(id, patch.DefaultSkills)
+			if err != nil {
+				if errors.Is(err, roles.ErrNotFound) {
+					http.Error(w, "role not found", http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, upd)
 			return
 		}
 		upd, err := s.roles.Update(id, patch)
