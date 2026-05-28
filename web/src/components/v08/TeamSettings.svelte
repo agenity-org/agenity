@@ -17,6 +17,14 @@
   let canonDraft = $state('');
   let canonEditing = $state(false);
 
+  // Esc closes the modal. Operator request 2026-05-29.
+  $effect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose?.(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+
   async function loadCanon() {
     if (!team?.name) return;
     try {

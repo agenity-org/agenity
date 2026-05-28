@@ -93,6 +93,13 @@
     { label: 'Accounts' },
     { label: 'Launch' },
   ];
+
+  // Esc closes the wizard. Operator request 2026-05-29.
+  $effect(() => {
+    function onKey(e) { if (e.key === 'Escape') onclose?.(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 </script>
 
 <div class="wiz">

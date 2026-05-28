@@ -38,6 +38,14 @@
   let renaming = $state(false);
   let renameDraft = $state(agent?.name || '');
 
+  // Esc closes the modal. Operator request 2026-05-29.
+  $effect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose?.(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+
   // Vault / Accounts state
   let vaultCreds = $state([]);
   let vaultProviders = $state([]);

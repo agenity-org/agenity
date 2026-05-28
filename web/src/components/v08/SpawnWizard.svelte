@@ -17,6 +17,14 @@
   let { onClose, onLaunched } = $props();
   const API = '/api-v08/v1';
 
+  // Esc closes the wizard. Operator request 2026-05-29.
+  $effect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose?.(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+
   // ── wizard state ──────────────────────────────────────────────────────────
   let stage = $state(1);
   let shape = $state(null);
