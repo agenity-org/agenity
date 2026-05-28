@@ -62,6 +62,37 @@
     menu = { tabIdx: i, level };
   }
   function closeMenu() { menu = null; }
+
+  // Role logos for agent cards (operator 2026-05-29: 'didnt show the
+  // icons of the roles accordingly'). Same Lucide-style set used on
+  // Stage 1 of the spawn wizard so the visual language is consistent.
+  const ROLE_LOGO = {
+    'product-owner':        '<rect x="5" y="4" width="14" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 4v2h6V4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'architect':            '<path d="M3 21l9-18 9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M7 13h10" fill="none" stroke="currentColor" stroke-width="2"/>',
+    'tech-lead':            '<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
+    'scrum-master':         '<path d="M21 12a9 9 0 1 1-3-6.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M21 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'generalist':           '<circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 22a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2"/>',
+    'full-stack-developer': '<polyline points="8,18 2,12 8,6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="16,6 22,12 16,18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'frontend-developer':   '<rect x="2" y="4" width="20" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 22h8M12 18v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'backend-developer':    '<rect x="3" y="4" width="18" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="18" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="7" r="0.8" fill="currentColor"/><circle cx="7" cy="17" r="0.8" fill="currentColor"/>',
+    'devops-sre':           '<circle cx="6" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 6h8M8 18h8M6 8.5v7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'qa-engineer':          '<path d="M12 2L4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5l-8-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'security-engineer':    '<rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2"/>',
+    'code-reviewer':        '<circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 21l-5.5-5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'qa':                   '<path d="M12 2L4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5l-8-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'frontend':             '<rect x="2" y="4" width="20" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 22h8M12 18v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'backend':              '<rect x="3" y="4" width="18" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="18" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="7" r="0.8" fill="currentColor"/><circle cx="7" cy="17" r="0.8" fill="currentColor"/>',
+    'devops':               '<circle cx="6" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 6h8M8 18h8M6 8.5v7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'security':             '<rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2"/>',
+    'full-stack':           '<polyline points="8,18 2,12 8,6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="16,6 22,12 16,18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  };
+  function roleIcon(s) {
+    // Sessions ship role_id post-v0.9.1; fall back to the agent's name
+    // (which IS the role kebab for builtin slots after the 5158a15
+    // rename) so we still get the right glyph for live agents.
+    const key = s?.role_id || s?.name || '';
+    return ROLE_LOGO[key] || ROLE_LOGO['generalist'];
+  }
   function snapshotActive() {
     if (node.kind !== 'pane') return;
     ensureTabs();
@@ -367,9 +398,11 @@
           <div class="pp-grid agents">
             {#each (sessions || []) as s}
               <button class="pp-card agent" on:click={() => setTabAgent(node.activeTab || 0, s.name)}>
-                <span class="pp-dot" class:live={!s.exited} class:dead={s.exited}>{s.exited ? '○' : '●'}</span>
+                <span class="pp-role-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="22" height="22">{@html roleIcon(s)}</svg>
+                </span>
                 <span class="pp-name">{s.name}</span>
-                {#if s.role && s.role !== 'worker'}<span class="pp-meta">{s.role}</span>{/if}
+                <span class="pp-dot" class:live={!s.exited} class:dead={s.exited}>{s.exited ? '○' : '●'}</span>
               </button>
             {/each}
             {#if (sessions || []).length === 0}
@@ -441,9 +474,11 @@
               <div class="pp-grid agents">
                 {#each (sessions || []) as s}
                   <button class="pp-card agent" on:click={() => setTabAgent(menu.tabIdx, s.name)}>
-                    <span class="pp-dot" class:live={!s.exited} class:dead={s.exited}>{s.exited ? '○' : '●'}</span>
+                    <span class="pp-role-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="22" height="22">{@html roleIcon(s)}</svg>
+                    </span>
                     <span class="pp-name">{s.name}</span>
-                    {#if s.role && s.role !== 'worker'}<span class="pp-meta">{s.role}</span>{/if}
+                    <span class="pp-dot" class:live={!s.exited} class:dead={s.exited}>{s.exited ? '○' : '●'}</span>
                   </button>
                 {/each}
                 {#if (sessions || []).length === 0}
@@ -503,10 +538,15 @@
      when the operator right-clicks a tab. Same component, two
      contexts. */
   .pane-picker.center {
-    height: 100%; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
+    height: 100%; width: 100%;
+    display: flex; flex-direction: column;
+    align-items: stretch; justify-content: center;
     padding: 1rem; gap: 0.85rem;
+    overflow-y: auto;
+    box-sizing: border-box;
   }
+  .pane-picker.center .pp-title { text-align: center; }
+  .pane-picker.center .pp-back { align-self: flex-start; }
   .pane-picker.overlay {
     position: absolute; inset: 0;
     background: rgba(0,0,0,0.4);
@@ -535,11 +575,13 @@
   }
   .pp-close:hover { color: #e74c3c; }
   .pp-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+    display: grid; width: 100%;
+    grid-template-columns: repeat(auto-fill, minmax(min(8rem, 100%), 1fr));
     gap: 0.5rem;
   }
-  .pp-grid.agents { grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); }
+  .pp-grid.agents {
+    grid-template-columns: repeat(auto-fill, minmax(min(10rem, 100%), 1fr));
+  }
   .pp-card {
     display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
     padding: 0.7rem 0.5rem; border-radius: 7px;
@@ -548,11 +590,12 @@
     transition: border-color 80ms, background 80ms;
   }
   .pp-card:hover { border-color: var(--accent-2, #87ceeb); background: rgba(135,206,235,0.06); }
-  .pp-card.agent { flex-direction: row; justify-content: flex-start; gap: 0.4rem; text-align: left; padding: 0.5rem 0.65rem; }
+  .pp-card.agent { flex-direction: row; align-items: center; justify-content: flex-start; gap: 0.55rem; text-align: left; padding: 0.5rem 0.65rem; }
   .pp-icon { font-size: 1.25rem; line-height: 1; color: var(--accent-2, #87ceeb); }
-  .pp-name { font-size: 0.82rem; font-weight: 600; }
-  .pp-meta { font-size: 0.7rem; color: var(--fg-muted); margin-left: auto; }
-  .pp-dot { font-size: 0.7rem; line-height: 1; }
+  .pp-role-icon { color: var(--accent-2, #87ceeb); line-height: 0; flex-shrink: 0; }
+  .pp-name { font-size: 0.82rem; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pp-meta { font-size: 0.7rem; color: var(--fg-muted); }
+  .pp-dot { font-size: 0.7rem; line-height: 1; margin-left: auto; flex-shrink: 0; }
   .pp-dot.live { color: #2ed573; }
   .pp-dot.dead { color: var(--fg-faint); }
   .pp-empty { grid-column: 1 / -1; color: var(--fg-muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; }
