@@ -660,7 +660,10 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			return resp
 		}
 		var a struct {
-			Name, Agent, Cwd, BriefOverride string `json:"name,omitempty"`
+			Name          string `json:"name,omitempty"`
+			Agent         string `json:"agent,omitempty"`
+			Cwd           string `json:"cwd,omitempty"`
+			BriefOverride string `json:"brief_override,omitempty"`
 		}
 		_ = json.Unmarshal(args, &a)
 		if a.Name == "" {
