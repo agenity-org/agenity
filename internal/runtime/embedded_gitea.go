@@ -73,13 +73,12 @@ func EnsureEmbeddedGitea(stateDir, repoName string) (*EmbeddedGiteaInfo, error) 
 
 	giteaStateDir = stateDir
 
-	// 1) Pick the podman storage root. Inside the chepherd pod we share
-	//    storage with agent containers so Gitea is reachable from them
-	//    via the same network.
-	podArgs := []string{}
-	if _, err := os.Stat(agentStorageRoot); err == nil {
-		podArgs = []string{"--root", agentStorageRoot, "--runroot", agentRunRoot}
-	}
+	// Embedded Gitea + every agent container run on the same host
+	// podman (sibling containers). podArgs is the flag prefix that
+	// every podman subcommand will receive — empty in dev mode (chepherd
+	// on host), or "--remote --url unix://..." when chepherd runs in a
+	// container talking to the host daemon via the bind-mounted socket.
+	podArgs := podmanArgs()[1:]
 
 	// 2) Are we already running? Use podman ps --filter.
 	if isGiteaRunning(podArgs) {

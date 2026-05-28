@@ -60,20 +60,73 @@ func DetectRuntime() ContainerRuntime {
 
 // ─── Podman ──────────────────────────────────────────────────────────────────
 
-// agentStorageRoot / agentRunRoot are the bind-mounted paths inside the
-// chepherd container where the pre-loaded agent image lives.
-// start.sh mounts AGENT_STORAGE to /var/lib/chepherd-agents; skopeo pre-
-// populates ${AGENT_STORAGE}/storage before the container starts.
-const (
-	agentStorageRoot = "/var/lib/chepherd-agents/storage"
-	agentRunRoot     = "/var/lib/chepherd-agents/run"
-)
-
-// PodmanRuntime spawns each agent as a Podman container managed by the
-// chepherd container's own internal podman (running as root inside a
-// --privileged outer container). The container is ephemeral (--rm); state
-// persists via bind mounts.
+// PodmanRuntime spawns each agent as a SIBLING container on the same
+// podman that runs chepherd itself. v0.8/v0.9 architecture: one
+// chepherd container + N agent containers, all visible to `podman ps`
+// on the host. When chepherd is itself containerised, it reaches the
+// host podman via the bind-mounted socket using the --remote flag.
+// scripts/start.sh sets up the socket bind-mount at
+// /run/host-podman/podman.sock.
+//
+// The earlier nested-podman design (commit f958359) put agent
+// containers inside chepherd's own filesystem at
+// /var/lib/chepherd-agents/storage — that broke the host visibility
+// contract and was a misread of issue #124 ("containerize chepherd
+// daemon"). Removed entirely.
 type PodmanRuntime struct{}
+
+// hostPodmanSocketPath is the path inside the chepherd container at
+// which the host's rootless podman socket is bind-mounted. Matches
+// scripts/start.sh. Empty if the file doesn't exist (= we're not
+// running inside the chepherd container; podman talks to its own
+// storage locally).
+const hostPodmanSocketPath = "/run/host-podman/podman.sock"
+
+// podmanArgs returns the argv prefix for invoking the podman CLI from
+// inside the chepherd container. When the bind-mounted host socket is
+// present, prefix with "--remote --url unix://..." so every podman
+// call lands on the host daemon. Otherwise return just ["podman"] so
+// dev-mode (chepherd running on the host directly) uses local storage.
+func podmanArgs() []string {
+	if _, err := os.Stat(hostPodmanSocketPath); err == nil {
+		return []string{"podman", "--remote", "--url", "unix://" + hostPodmanSocketPath}
+	}
+	return []string{"podman"}
+}
+
+// toHostPath translates a path that exists inside the chepherd
+// container (e.g. /home/chepherd/repos/foo) to the equivalent host
+// path (e.g. /home/openova/repos/foo) the host podman daemon will
+// see when constructing bind-mounts. Returns the input unchanged when
+// we're not running containerised (the host-state-dir env vars are
+// only set by scripts/start.sh when chepherd is itself in a pod).
+//
+// Mappings come from env vars set by scripts/start.sh:
+//
+//	CHEPHERD_HOST_STATE_DIR  ← inside: /home/chepherd/.local/state/chepherd
+//	CHEPHERD_HOST_REPOS_DIR  ← inside: /home/chepherd/repos
+//	CHEPHERD_HOST_CLAUDE_DIR ← inside: /home/chepherd/.claude
+func toHostPath(p string) string {
+	type mapping struct{ in, env string }
+	maps := []mapping{
+		{"/home/chepherd/.local/state/chepherd", "CHEPHERD_HOST_STATE_DIR"},
+		{"/home/chepherd/repos", "CHEPHERD_HOST_REPOS_DIR"},
+		{"/home/chepherd/.claude", "CHEPHERD_HOST_CLAUDE_DIR"},
+	}
+	for _, m := range maps {
+		host := os.Getenv(m.env)
+		if host == "" {
+			continue
+		}
+		if p == m.in {
+			return host
+		}
+		if strings.HasPrefix(p, m.in+"/") {
+			return host + p[len(m.in):]
+		}
+	}
+	return p
+}
 
 func (r *PodmanRuntime) Name() string { return "podman" }
 
@@ -116,42 +169,42 @@ func agentSecretsDirPath(agentName, stateDir string) (string, error) {
 }
 
 func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
-	// When running inside the chepherd container, explicit --root / --runroot
-	// point to the pre-populated agent storage (written by skopeo). Outside the
-	// container (dev mode), those paths don't exist — omit them so podman uses
-	// its default storage on the host.
-	podArgs := []string{"podman"}
-	if _, err := os.Stat(agentStorageRoot); err == nil {
-		podArgs = append(podArgs, "--root", agentStorageRoot, "--runroot", agentRunRoot)
-	}
-	podArgs = append(podArgs,
+	// v0.8/v0.9 architecture: ONE chepherd container + N SIBLING agent
+	// containers on the host podman. Each agent appears in the operator's
+	// `podman ps` like any other container.
+	//
+	// When chepherd runs containerised, it talks to the HOST podman via
+	// the bind-mounted /run/host-podman/podman.sock (set by start.sh
+	// via CONTAINER_HOST=unix:///run/host-podman/podman.sock). The
+	// previous nested-podman design (introduced in f958359 for the
+	// chepherd-as-pod plan) is gone — agent containers no longer live
+	// inside chepherd's filesystem.
+	// Translate every chepherd-container path to its host equivalent
+	// so the host podman daemon can resolve the bind-mount sources.
+	hostHome := toHostPath(agentHomeDir)
+	hostSecrets := toHostPath(agentSecretsDir)
+	hostCwd := toHostPath(cwd)
+
+	podArgs := append(podmanArgs(),
 		"run", "--rm", "--interactive", "--tty",
 		"--name", "chepherd-agent-"+agentName,
-		// Bridge networking — slirp4netns is rootless-only inside the container.
-		// Outside the container (dev mode), use host networking.
+		// Default bridge network — sibling to chepherd on host podman.
 		"--network", "bridge",
 		// Per-agent persistent home (claude session files, config).
-		// :U remaps file ownership into the container's user namespace so
-		// the in-container `agent` user (UID 1000) owns these paths
-		// without us touching them from the host.
-		"-v", agentHomeDir+":/home/agent:rw,U",
-		// Working repo — read/write.
-		"-v", cwd+":"+cwd+":rw",
+		"-v", hostHome+":/home/agent:rw,U",
+		// Working repo — read/write. Source is the host path; the
+		// agent sees its workdir at the original cwd (chepherd-view)
+		// since claude-code expects that string to match its prompts.
+		"-v", hostCwd+":"+cwd+":rw",
 		"--workdir", cwd,
 	)
 
-	// #172 — per-agent PVC. Handle threaded from runtime.Spawn via env
-	// (CHEPHERD_PVC_HANDLE). Provisioned lazily — if the named volume
-	// doesn't exist yet, create it now in the same podman store. Mounts
-	// at /workspace so app scratch (build caches, generated files,
-	// agent-internal state) survives session crashes + resumes.
+	// #172 — per-agent PVC. Lives on the HOST podman (sibling to the
+	// agent container), visible via `podman volume ls` on the host.
 	if pvcHandle := extractEnv(env, "CHEPHERD_PVC_HANDLE"); pvcHandle != "" {
-		storeArgs := []string{}
-		if _, err := os.Stat(agentStorageRoot); err == nil {
-			storeArgs = append(storeArgs, "--root", agentStorageRoot, "--runroot", agentRunRoot)
-		}
-		if exec.Command("podman", append(append([]string{}, storeArgs...), "volume", "exists", pvcHandle)...).Run() != nil {
-			_ = exec.Command("podman", append(append([]string{}, storeArgs...), "volume", "create", pvcHandle)...).Run()
+		base := podmanArgs()
+		if exec.Command(base[0], append(append([]string{}, base[1:]...), "volume", "exists", pvcHandle)...).Run() != nil {
+			_ = exec.Command(base[0], append(append([]string{}, base[1:]...), "volume", "create", pvcHandle)...).Run()
 		}
 		podArgs = append(podArgs, "-v", pvcHandle+":/workspace:rw,U")
 	}
@@ -161,7 +214,7 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// agent's home (R4). Once the token vault (#131) lands, all token
 	// material is written here from the vault at spawn time.
 	if agentSecretsDir != "" {
-		podArgs = append(podArgs, "-v", agentSecretsDir+":/run/secrets:ro,U")
+		podArgs = append(podArgs, "-v", hostSecrets+":/run/secrets:ro,U")
 	}
 
 	// Mount MCP infrastructure: the session dir (contains .mcp.json), the
@@ -295,18 +348,32 @@ func mcpMounts(env []string) []string {
 
 	var mounts []string
 
-	// Session dir containing the .mcp.json file.
+	// Session dir containing the .mcp.json file. Source path must be
+	// host-visible (toHostPath translates /home/chepherd/.local/state/
+	// → CHEPHERD_HOST_STATE_DIR for sibling-container spawn).
 	if cfgPath := envMap["CHEPHERD_MCP_CONFIG"]; cfgPath != "" {
 		sessDir := filepath.Dir(cfgPath)
 		if _, err := os.Stat(sessDir); err == nil {
-			mounts = append(mounts, sessDir+":"+sessDir+":ro")
+			mounts = append(mounts, toHostPath(sessDir)+":"+sessDir+":ro")
 		}
 	}
 
 	// Chepherd binary — claude-code spawns it as an MCP subprocess.
-	if exe, err := os.Executable(); err == nil {
-		if _, err := os.Stat(exe); err == nil {
-			mounts = append(mounts, exe+":"+exe+":ro")
+	// Two modes:
+	//   - Dev (chepherd on host): bind-mount the executable into the
+	//     agent so the agent's `chepherd mcp` subprocess can launch.
+	//   - Containerised (host socket present): the executable lives
+	//     inside the chepherd container's filesystem — NOT visible to
+	//     the host podman daemon. Skip the mount; the chepherd-agent
+	//     image ships its own /usr/local/bin/chepherd binary (built
+	//     by Dockerfile.agent) so the MCP bridge launches from the
+	//     image's copy.
+	if _, err := os.Stat(hostPodmanSocketPath); err != nil {
+		// Dev mode — host has the executable.
+		if exe, err := os.Executable(); err == nil {
+			if _, err := os.Stat(exe); err == nil {
+				mounts = append(mounts, exe+":"+exe+":ro")
+			}
 		}
 	}
 
@@ -327,15 +394,9 @@ func mcpMounts(env []string) []string {
 //
 // Returns "" if neither mode resolves; callers default CHEPHERD_MCP_URL.
 func HostAddrForAgent() string {
-	// Mode 1: are we inside a chepherd pod? Detected via the agent-storage
-	// bind mount that scripts/start.sh sets up. If yes, the inner-podman
-	// bridge gateway is the right answer.
-	if _, err := os.Stat(agentStorageRoot); err == nil {
-		if gw := podmanInnerBridgeGateway(); gw != "" {
-			return gw
-		}
-	}
-	// Mode 2: outbound IP.
+	// With sibling-container architecture, the chepherd container is
+	// reachable by name on the same podman network, OR by the host's
+	// outbound IP. Try outbound first.
 	c, err := net.Dial("udp4", "1.1.1.1:53")
 	if err != nil {
 		return ""
@@ -345,34 +406,6 @@ func HostAddrForAgent() string {
 		return addr.IP.String()
 	}
 	return ""
-}
-
-// podmanInnerBridgeGateway returns the gateway IP of the inner-podman
-// default bridge network. Empty string if podman isn't available or
-// the inspect fails.
-func podmanInnerBridgeGateway() string {
-	args := []string{"--root", agentStorageRoot, "--runroot", agentRunRoot,
-		"network", "inspect", "podman"}
-	out, err := exec.Command("podman", args...).Output()
-	if err != nil {
-		return ""
-	}
-	s := string(out)
-	idx := strings.Index(s, `"gateway":`)
-	if idx < 0 {
-		return ""
-	}
-	rest := s[idx+len(`"gateway":`):]
-	q1 := strings.Index(rest, `"`)
-	if q1 < 0 {
-		return ""
-	}
-	rest = rest[q1+1:]
-	q2 := strings.Index(rest, `"`)
-	if q2 < 0 {
-		return ""
-	}
-	return rest[:q2]
 }
 
 // hostClaudeCredentialsPath returns the path to the host's Claude credentials
@@ -390,19 +423,12 @@ func hostClaudeCredentialsPath() string {
 }
 
 func imageExists(image string) bool {
-	// Check the mounted agent storage first (inside container or explicit root).
-	err := exec.Command("podman",
-		"--root", agentStorageRoot,
-		"--runroot", agentRunRoot,
-		"image", "exists", image).Run()
-	if err == nil {
+	base := podmanArgs()
+	if err := exec.Command(base[0], append(append([]string{}, base[1:]...), "image", "exists", image)...).Run(); err == nil {
 		return true
 	}
-	// Fallback: default podman storage (dev mode, running outside container).
-	err = exec.Command("podman", "image", "exists", image).Run()
-	if err == nil {
+	if err := exec.Command("docker", "image", "inspect", image).Run(); err == nil {
 		return true
 	}
-	err = exec.Command("docker", "image", "inspect", image).Run()
-	return err == nil
+	return false
 }

@@ -1,3 +1,17 @@
+# ─── stage 1: build chepherd binary ────────────────────────────────────────
+# We bake chepherd into the agent image so claude-code can spawn the
+# MCP-bridge subprocess (`chepherd mcp --url ...`) without chepherd
+# having to bind-mount its own executable from the host (which doesn't
+# work in the sibling-container architecture — the host podman daemon
+# can't see paths inside the chepherd container).
+FROM golang:1.24-alpine AS chepherd-builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o /chepherd .
+
+# ─── stage 2: agent runtime ────────────────────────────────────────────────
 FROM ubuntu:22.04
 
 ARG CLAUDE_VERSION=latest
@@ -10,6 +24,9 @@ RUN apt-get update && apt-get install -y \
     curl git ca-certificates gnupg \
     build-essential python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# chepherd binary (for the MCP-bridge subprocess claude-code launches).
+COPY --from=chepherd-builder /chepherd /usr/local/bin/chepherd
 
 # Node.js
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
