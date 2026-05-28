@@ -184,6 +184,28 @@ func (v *Vault) Set(id, provider, label, envVar, plaintext string) (string, erro
 	return newID, v.save()
 }
 
+// UpdateValue re-encrypts the credential value for an existing id,
+// preserving provider / label / envVar / created_at. Used by the
+// runtime's refresh-on-spawn path so the rotated OAuth pair lands
+// back in the vault without losing the operator's label. Returns
+// nil even if the id doesn't exist (no-op).
+func (v *Vault) UpdateValue(id, plaintext string) error {
+	ciphertext, err := v.encrypt(plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypt: %w", err)
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for i, c := range v.creds {
+		if c.ID == id {
+			v.creds[i].Cipher = ciphertext
+			v.creds[i].UpdatedAt = time.Now().UTC()
+			return v.save()
+		}
+	}
+	return nil
+}
+
 // Delete removes a credential by ID.
 func (v *Vault) Delete(id string) error {
 	v.mu.Lock()

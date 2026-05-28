@@ -298,6 +298,10 @@ func (a *runtimeVaultAdapter) ListByProvider(provider string) []runtime.VaultCre
 
 func (a *runtimeVaultAdapter) GetValue(id string) (string, error) { return a.v.GetValue(id) }
 
+func (a *runtimeVaultAdapter) UpdateValue(id, plaintext string) error {
+	return a.v.UpdateValue(id, plaintext)
+}
+
 // bootstrapShepherd brings a freshly-spawned shepherd session into its
 // watch cycle: accept the Claude-Code trust prompt + send a mission
 // prompt + then poke it on every spawn event AND on a regular tick so

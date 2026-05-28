@@ -8,10 +8,13 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -343,6 +346,10 @@ type AxisReview struct {
 type VaultProvider interface {
 	ListByProvider(provider string) []VaultCredMeta
 	GetValue(id string) (string, error)
+	// UpdateValue re-encrypts the stored value for an existing id
+	// (preserves provider/label/envVar). Used by the refresh-on-spawn
+	// path to persist the rotated OAuth pair back to the vault.
+	UpdateValue(id, plaintext string) error
 }
 
 // VaultCredMeta is the safe (value-less) view of one credential the vault
@@ -1794,6 +1801,25 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 		}
 	}
 	if payload != "" {
+		// REFRESH-ON-SPAWN — empirically verified 2026-05-28 (operator
+		// walk #135). The vault stores a one-shot snapshot of the
+		// credentials.json captured at OAuth time. claude-code accessToken
+		// has short lifetime (~minutes). If it's already past expiresAt
+		// by the time we materialize, claude-code on startup shows the
+		// OAuth login screen even though a valid refreshToken sits right
+		// there in the file. (claude-code does its background refresh,
+		// but the login UI doesn't auto-dismiss once drawn.)
+		//
+		// Solution: before writing into the agent, exchange the snapshot's
+		// refreshToken for a fresh access+refresh pair via Anthropic's
+		// OAuth /token endpoint. Persist the new pair back to the vault
+		// so the next spawn doesn't re-burn the refresh.
+		if refreshed, ok := refreshClaudeOAuthIfNeeded(payload); ok {
+			payload = refreshed
+			if r.vault != nil && spec.ClaudeTokenID != "" {
+				_ = r.vault.UpdateValue(spec.ClaudeTokenID, refreshed)
+			}
+		}
 		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
 			return "", err
 		}
@@ -2222,4 +2248,106 @@ func envSliceToMap(env []string) map[string]string {
 		}
 	}
 	return m
+}
+
+
+// claudeOAuthClientID is the public client_id claude-code uses in its
+// PKCE OAuth flow against Anthropic's IdP. Surfaced in every login URL
+// claude-code prints (operator confirmed by inspecting the OAuth URL
+// in their PTY). Stable across operators — there is no per-installation
+// secret here.
+const claudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+
+// claudeOAuthTokenEndpoint is Anthropic's OAuth /token endpoint that
+// accepts grant_type=refresh_token. Same one claude-code itself uses
+// for its background refresh. Confirmed reachable from agent containers
+// (HTTP 200 on /; HTTP 400 on POST {} = endpoint exists, validates body).
+const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
+
+// refreshClaudeOAuthIfNeeded inspects a credentials.json payload (the
+// JSON shape claude-code writes to ~/.claude/.credentials.json). If
+// the accessToken inside is already expired OR within 60s of expiring,
+// posts the refreshToken to Anthropic's OAuth endpoint, splices the
+// fresh access+refresh pair back into the same JSON shape, and returns
+// it. Returns (input, false) on any error or if the token is still
+// comfortably valid — caller falls back to the unrefreshed payload.
+//
+// This is the permanent fix for the "agent shows OAuth login screen
+// even though credentials are present" bug (operator walk 2026-05-28,
+// experimentally verified — see commit log).
+func refreshClaudeOAuthIfNeeded(payload string) (string, bool) {
+	var doc struct {
+		ClaudeAiOauth struct {
+			AccessToken      string `json:"accessToken"`
+			RefreshToken     string `json:"refreshToken"`
+			ExpiresAt        int64  `json:"expiresAt"`
+			SubscriptionType string `json:"subscriptionType,omitempty"`
+			Scopes           []string `json:"scopes,omitempty"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
+		return payload, false
+	}
+	if doc.ClaudeAiOauth.RefreshToken == "" {
+		return payload, false
+	}
+	// Skip if comfortably valid (>60s of life left).
+	const safetyMargin = 60 * 1000 // 60 seconds in ms
+	nowMs := time.Now().UnixMilli()
+	if doc.ClaudeAiOauth.ExpiresAt > nowMs+safetyMargin {
+		return payload, false
+	}
+
+	body := map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": doc.ClaudeAiOauth.RefreshToken,
+		"client_id":     claudeOAuthClientID,
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequest(http.MethodPost, claudeOAuthTokenEndpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return payload, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return payload, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return payload, false
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if err != nil {
+		return payload, false
+	}
+	var tokRes struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"` // seconds
+	}
+	if err := json.Unmarshal(raw, &tokRes); err != nil {
+		return payload, false
+	}
+	if tokRes.AccessToken == "" {
+		return payload, false
+	}
+
+	// Splice the refreshed pair back into the credentials.json shape.
+	doc.ClaudeAiOauth.AccessToken = tokRes.AccessToken
+	if tokRes.RefreshToken != "" {
+		doc.ClaudeAiOauth.RefreshToken = tokRes.RefreshToken
+	}
+	if tokRes.ExpiresIn > 0 {
+		doc.ClaudeAiOauth.ExpiresAt = time.Now().Add(time.Duration(tokRes.ExpiresIn) * time.Second).UnixMilli()
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return payload, false
+	}
+	return string(out), true
 }
