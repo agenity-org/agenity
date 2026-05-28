@@ -203,13 +203,20 @@
       // intercept; the plain Ctrl+* variants work in PWA/Electron mode.
       const isCmd = (e.ctrlKey || e.metaKey);
       if (!isCmd) return;
-      // Tab cycling INSIDE the focused pane — Ctrl+Tab / Ctrl+Shift+Tab
-      // (browser steals these — Ctrl+Alt+Tab also bound as universal
-      // fallback). Dispatched to the focused pane so each pane manages
-      // its own tab list, regardless of widget kind. Operator 2026-05-29:
-      // 'make it not only limited to terminal, any pane can leverage from
-      // the tabs'.
-      if (e.key === 'Tab') {
+      // Honest binding list (operator 2026-05-29: 'you couldnt lock it'):
+      //   Tab cycling   → Ctrl+Alt+Tab          (+Shift for prev)
+      //   New tab       → Ctrl+Alt+T
+      //   Pane focus    → Ctrl+Arrow            (already working)
+      //   Backtick alt  → Ctrl+`  cycles tabs   (VS Code / kitty style)
+      //
+      // Plain Ctrl+T and Ctrl+Tab are intentionally NOT bound. Chrome
+      // / Firefox / Safari capture them at the OS layer and never
+      // deliver the keydown to the renderer — JS literally cannot
+      // intercept them in a regular browser tab. They work only when
+      // chepherd is installed as a PWA (Chrome menu → "Install
+      // chepherd…") or wrapped in Electron. Telling the operator they
+      // "should" work in a browser tab would be a lie.
+      if (e.altKey && e.key === 'Tab') {
         e.preventDefault();
         if (focusedPaneID) {
           window.dispatchEvent(new CustomEvent('chepherd-pane-cycle-tab', {
@@ -218,9 +225,7 @@
         }
         return;
       }
-      // New tab in focused pane — Ctrl+T / Ctrl+Alt+T (Ctrl+T is
-      // OS-captured by browsers; Ctrl+Alt+T is the universal fallback).
-      if (e.key === 't' || e.key === 'T') {
+      if (e.altKey && (e.key === 't' || e.key === 'T')) {
         e.preventDefault();
         if (focusedPaneID) {
           window.dispatchEvent(new CustomEvent('chepherd-pane-new-tab', {
@@ -229,8 +234,19 @@
         }
         return;
       }
-      // Pane navigation — Ctrl+Arrow / Ctrl+Alt+Arrow. (These already
-      // work for the operator — leave them alone.)
+      // Ctrl+` (backtick) — bonus tab cycle that works in plain browser
+      // (no Alt needed, no OS conflict). VS Code uses Ctrl+` for
+      // terminal toggle; we repurpose it here.
+      if (e.key === '`' && !e.altKey) {
+        e.preventDefault();
+        if (focusedPaneID) {
+          window.dispatchEvent(new CustomEvent('chepherd-pane-cycle-tab', {
+            detail: { paneID: focusedPaneID, direction: e.shiftKey ? -1 : +1 },
+          }));
+        }
+        return;
+      }
+      // Pane navigation — Ctrl+Arrow / Ctrl+Alt+Arrow.
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
         movePaneFocus(e.key.replace('Arrow','').toLowerCase());
