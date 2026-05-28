@@ -23,10 +23,10 @@ var templateListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List available templates",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Look in repo's catalog/ first (dev path), then ~/.local/state/chepherd-v06/catalog/.
+		// Look in repo's catalog/ first (dev path), then ~/.local/state/chepherd/catalog/.
 		dirs := []string{
 			"./catalog",
-			filepath.Join(os.Getenv("HOME"), ".local/state/chepherd-v06/catalog"),
+			filepath.Join(os.Getenv("HOME"), ".local/state/chepherd/catalog"),
 		}
 		seen := map[string]bool{}
 		for _, d := range dirs {

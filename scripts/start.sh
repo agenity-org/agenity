@@ -15,7 +15,10 @@ set -euo pipefail
 
 IMAGE="${CHEPHERD_IMAGE:-chepherd:latest}"
 PORT="${CHEPHERD_PORT:-8083}"
-STATE_DIR="${HOME}/.local/state/chepherd-v08"
+# State dir is version-agnostic — contains operator data (vault, git
+# providers, canon, agent home dirs, embedded gitea, etc.) that
+# persists across chepherd releases.
+STATE_DIR="${HOME}/.local/state/chepherd"
 REPOS_DIR="${HOME}/repos"
 CLAUDE_DIR="${HOME}/.claude"
 
