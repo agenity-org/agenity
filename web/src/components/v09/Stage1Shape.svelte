@@ -140,7 +140,11 @@
         {#if selected.description}<p class="desc">{selected.description}</p>{/if}
         {#if selected.when_to_use}<p class="when"><strong>Best for:</strong> {selected.when_to_use}</p>{/if}
         {#if selected.slots.length > 0}
-          <div class="roster-row" aria-label="team members">
+          <div
+            class="roster-row"
+            aria-label="team members"
+            style="grid-template-columns: repeat({selected.slots.length}, minmax(0, 1fr));"
+          >
             {#each selected.slots as s}
               <div class="member-card" title={slotRole(s)}>
                 <span class="m-logo" aria-hidden="true">
@@ -209,19 +213,30 @@
   .desc { margin: 0 0 0.4rem 0; font-size: 0.88rem; color: var(--fg, #f5f5f5); }
   .when { margin: 0 0 0.5rem 0; font-size: 0.85rem; color: var(--fg-muted, #aaa); }
   /* Horizontal member-card row (operator request 2026-05-29 — no skills,
-     just role + logo; skills live on Stage 3). */
+     just role + logo; skills live on Stage 3).
+     Uniform width — grid columns = exact slot count, so Squad (8) fits
+     in one line, Solo (1) takes the full row, Pair (2) splits 50/50, etc.
+     Cards never wrap; min-content is suppressed via minmax(0, 1fr). */
   .roster-row {
-    display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem;
+    display: grid; gap: 0.45rem; margin-top: 0.4rem;
   }
   .member-card {
-    display: inline-flex; flex-direction: column; align-items: center;
-    gap: 0.2rem; min-width: 5.5rem;
-    padding: 0.55rem 0.65rem; border-radius: 8px;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 0.2rem;
+    padding: 0.55rem 0.35rem; border-radius: 8px;
     background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a);
+    min-width: 0;  /* allow grid track to shrink below content width */
+    overflow: hidden;
   }
   .m-logo { color: var(--accent-2, #87ceeb); line-height: 0; }
-  .m-label { font-weight: 600; font-size: 0.78rem; color: var(--fg, #f5f5f5); }
-  .m-role { font-size: 0.7rem; color: var(--fg-muted, #888); }
+  .m-label {
+    font-weight: 600; font-size: 0.78rem; color: var(--fg, #f5f5f5);
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .m-role {
+    font-size: 0.7rem; color: var(--fg-muted, #888);
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
 
   .admin-link {
     display: inline-block; margin-top: 1rem;
