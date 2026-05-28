@@ -101,6 +101,16 @@
     return ROLE_LOGO[r] || ROLE_LOGO['generalist'];
   }
 
+  // Render the slot label as Title-Cased words, one per line.
+  // The label IS the role name (operator 2026-05-29) — e.g.,
+  // "full-stack" → ["Full", "Stack"]; "qa" → ["QA"]; "devops" → ["DevOps"].
+  // A small map covers acronyms that simple capitalization mangles.
+  const CASE_MAP = { 'qa': 'QA', 'devops': 'DevOps', 'sre': 'SRE' };
+  function labelWords(s) {
+    const raw = (s.label || '').trim() || (s.role_id || 'role');
+    return raw.split('-').map(w => CASE_MAP[w.toLowerCase()] || (w.charAt(0).toUpperCase() + w.slice(1)));
+  }
+
   $effect(() => { loadTemplates(); });
 </script>
 
@@ -150,8 +160,11 @@
                 <span class="m-logo" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="22" height="22">{@html logoFor(s)}</svg>
                 </span>
-                <span class="m-label">{s.label}</span>
-                <span class="m-role">{slotRole(s)}</span>
+                <span class="m-name">
+                  {#each labelWords(s) as w, i}
+                    {#if i > 0}<br />{/if}{w}
+                  {/each}
+                </span>
               </div>
             {/each}
           </div>
@@ -229,13 +242,11 @@
     overflow: hidden;
   }
   .m-logo { color: var(--accent-2, #87ceeb); line-height: 0; }
-  .m-label {
+  /* Role name shown as stacked words (operator 2026-05-29: one word per line). */
+  .m-name {
     font-weight: 600; font-size: 0.78rem; color: var(--fg, #f5f5f5);
-    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .m-role {
-    font-size: 0.7rem; color: var(--fg-muted, #888);
-    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    line-height: 1.15; text-align: center;
+    max-width: 100%; overflow: hidden;
   }
 
   .admin-link {
