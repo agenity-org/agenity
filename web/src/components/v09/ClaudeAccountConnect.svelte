@@ -23,7 +23,10 @@
     oncancel():          fires when the operator cancels mid-flow.
 -->
 <script>
-  let { oncomplete, oncancel } = $props();
+  // autostart=true: begin the OAuth flow on mount so the parent's
+  // "+ Connect Claude account" click goes straight to "Spawning
+  // capture agent…" — no double-button.
+  let { oncomplete, oncancel, autostart = false } = $props();
 
   let oauthMode = $state(false);
   let oauthAgentName = $state('');
@@ -36,6 +39,10 @@
   let oauthPollHandle = null;
 
   const API = '/api-v08/v1';
+
+  $effect(() => {
+    if (autostart) beginOAuthLogin();
+  });
 
   async function beginOAuthLogin() {
     oauthBusy = true; oauthError = ''; oauthURL = ''; oauthCode = '';
@@ -125,7 +132,7 @@
 </script>
 
 <div class="claude-connect">
-  {#if !oauthMode}
+  {#if !oauthMode && !autostart}
     <header>
       <h4>Connect a Claude account</h4>
     </header>
@@ -139,6 +146,15 @@
     {/if}
     <button class="primary" onclick={beginOAuthLogin} disabled={oauthBusy}>
       {oauthBusy ? 'Spawning…' : '+ Connect via Anthropic OAuth'}
+    </button>
+  {:else if !oauthMode && oauthError}
+    <!-- autostart errored before reaching the URL — show retry. -->
+    <header>
+      <h4>Connect a Claude account</h4>
+    </header>
+    <p class="connect-error" role="alert">⚠ {oauthError}</p>
+    <button class="primary" onclick={beginOAuthLogin} disabled={oauthBusy}>
+      {oauthBusy ? 'Spawning…' : 'Try again'}
     </button>
   {:else}
     <header>

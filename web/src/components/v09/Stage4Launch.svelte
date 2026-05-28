@@ -149,6 +149,12 @@
           role_id: memberRole(m),
           owned_skills: ownedSkills,
           owned_skills_scope: m.owned_skills_scope || {},
+          // Operator-chosen vault credential (empty = let server pick
+          // newest matching account_class). Without this, claude-code
+          // agents would fall through to host-claude auto-detect (or
+          // fail when CHEPHERD_NO_HOST_CLAUDE=1).
+          account_id: m.account_id || '',
+          claude_token_id: m.account_id || '',
           // Legacy fields preserved for backend-side backward compat
           system_prompt: firstSkill.prompt_override || firstSkill.org_override_body || '',
           stat_sheet: firstSkill.stat_sheet || undefined,

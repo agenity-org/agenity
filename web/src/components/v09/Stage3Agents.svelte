@@ -159,9 +159,23 @@
     addPickerOpen = false;
   }
 
+  // Vault entries the dropdown for THIS agent should offer. Provider
+  // names on the vault entries are the credential's storage tag
+  // (e.g. "claude-oauth", "anthropic-api", "openai-api"); the agent's
+  // account_class is the broader category. Map between them so the
+  // captured OAuth tokens (provider="claude-oauth") show up for
+  // claude-code agents (account_class="anthropic"). Same logic that
+  // chepherd's spawn-time fallback uses server-side.
+  function vaultProviderMatchesAgent(provider, agent) {
+    const cls = agent?.account_class || 'anthropic';
+    if (!provider) return true;             // legacy entries with no provider
+    if (provider === cls) return true;      // exact category match
+    if (cls === 'anthropic' && (provider === 'claude-oauth' || provider === 'anthropic-api')) return true;
+    if (cls === 'openai' && provider === 'openai-api') return true;
+    return false;
+  }
   function vaultForAgent(a) {
-    const cls = a?.account_class || 'anthropic';
-    return vault.filter(v => !v.provider || v.provider === cls);
+    return vault.filter(v => vaultProviderMatchesAgent(v.provider, a));
   }
 
   // Coverage panel — count which of the APPLICABLE LEAN skills are
@@ -232,6 +246,7 @@
         </header>
       {:else}
         <ClaudeAccountConnect
+          autostart={true}
           oncomplete={(id) => reloadVaultAndSelect(id)}
           oncancel={() => showClaudeConnect = false}
         />
