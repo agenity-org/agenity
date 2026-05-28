@@ -57,8 +57,6 @@
   let providers = $state([]);
   let activeTokenID = $state('');
   let newSandboxName = $state('');
-  let connectModalOpen = $state(false);
-  let connectKind = $state('');
   let pasteToken = $state('');
   let pasteURL = $state('');
 
@@ -120,16 +118,23 @@
     onselect?.(selectedRepo);
   }
 
-  // In-modal error message (no browser alert()s — every error stays
-  // in the modal UI per the never-use-browser-alerts rule).
+  // One token per provider kind. The "saved providers list" concept
+  // is GONE — no chip selectors, no Connect modal. Either there's a
+  // valid token (discovery tree renders) or there isn't (inline paste
+  // form renders). Server-side validate-before-save guarantees bad
+  // tokens never enter state, so the "stale provider" UX category
+  // doesn't exist by design.
   let connectError = $state('');
   let connectSaving = $state(false);
+
+  // showPasteFor[kind] = true → render inline paste form even when a
+  // token is already saved (operator wants to swap to a different token).
+  let showPasteFor = $state({});
 
   // Canonical homepage URL per provider kind. For token-only flows
   // (paste a PAT, no specific repo URL), the saved provider record
   // points at the operator's account on the provider's homepage; the
-  // discovery layer then enumerates orgs/repos the token grants
-  // access to.
+  // discovery layer enumerates orgs/repos the token grants access to.
   const DEFAULT_REPO_URL = {
     github:    'https://github.com',
     gitlab:    'https://gitlab.com',
@@ -138,29 +143,19 @@
     onprem:    '',          // user must supply instance URL
   };
 
-  function openConnectModal(kind) {
-    connectKind = kind;
-    pasteToken = '';
-    pasteURL = '';
-    connectError = '';
-    connectModalOpen = true;
-  }
-  async function saveTokenAndConnect() {
+  async function saveProviderInline(kind) {
     connectError = '';
     if (!pasteToken.trim()) {
       connectError = 'Paste a token first.';
       return;
     }
-    // Auto-fill repo_url for token-only providers (github / gitlab /
-    // bitbucket) when the operator only pasted a PAT. Gitea / on-prem
-    // self-hosted instances require an explicit instance URL.
-    const effectiveURL = pasteURL.trim() || DEFAULT_REPO_URL[connectKind] || '';
+    const effectiveURL = pasteURL.trim() || DEFAULT_REPO_URL[kind] || '';
     if (!effectiveURL) {
-      connectError = 'Instance URL is required for ' + connectKind + '.';
+      connectError = 'Instance URL is required for ' + kind + '.';
       return;
     }
     const body = {
-      kind: connectKind === 'onprem' ? 'gitea' : connectKind,
+      kind: kind === 'onprem' ? 'gitea' : kind,
       display_name: pasteURL.trim() || effectiveURL,
       repo_url: effectiveURL,
       token: pasteToken.trim(),
@@ -175,14 +170,21 @@
       if (!r.ok) {
         const t = await r.text();
         let msg = t.trim();
-        try { msg = JSON.parse(t).error || msg; } catch {}
-        connectError = msg || `HTTP ${r.status}`;
+        let detail = '';
+        try {
+          const j = JSON.parse(t);
+          msg = j.error || msg;
+          detail = j.detail || '';
+        } catch {}
+        connectError = detail ? `${msg} — ${detail}` : (msg || `HTTP ${r.status}`);
         return;
       }
       const saved = await r.json();
-      connectModalOpen = false;
+      pasteToken = '';
+      pasteURL = '';
+      showPasteFor[kind] = false;
       await loadProviders();
-      // Auto-select the newly-created provider.
+      // Auto-select the (now sole) provider for this kind.
       if (saved && saved.id) activeTokenID = saved.id;
     } catch (e) {
       connectError = 'Network error: ' + (e?.message || e);
@@ -262,91 +264,68 @@
         <p class="picked">Selected: <strong>{selectedRepo.full_name}</strong></p>
       {/if}
     </section>
-  {:else if mode === 'onprem'}
-    <section class="below">
-      <h3>On-prem / self-hosted Git</h3>
-      <div class="onprem-form">
-        <label class="onprem-row">
-          <span>URL</span>
-          <input type="text" bind:value={pasteURL} placeholder="https://git.example.com" />
-        </label>
-        <label class="onprem-row">
-          <span>PAT</span>
-          <input type="password" bind:value={pasteToken} placeholder="paste your access token" />
-        </label>
-        <button class="primary" onclick={saveTokenAndConnect} disabled={!pasteToken.trim() || !pasteURL.trim()}>Connect + Discover</button>
-      </div>
-    </section>
   {:else if mode}
     <section class="below">
-      <h3>Accounts</h3>
-      {#if providersForKind.length === 0}
-        <p class="hint">No saved {mode} accounts yet.</p>
-        <button class="primary" onclick={() => openConnectModal(mode)}>+ Connect new account</button>
-      {:else}
-        <div class="chips">
-          {#each providersForKind as p}
-            <button
-              type="button"
-              class="chip"
-              class:active={activeTokenID === p.id}
-              onclick={() => activeTokenID = p.id}
-            >⚓ {p.display_name || p.id}</button>
-          {/each}
-          <button type="button" class="chip add" onclick={() => openConnectModal(mode)}>+ Connect new</button>
-        </div>
-        {#if activeTokenID}
-          <DiscoveryTree
-            tokenID={activeTokenID}
-            onpick={pickRemote}
-            selected={selectedRepo?.full_name || ''}
-          />
-        {/if}
+      {#if providersForKind.length > 0 && !showPasteFor[mode]}
+        <!-- Connected — show discovery tree + small "use a different token" toggle.
+             The "stale provider" category is impossible by design: validate-
+             before-save on the server (POST /api/v1/git-providers calls the
+             provider's /user endpoint with the token); we only persist 2xx
+             responses. One token per provider kind — saving replaces. -->
+        <header class="connected-header">
+          <span class="connected">⚓ {providersForKind[0].display_name || providersForKind[0].id}</span>
+          <button type="button" class="link" onclick={() => { showPasteFor[mode] = true; pasteToken = ''; pasteURL = ''; connectError = ''; }}>↻ Use a different token</button>
+        </header>
+        <DiscoveryTree
+          tokenID={providersForKind[0].id}
+          onpick={pickRemote}
+          selected={selectedRepo?.full_name || ''}
+        />
         {#if selectedRepo?.kind === mode}
           <p class="picked">Selected: <strong>{selectedRepo.full_name}</strong> ({selectedRepo.default_branch})</p>
         {/if}
-      {/if}
-    </section>
-  {/if}
-</div>
-
-{#if connectModalOpen}
-  <div class="modal-bg" role="dialog" aria-modal="true">
-    <div class="modal">
-      <header>
-        <h3>Connect {connectKind === 'github' ? 'GitHub' : connectKind === 'gitlab' ? 'GitLab' : connectKind === 'bitbucket' ? 'Bitbucket' : 'Gitea'}</h3>
-        <button class="x" onclick={() => connectModalOpen = false} aria-label="close">×</button>
-      </header>
-      <div class="modal-body">
-        {#if PAT_HELPERS[connectKind]?.url}
+      {:else}
+        <!-- No saved token yet (or operator clicked "use different token"): paste form inline.
+             No modal, no chip list, no Connect-new button. The form IS the
+             entry point. -->
+        <header class="paste-header">
+          <h3>Connect {mode === 'github' ? 'GitHub' : mode === 'gitlab' ? 'GitLab' : mode === 'bitbucket' ? 'Bitbucket' : mode === 'gitea' ? 'Gitea' : 'on-prem Git'}</h3>
+          {#if providersForKind.length > 0}
+            <button type="button" class="link" onclick={() => { showPasteFor[mode] = false; connectError = ''; }}>Cancel — keep existing token</button>
+          {/if}
+        </header>
+        {#if PAT_HELPERS[mode]?.url}
           <p class="helper">
-            <a href={PAT_HELPERS[connectKind].url} target="_blank" rel="noopener">{PAT_HELPERS[connectKind].label} ↗</a>
+            <a href={PAT_HELPERS[mode].url} target="_blank" rel="noopener">{PAT_HELPERS[mode].label} ↗</a>
           </p>
-        {:else}
-          <p class="helper">{PAT_HELPERS[connectKind]?.label}</p>
+        {:else if PAT_HELPERS[mode]?.label}
+          <p class="helper">{PAT_HELPERS[mode].label}</p>
         {/if}
-        {#if connectKind === 'gitea' || connectKind === 'onprem'}
-          <label class="onprem-row"><span>Instance URL</span><input type="text" bind:value={pasteURL} placeholder={connectKind === 'onprem' ? 'https://git.example.com' : 'https://gitea.example.com'} /></label>
+        {#if mode === 'gitea' || mode === 'onprem'}
+          <label class="onprem-row">
+            <span>Instance URL</span>
+            <input type="text" bind:value={pasteURL} placeholder={mode === 'onprem' ? 'https://git.example.com' : 'https://gitea.example.com'} />
+          </label>
         {:else}
-          <!-- github / gitlab / bitbucket: optional override; we default
-               to the provider's canonical homepage if left empty. -->
-          <label class="onprem-row"><span>Instance URL <em class="optional">(optional)</em></span><input type="text" bind:value={pasteURL} placeholder={'default: ' + DEFAULT_REPO_URL[connectKind]} /></label>
+          <label class="onprem-row">
+            <span>Instance URL <em class="optional">(optional)</em></span>
+            <input type="text" bind:value={pasteURL} placeholder={'default: ' + DEFAULT_REPO_URL[mode]} />
+          </label>
         {/if}
         <label class="onprem-row">
           <span>Personal Access Token</span>
-          <input type="password" bind:value={pasteToken} placeholder="paste here" />
+          <input type="password" bind:value={pasteToken} placeholder="paste here" autocomplete="off" />
         </label>
         {#if connectError}
           <p class="connect-error" role="alert">⚠ {connectError}</p>
         {/if}
-        <div class="modal-actions">
-          <button class="ghost" onclick={() => connectModalOpen = false} disabled={connectSaving}>Cancel</button>
-          <button class="primary" onclick={saveTokenAndConnect} disabled={!pasteToken.trim() || connectSaving}>{connectSaving ? 'Saving…' : 'Save + Connect'}</button>
-        </div>
-      </div>
-    </div>
-  </div>
-{/if}
+        <button class="primary" onclick={() => saveProviderInline(mode)} disabled={!pasteToken.trim() || connectSaving}>
+          {connectSaving ? 'Validating…' : 'Save + Connect'}
+        </button>
+      {/if}
+    </section>
+  {/if}
+</div>
 
 <style>
   .stage2 { padding: 1.25rem; }
@@ -402,18 +381,20 @@
   .onprem-row { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.78rem; color: var(--fg-muted, #888); }
   .onprem-row input { padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
 
-  /* Connect modal */
-  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 200; }
-  .modal { background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 10px; width: 480px; max-width: 92vw; }
-  .modal header { display: flex; align-items: center; padding: 0.6rem 1rem; border-bottom: 1px solid #2a2a2a; }
-  .modal header h3 { flex: 1; margin: 0; font-size: 0.95rem; }
-  .x { background: transparent; border: 0; color: #888; cursor: pointer; font-size: 1.2rem; padding: 0 0.4rem; }
-  .modal-body { padding: 0.9rem 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  /* Connected-token header (inline, no modal) */
+  .connected-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.65rem; }
+  .connected { font-weight: 600; color: var(--accent-2, #87ceeb); font-size: 0.88rem; }
+  .paste-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.55rem; }
+  .paste-header h3 { margin: 0; flex: 1; }
+  .helper { margin: 0 0 0.35rem 0; font-size: 0.82rem; color: var(--fg-muted, #aaa); }
   .helper a { color: var(--accent-2, #87ceeb); text-decoration: none; }
   .helper a:hover { text-decoration: underline; }
-  .modal-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
-  .ghost { background: transparent; border: 1px solid #2a2a2a; color: var(--fg-muted, #888); padding: 0.45rem 0.75rem; border-radius: 4px; cursor: pointer; }
-  .ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+  .link {
+    background: transparent; border: 0; color: var(--accent-2, #87ceeb);
+    cursor: pointer; font: inherit; font-size: 0.78rem; padding: 0;
+    text-decoration: underline;
+  }
+  .link:hover { color: var(--fg, #fff); }
   .connect-error {
     margin: 0; padding: 0.45rem 0.7rem;
     background: rgba(231,76,60,0.10); border: 1px solid rgba(231,76,60,0.35);

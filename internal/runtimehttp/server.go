@@ -560,6 +560,24 @@ func (s *Server) gitProvidersHandler(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "kind and repo_url are required"})
 			return
 		}
+
+		// Validate-before-save: call the provider's /user endpoint with
+		// the token. Bad tokens (401/403) get rejected here so the
+		// "stale provider" category never enters state. Embedded
+		// skips validation (no remote API). Network errors are
+		// considered transient and let the save proceed — the user can
+		// retry discovery and we don't want to lose a working token
+		// because of a momentary outage.
+		if req.Kind != runtime.GitProviderEmbedded {
+			if err := validateProviderToken(req.Kind, req.RepoURL, req.Token); err != nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{
+					"error":  "token rejected by " + string(req.Kind),
+					"detail": err.Error(),
+				})
+				return
+			}
+		}
+
 		id := string(req.Kind) + ":" + req.RepoURL
 		if req.Kind == runtime.GitProviderEmbedded {
 			id = "embedded"
@@ -2996,4 +3014,82 @@ func logMiddleware(h http.Handler) http.Handler {
 		_ = fmt.Sprintf // placeholder for future structured logging
 		_ = start
 	})
+}
+
+// validateProviderToken makes a single GET against the provider's
+// `/user` endpoint (each provider has one) with the operator-supplied
+// token. Returns nil on 2xx, error otherwise. Used by the
+// POST /api/v1/git-providers handler to reject bad tokens BEFORE they
+// land in state — eliminates the "stale provider" UX category by
+// preventing it from existing.
+//
+// Network errors (DNS, timeout, connection refused) are NOT treated as
+// validation failures — the operator may be behind a flaky network at
+// registration time and we don't want to lose a real working token to
+// transient noise. Only HTTP-level rejection (401, 403, 4xx) counts.
+func validateProviderToken(kind runtime.GitProviderKind, repoURL, token string) error {
+	type probe struct {
+		url      string
+		authHdr  string
+		tokenFmt string // "Bearer %s" or "token %s"
+	}
+	apiBase := func(host string) string {
+		// Strip path/trailing slash from instance URL.
+		host = strings.TrimRight(host, "/")
+		return host
+	}
+	var p probe
+	switch kind {
+	case "github":
+		p = probe{url: "https://api.github.com/user", authHdr: "Authorization", tokenFmt: "Bearer %s"}
+		// GHES self-hosted instances use <instance>/api/v3/user.
+		if host := apiBase(repoURL); host != "" && host != "https://github.com" {
+			p.url = host + "/api/v3/user"
+		}
+	case "gitlab":
+		host := apiBase(repoURL)
+		if host == "" {
+			host = "https://gitlab.com"
+		}
+		p = probe{url: host + "/api/v4/user", authHdr: "Authorization", tokenFmt: "Bearer %s"}
+	case "bitbucket":
+		p = probe{url: "https://api.bitbucket.org/2.0/user", authHdr: "Authorization", tokenFmt: "Bearer %s"}
+	case "gitea":
+		host := apiBase(repoURL)
+		if host == "" {
+			return fmt.Errorf("gitea requires instance URL")
+		}
+		p = probe{url: host + "/api/v1/user", authHdr: "Authorization", tokenFmt: "token %s"}
+	default:
+		// Unknown kind — let it through; the save layer will error out
+		// on schema validation.
+		return nil
+	}
+
+	req, err := http.NewRequest(http.MethodGet, p.url, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set(p.authHdr, fmt.Sprintf(p.tokenFmt, token))
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		// Network error — not a validation failure. Let the save
+		// proceed; the operator can retry discovery later.
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	// 401/403 = token rejected; surface a readable message.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	bodyStr := strings.TrimSpace(string(body))
+	if bodyStr == "" {
+		bodyStr = "HTTP " + resp.Status
+	}
+	return fmt.Errorf("%s on %s — %s", resp.Status, p.url, bodyStr)
 }
