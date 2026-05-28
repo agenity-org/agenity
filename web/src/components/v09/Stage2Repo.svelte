@@ -67,7 +67,14 @@
       const r = await fetch('/api-v08/v1/git-providers');
       if (!r.ok) return;
       const j = await r.json();
-      providers = j.providers || j || [];
+      // Empty-state bug: the API returns {"providers": null} on a
+      // fresh state-dir. Old code "j.providers || j || []" then set
+      // providers to the literal {providers:null} object (truthy),
+      // which broke .filter() in builtinSandboxes + killed every
+      // {#if mode === 'builtin'} block. Always coerce to array.
+      providers = Array.isArray(j.providers) ? j.providers
+                : Array.isArray(j) ? j
+                : [];
     } catch {}
   }
   $effect(() => { loadProviders(); });
