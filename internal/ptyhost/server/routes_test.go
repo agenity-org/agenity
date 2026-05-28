@@ -47,7 +47,7 @@ func pointSovereignShellAtTempDir(t *testing.T) {
 	if err := os.WriteFile(path, body, 0644); err != nil {
 		t.Fatalf("write override: %v", err)
 	}
-	t.Setenv("OPENOVA_SANDBOX_AGENTS_PATH", path)
+	t.Setenv("CHEPHERD_AGENTS_PATH", path)
 	// The agentcatalog cache may already be populated from a prior
 	// test in this package; force a re-read.
 	resetAgentCatalogCache()
