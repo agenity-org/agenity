@@ -120,20 +120,52 @@
     onselect?.(selectedRepo);
   }
 
+  // In-modal error message (no browser alert()s — every error stays
+  // in the modal UI per the never-use-browser-alerts rule).
+  let connectError = $state('');
+  let connectSaving = $state(false);
+
+  // Canonical homepage URL per provider kind. For token-only flows
+  // (paste a PAT, no specific repo URL), the saved provider record
+  // points at the operator's account on the provider's homepage; the
+  // discovery layer then enumerates orgs/repos the token grants
+  // access to.
+  const DEFAULT_REPO_URL = {
+    github:    'https://github.com',
+    gitlab:    'https://gitlab.com',
+    bitbucket: 'https://bitbucket.org',
+    gitea:     '',          // user must supply instance URL
+    onprem:    '',          // user must supply instance URL
+  };
+
   function openConnectModal(kind) {
     connectKind = kind;
     pasteToken = '';
     pasteURL = '';
+    connectError = '';
     connectModalOpen = true;
   }
   async function saveTokenAndConnect() {
-    if (!pasteToken.trim()) return;
+    connectError = '';
+    if (!pasteToken.trim()) {
+      connectError = 'Paste a token first.';
+      return;
+    }
+    // Auto-fill repo_url for token-only providers (github / gitlab /
+    // bitbucket) when the operator only pasted a PAT. Gitea / on-prem
+    // self-hosted instances require an explicit instance URL.
+    const effectiveURL = pasteURL.trim() || DEFAULT_REPO_URL[connectKind] || '';
+    if (!effectiveURL) {
+      connectError = 'Instance URL is required for ' + connectKind + '.';
+      return;
+    }
     const body = {
       kind: connectKind === 'onprem' ? 'gitea' : connectKind,
-      display_name: pasteURL || (connectKind + '-' + new Date().toISOString().slice(0,10)),
-      repo_url: pasteURL || '',
+      display_name: pasteURL.trim() || effectiveURL,
+      repo_url: effectiveURL,
       token: pasteToken.trim(),
     };
+    connectSaving = true;
     try {
       const r = await fetch('/api-v08/v1/git-providers', {
         method: 'POST',
@@ -142,16 +174,20 @@
       });
       if (!r.ok) {
         const t = await r.text();
-        alert('Save failed: ' + t);
+        let msg = t.trim();
+        try { msg = JSON.parse(t).error || msg; } catch {}
+        connectError = msg || `HTTP ${r.status}`;
         return;
       }
       const saved = await r.json();
       connectModalOpen = false;
       await loadProviders();
-      // Auto-select the newly-created provider
+      // Auto-select the newly-created provider.
       if (saved && saved.id) activeTokenID = saved.id;
     } catch (e) {
-      alert('Network error: ' + e);
+      connectError = 'Network error: ' + (e?.message || e);
+    } finally {
+      connectSaving = false;
     }
   }
 </script>
@@ -289,16 +325,23 @@
         {:else}
           <p class="helper">{PAT_HELPERS[connectKind]?.label}</p>
         {/if}
-        {#if connectKind === 'gitea'}
-          <label class="onprem-row"><span>Instance URL</span><input type="text" bind:value={pasteURL} placeholder="https://gitea.example.com" /></label>
+        {#if connectKind === 'gitea' || connectKind === 'onprem'}
+          <label class="onprem-row"><span>Instance URL</span><input type="text" bind:value={pasteURL} placeholder={connectKind === 'onprem' ? 'https://git.example.com' : 'https://gitea.example.com'} /></label>
+        {:else}
+          <!-- github / gitlab / bitbucket: optional override; we default
+               to the provider's canonical homepage if left empty. -->
+          <label class="onprem-row"><span>Instance URL <em class="optional">(optional)</em></span><input type="text" bind:value={pasteURL} placeholder={'default: ' + DEFAULT_REPO_URL[connectKind]} /></label>
         {/if}
         <label class="onprem-row">
           <span>Personal Access Token</span>
           <input type="password" bind:value={pasteToken} placeholder="paste here" />
         </label>
+        {#if connectError}
+          <p class="connect-error" role="alert">⚠ {connectError}</p>
+        {/if}
         <div class="modal-actions">
-          <button class="ghost" onclick={() => connectModalOpen = false}>Cancel</button>
-          <button class="primary" onclick={saveTokenAndConnect} disabled={!pasteToken.trim()}>Save + Connect</button>
+          <button class="ghost" onclick={() => connectModalOpen = false} disabled={connectSaving}>Cancel</button>
+          <button class="primary" onclick={saveTokenAndConnect} disabled={!pasteToken.trim() || connectSaving}>{connectSaving ? 'Saving…' : 'Save + Connect'}</button>
         </div>
       </div>
     </div>
@@ -370,4 +413,11 @@
   .helper a:hover { text-decoration: underline; }
   .modal-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
   .ghost { background: transparent; border: 1px solid #2a2a2a; color: var(--fg-muted, #888); padding: 0.45rem 0.75rem; border-radius: 4px; cursor: pointer; }
+  .ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+  .connect-error {
+    margin: 0; padding: 0.45rem 0.7rem;
+    background: rgba(231,76,60,0.10); border: 1px solid rgba(231,76,60,0.35);
+    border-radius: 4px; color: #e74c3c; font-size: 0.85rem;
+  }
+  .optional { color: var(--fg-muted, #888); font-style: italic; font-size: 0.72rem; font-weight: 400; }
 </style>
