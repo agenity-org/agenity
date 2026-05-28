@@ -75,21 +75,30 @@
     onselect?.(t.id, t);
   }
 
-  // Render an owned skill into a compact pill — handles both v0.9.1
-  // shape (owned_skills + owned_skills_scope) and v0.9.0 legacy shape
-  // (primary_skill + alt_skills).
-  function slotChips(s) {
-    if (s.owned_skills && s.owned_skills.length) return s.owned_skills;
-    if (s.primary_skill) return [s.primary_skill];
-    return [];
-  }
-
   function slotRole(s) {
     return s.role_id || s.primary_skill || 'role';
   }
 
-  function chipScope(s, skill) {
-    return s.owned_skills_scope?.[skill] || '';
+  // Per-role logo (Lucide-style line icons). Operator request 2026-05-29:
+  // after picking a shape show members as a horizontal card row with a
+  // logo per role — no skills (those live on Stage 3).
+  const ROLE_LOGO = {
+    'product-owner':        '<rect x="5" y="4" width="14" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 4v2h6V4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'architect':            '<path d="M3 21l9-18 9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M7 13h10" fill="none" stroke="currentColor" stroke-width="2"/>',
+    'tech-lead':            '<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>',
+    'scrum-master':         '<path d="M21 12a9 9 0 1 1-3-6.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M21 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'generalist':           '<circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 22a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2"/>',
+    'full-stack-developer': '<polyline points="8,18 2,12 8,6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><polyline points="16,6 22,12 16,18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'frontend-developer':   '<rect x="2" y="4" width="20" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 22h8M12 18v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'backend-developer':    '<rect x="3" y="4" width="18" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="18" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="7" r="0.8" fill="currentColor"/><circle cx="7" cy="17" r="0.8" fill="currentColor"/>',
+    'devops-sre':           '<circle cx="6" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 6h8M8 18h8M6 8.5v7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    'qa-engineer':          '<path d="M12 2L4 5v7c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V5l-8-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'security-engineer':    '<rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2"/>',
+    'code-reviewer':        '<circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 21l-5.5-5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  };
+  function logoFor(s) {
+    const r = slotRole(s);
+    return ROLE_LOGO[r] || ROLE_LOGO['generalist'];
   }
 
   $effect(() => { loadTemplates(); });
@@ -131,21 +140,17 @@
         {#if selected.description}<p class="desc">{selected.description}</p>{/if}
         {#if selected.when_to_use}<p class="when"><strong>Best for:</strong> {selected.when_to_use}</p>{/if}
         {#if selected.slots.length > 0}
-          <ul class="roster">
+          <div class="roster-row" aria-label="team members">
             {#each selected.slots as s}
-              <li>
+              <div class="member-card" title={slotRole(s)}>
+                <span class="m-logo" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="22" height="22">{@html logoFor(s)}</svg>
+                </span>
                 <span class="m-label">{s.label}</span>
-                <span class="m-role">· {slotRole(s)}</span>
-                {#if slotChips(s).length}
-                  <span class="m-skills">
-                    {#each slotChips(s) as sk}
-                      <span class="chip">{sk}{#if chipScope(s, sk)} <em>({chipScope(s, sk)})</em>{/if}</span>
-                    {/each}
-                  </span>
-                {/if}
-              </li>
+                <span class="m-role">{slotRole(s)}</span>
+              </div>
             {/each}
-          </ul>
+          </div>
         {:else}
           <p class="hint">Empty template — you'll add agents on Stage 3 with the "+ Add agent" button.</p>
         {/if}
@@ -203,21 +208,20 @@
   .explain h3 { margin: 0 0 0.4rem 0; font-size: 0.95rem; }
   .desc { margin: 0 0 0.4rem 0; font-size: 0.88rem; color: var(--fg, #f5f5f5); }
   .when { margin: 0 0 0.5rem 0; font-size: 0.85rem; color: var(--fg-muted, #aaa); }
-  .roster { list-style: none; padding: 0; margin: 0.4rem 0 0 0; display: flex; flex-direction: column; gap: 0.35rem; }
-  .roster li {
+  /* Horizontal member-card row (operator request 2026-05-29 — no skills,
+     just role + logo; skills live on Stage 3). */
+  .roster-row {
+    display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem;
+  }
+  .member-card {
+    display: inline-flex; flex-direction: column; align-items: center;
+    gap: 0.2rem; min-width: 5.5rem;
+    padding: 0.55rem 0.65rem; border-radius: 8px;
     background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a);
-    padding: 0.32rem 0.55rem; border-radius: 5px; font-size: 0.78rem;
-    display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
   }
-  .m-label { font-weight: 600; }
-  .m-role { color: var(--fg-muted, #888); }
-  .m-skills { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; margin-left: auto; }
-  .chip {
-    background: rgba(135, 206, 235, 0.12); color: var(--accent-2, #87ceeb);
-    border: 1px solid rgba(135, 206, 235, 0.3);
-    padding: 0.04rem 0.4rem; border-radius: 3px; font-size: 0.72rem;
-  }
-  .chip em { color: var(--fg-muted, #aaa); font-style: italic; font-size: 0.68rem; }
+  .m-logo { color: var(--accent-2, #87ceeb); line-height: 0; }
+  .m-label { font-weight: 600; font-size: 0.78rem; color: var(--fg, #f5f5f5); }
+  .m-role { font-size: 0.7rem; color: var(--fg-muted, #888); }
 
   .admin-link {
     display: inline-block; margin-top: 1rem;

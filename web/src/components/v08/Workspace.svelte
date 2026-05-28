@@ -152,6 +152,155 @@
   let activeWorkspace = $state('');   // name of the currently-active named workspace
   let projectCwd = $state('');        // CWD associated with active workspace
 
+  // --- tabs (operator request 2026-05-29) ---
+  // Each tab is a named workspace. Switching tabs swaps the layout
+  // (sessions/events/etc are shared global state — agents stay alive
+  // regardless of which tab is visible).
+  let tabs = $state([]);              // [{ name }] — derived from savedLayouts
+  let activeTabName = $state('');     // selected tab; mirrors activeWorkspace
+  async function hydrateTabs() {
+    await listSavedLayouts();
+    // Surface every named workspace except 'current' (legacy auto-save slot).
+    tabs = savedLayouts.filter(n => n !== 'current').map(n => ({ name: n }));
+    if (tabs.length === 0) {
+      // First boot — promote 'current' to a real tab called 'main'.
+      await saveLayout('main');
+      tabs = [{ name: 'main' }];
+      activeTabName = 'main';
+      activeWorkspace = 'main';
+    } else if (!activeTabName) {
+      // Restore last-active from localStorage, else pick the first tab.
+      let prev = '';
+      try { prev = localStorage.getItem('chepherd-active-tab') || ''; } catch {}
+      const pick = tabs.find(t => t.name === prev) || tabs[0];
+      activeTabName = pick.name;
+      activeWorkspace = pick.name;
+      await loadLayout(pick.name);
+    }
+  }
+  async function switchTab(name) {
+    if (name === activeTabName) return;
+    // Save current tab's layout before swapping.
+    if (activeTabName) { try { await saveLayout(activeTabName); } catch {} }
+    activeTabName = name;
+    activeWorkspace = name;
+    try { localStorage.setItem('chepherd-active-tab', name); } catch {}
+    await loadLayout(name);
+    // After layout swap, reset pane focus to first leaf.
+    focusedPaneID = firstLeafID(layout);
+  }
+  async function addTab() {
+    // Find next free 'ws-N' name.
+    let n = 1;
+    while (tabs.find(t => t.name === `ws-${n}`)) n++;
+    const name = `ws-${n}`;
+    // Save current layout to its tab first so it persists.
+    if (activeTabName) { try { await saveLayout(activeTabName); } catch {} }
+    // Seed the new tab with the default focus layout.
+    layout = defaultFocusLayout();
+    await saveLayout(name);
+    tabs = [...tabs, { name }];
+    activeTabName = name;
+    activeWorkspace = name;
+    try { localStorage.setItem('chepherd-active-tab', name); } catch {}
+    focusedPaneID = firstLeafID(layout);
+  }
+  async function closeTab(name, ev) {
+    ev?.stopPropagation?.();
+    if (tabs.length === 1) return;  // never close the last tab
+    try { await fetch(`${API}/workspaces/${name}`, { method: 'DELETE' }); } catch {}
+    tabs = tabs.filter(t => t.name !== name);
+    if (activeTabName === name) {
+      const next = tabs[0];
+      activeTabName = next.name;
+      activeWorkspace = next.name;
+      try { localStorage.setItem('chepherd-active-tab', next.name); } catch {}
+      await loadLayout(next.name);
+      focusedPaneID = firstLeafID(layout);
+    }
+  }
+  function cycleTab(direction) {
+    if (tabs.length <= 1) return;
+    const i = tabs.findIndex(t => t.name === activeTabName);
+    const j = (i + direction + tabs.length) % tabs.length;
+    switchTab(tabs[j].name);
+  }
+
+  // --- pane focus (Ctrl+Arrow navigation) ---
+  let focusedPaneID = $state('');
+  function flattenLeafIDs(node, out = []) {
+    if (!node) return out;
+    if (node.kind === 'pane') { out.push(node.id); return out; }
+    flattenLeafIDs(node.a, out);
+    flattenLeafIDs(node.b, out);
+    return out;
+  }
+  function firstLeafID(node) {
+    const list = flattenLeafIDs(node);
+    return list[0] || '';
+  }
+  function movePaneFocus(direction) {
+    const list = flattenLeafIDs(layout);
+    if (list.length === 0) return;
+    if (!focusedPaneID || !list.includes(focusedPaneID)) {
+      focusedPaneID = list[0];
+      return;
+    }
+    // For now Left/Up = prev, Right/Down = next (flatten order).
+    // Spatial 2D nav across the split tree is a future enhancement.
+    const i = list.indexOf(focusedPaneID);
+    const delta = (direction === 'left' || direction === 'up') ? -1 : +1;
+    const j = (i + delta + list.length) % list.length;
+    focusedPaneID = list[j];
+    // Push DOM focus into the new pane so xterm receives keys.
+    queueMicrotask(() => {
+      const el = document.querySelector(`[data-pane-id="${focusedPaneID}"]`);
+      if (el) {
+        const target = el.querySelector('.xterm-helper-textarea, .xterm textarea, textarea, input, button') || el;
+        try { target.focus?.(); } catch {}
+      }
+    });
+  }
+
+  // --- key hijack mode (capture vs passthrough) ---
+  let captureMode = $state(true);     // default ON per operator decision
+  $effect(() => {
+    function onKey(e) {
+      // Release toggle: Ctrl+Shift+Esc — always works regardless of mode.
+      if (e.ctrlKey && e.shiftKey && (e.key === 'Escape' || e.code === 'Escape')) {
+        e.preventDefault();
+        captureMode = !captureMode;
+        return;
+      }
+      if (!captureMode) return;
+      // Ctrl+Alt+* is the universal-fallback flavor that browsers don't
+      // intercept; the plain Ctrl+* variants work in PWA/Electron mode.
+      const isCmd = (e.ctrlKey || e.metaKey);
+      if (!isCmd) return;
+      // Tab cycling — Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+Alt+Tab.
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        cycleTab(e.shiftKey ? -1 : +1);
+        return;
+      }
+      // New tab — Ctrl+T / Ctrl+Alt+T.
+      if (e.key === 't' || e.key === 'T') {
+        e.preventDefault();
+        addTab();
+        return;
+      }
+      // Pane navigation — Ctrl+Arrow / Ctrl+Alt+Arrow.
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        movePaneFocus(e.key.replace('Arrow','').toLowerCase());
+        return;
+      }
+    }
+    window.addEventListener('keydown', onKey, true);  // capture phase — beats xterm
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
+
+
   async function saveLayout(name = 'current') {
     const body = name === 'current'
       ? layout  // 'current' stays as bare layout for backwards compat
@@ -378,10 +527,13 @@
     if (!getStoredToken()) { needLogin = true; }
     window.addEventListener('chepherd-401', () => { needLogin = true; });
     refresh();
-    listSavedLayouts();
+    hydrateTabs();  // wires the named-workspaces tab bar (operator request 2026-05-29)
     const intv = setInterval(refresh, 2500);
     startEventStream();
-    loadLayout('current');
+    // Tab hydration loads the active workspace, so the 'current' fallback
+    // only runs if there are still no tabs (extremely rare — first boot).
+    // Initialise pane focus to the first leaf once a layout exists.
+    setTimeout(() => { if (!focusedPaneID) focusedPaneID = firstLeafID(layout); }, 250);
     const onTeamSettings = (ev) => { showTeamSettings = ev.detail; };
     const onAgentSettings = (ev) => { selectedAgent = ev.detail.agentName; showAgentSettings = true; };
     const onAddMember = (ev) => { showWizard = true; /* TeamSettings emits this; wizard handles spawn-with-team-prefilled */ };
@@ -481,8 +633,28 @@
     <button class="primary spawn-btn" on:click={() => (showWizard = true)} title="Spawn a single agent or apply a team template">+ new</button>
   </header>
 
+  <nav class="tabsbar" aria-label="workspace tabs">
+    {#each tabs as t (t.name)}
+      <button
+        class="tab"
+        class:active={t.name === activeTabName}
+        on:click={() => switchTab(t.name)}
+        title="Ctrl+Tab cycles tabs"
+      >
+        <span class="tab-name">{t.name}</span>
+        {#if tabs.length > 1}
+          <span class="tab-close" on:click={(e) => closeTab(t.name, e)} title="close tab">×</span>
+        {/if}
+      </button>
+    {/each}
+    <button class="tab-add" on:click={addTab} title="new tab (Ctrl+T / Ctrl+Alt+T)">+</button>
+    <span class="capture-badge" class:on={captureMode} title="Ctrl+Shift+Esc toggles">
+      {captureMode ? '● capture' : '○ passthrough'}
+    </span>
+  </nav>
+
   <div class="canvas">
-    <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
+    <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} setFocusedPane={(id) => focusedPaneID = id} />
   </div>
 </div>
 
@@ -646,6 +818,47 @@
   .handoff-row select { flex: 1; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-size: 0.8rem; padding: 0.2rem 0.3rem; }
   button.primary-sm { background: #0072F5; color: #fff; border: none; border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
   button.primary-sm:disabled { opacity: 0.4; cursor: default; }
+  /* tabs bar (operator request 2026-05-29 — Ctrl+Tab / Ctrl+T / pane focus) */
+  .tabsbar {
+    display: flex; align-items: stretch; gap: 0.15rem;
+    padding: 0 0.6rem; height: 32px;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+    overflow-x: auto; overflow-y: hidden;
+  }
+  .tabsbar .tab {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0 0.65rem; height: 100%;
+    background: transparent; border: 0;
+    border-right: 1px solid transparent; border-left: 1px solid transparent;
+    color: var(--fg-muted); font: inherit; font-size: 0.82rem; cursor: pointer;
+    transition: background 80ms, color 80ms;
+  }
+  .tabsbar .tab:hover { background: var(--bg-elev); color: var(--fg); }
+  .tabsbar .tab.active {
+    background: var(--bg-elev); color: var(--fg);
+    border-left-color: var(--border); border-right-color: var(--border);
+    border-bottom: 2px solid var(--accent, #87ceeb);
+  }
+  .tabsbar .tab-name { font-weight: 500; }
+  .tabsbar .tab-close {
+    color: var(--fg-faint); padding: 0 0.15rem; border-radius: 3px;
+    font-size: 0.95rem; line-height: 1; opacity: 0.6;
+  }
+  .tabsbar .tab:hover .tab-close { opacity: 1; }
+  .tabsbar .tab-close:hover { background: rgba(231,76,60,0.18); color: #e74c3c; }
+  .tabsbar .tab-add {
+    background: transparent; border: 0; color: var(--fg-muted); font: inherit;
+    padding: 0 0.7rem; font-size: 1rem; cursor: pointer;
+  }
+  .tabsbar .tab-add:hover { color: var(--accent, #87ceeb); }
+  .tabsbar .capture-badge {
+    margin-left: auto; align-self: center;
+    font-size: 0.72rem; color: var(--fg-muted);
+    padding: 0.1rem 0.55rem; border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+  }
+  .tabsbar .capture-badge.on { color: var(--accent, #87ceeb); background: rgba(135,206,235,0.10); }
+
   .canvas { flex: 1; min-height: 0; overflow: hidden; }
   .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
   /* #157 login modal */

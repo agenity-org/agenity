@@ -124,17 +124,16 @@
 </script>
 
 <div class="stage3">
-  <h2>Who's bringing what?</h2>
-  <p class="lead">
-    For THIS team: click a cell to flip whether a role brings that skill at spawn time.
-    Edits stay scoped to this team — global role defaults are unchanged.
-    Tune defaults across all spawns via the <strong>🎮 roles</strong> dashboard pane.
-  </p>
-
-  <label class="field">
-    <span>Team name</span>
-    <input type="text" bind:value={teamName} placeholder="my-team" />
-  </label>
+  <header class="head">
+    <div class="title">
+      <h2>Who's bringing what?</h2>
+      <p class="lead">Click a cell to flip a skill for this team. Edits don't touch global role defaults — tune those via the <strong>🎮 roles</strong> dashboard pane.</p>
+    </div>
+    <label class="field">
+      <span>Team name</span>
+      <input type="text" bind:value={teamName} placeholder="my-team" />
+    </label>
+  </header>
 
   {#if loading || allSkills.length === 0 || teamRoles.length === 0}
     <p class="hint">Loading matrix…</p>
@@ -174,12 +173,17 @@
 
 <style>
   .stage3 { padding: 1.1rem 1.25rem; }
+  /* Two-column header: title text on the left, compact "Team name" input on the right. */
+  .head { display: flex; align-items: flex-start; gap: 1.2rem; margin-bottom: 0.85rem; }
+  .head .title { flex: 1; min-width: 0; }
   h2 { font-size: 1.15rem; margin: 0 0 0.35rem 0; }
-  .lead { color: var(--fg-muted, #888); margin: 0 0 1rem 0; font-size: 0.85rem; line-height: 1.5; }
+  .lead { color: var(--fg-muted, #888); margin: 0; font-size: 0.84rem; line-height: 1.5; }
   .lead strong { color: var(--accent-2, #87ceeb); }
-  .field { display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.95rem; }
-  .field > span { color: var(--fg-muted, #888); font-size: 0.85rem; min-width: 86px; }
-  .field input { flex: 1; padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
+  .field {
+    flex: 0 0 14rem; display: flex; flex-direction: column; gap: 0.25rem;
+    font-size: 0.78rem; color: var(--fg-muted, #888);
+  }
+  .field input { padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
   .grid-wrap { overflow-x: auto; padding: 0.2rem 0; }
   .grid { border-collapse: separate; border-spacing: 0; font-size: 0.84rem; }
   .grid thead th { color: var(--fg-muted, #aaa); font-weight: 600; padding: 0.4rem 0.55rem; text-align: center; border-bottom: 1px solid var(--border, #2a2a2a); }

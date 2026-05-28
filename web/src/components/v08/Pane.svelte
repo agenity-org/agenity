@@ -25,7 +25,7 @@
   import WidgetMCPLog from './widgets/WidgetMCPLog.svelte';
   import WidgetKanban from './widgets/WidgetKanban.svelte';
 
-  let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, changeWidget, splitPane, removePane, refresh } = $props();
+  let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, changeWidget, splitPane, removePane, refresh, focusedPaneID = '', setFocusedPane = () => {} } = $props();
 
   function selectedAgentObject() {
     return sessions?.find(s => s.name === selectedAgent) || null;
@@ -117,26 +117,32 @@
 {#if node.kind === 'h'}
   <div class="hsplit" bind:this={containerEl}>
     <div class="hcell" style="width: {node.ratio * 100}%;">
-      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
+      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} />
     </div>
     <div class="hdivider" on:mousedown={startDrag}></div>
     <div class="hcell" style="width: {(1 - node.ratio) * 100}%;">
-      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
+      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} />
     </div>
   </div>
 {:else if node.kind === 'v'}
   <div class="vsplit" bind:this={containerEl}>
     <div class="vcell" style="height: {node.ratio * 100}%;">
-      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
+      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} />
     </div>
     <div class="vdivider" on:mousedown={startDrag}></div>
     <div class="vcell" style="height: {(1 - node.ratio) * 100}%;">
-      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} />
+      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} />
     </div>
   </div>
 {:else}
   <!-- leaf pane: widget container -->
-  <div class="pane" class:fullscreen>
+  <div
+    class="pane"
+    class:fullscreen
+    class:is-focused={focusedPaneID === node.id}
+    data-pane-id={node.id}
+    on:mousedown={() => setFocusedPane(node.id)}
+  >
     <header class="pane-header">
       <select class="widget-pick" value={node.widget} on:change={(e) => changeWidget(node.id, e.target.value)}>
         {#each WIDGETS as w}
@@ -225,6 +231,8 @@
   .hdivider:hover, .vdivider:hover { background: var(--accent); }
   .pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
   .pane.fullscreen { position: fixed; inset: 0; z-index: 900; border-radius: 0; border: none; }
+  /* Ctrl+Arrow pane focus indicator (operator request 2026-05-29). */
+  .pane.is-focused { border-color: var(--accent, #87ceeb); box-shadow: inset 0 0 0 1px var(--accent, #87ceeb); }
   .pane-header button.active { color: var(--accent); }
   .pane-header { display: flex; align-items: center; padding: 0.25rem 0.4rem; background: var(--bg-elev); border-bottom: 1px solid var(--border); font-size: 0.78rem; gap: 0.3rem; }
   .pane-header .spacer { flex: 1; }
