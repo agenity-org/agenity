@@ -7,7 +7,7 @@ import (
 func TestLoadAllTemplates(t *testing.T) {
 	templates := []string{"solo", "solo-supervised", "pair", "council", "multi-team"}
 	for _, n := range templates {
-		p, err := Load("/home/openova/repos/chepherd/catalog/" + n + ".yaml")
+		p, err := Load("../../catalog/" + n + ".yaml")
 		if err != nil {
 			t.Errorf("%s: %v", n, err)
 			continue
