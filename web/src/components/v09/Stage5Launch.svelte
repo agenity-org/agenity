@@ -1,28 +1,26 @@
 <!--
-  Stage4Launch — v0.9.1 SpawnWizard Stage 4 (#180 + #114 architect
-  2026-05-28 FINAL+).
+  Stage5Launch — v0.9.1 final spawn step.
 
-  Slim launch summary + per-agent role/skill row + pre-flight panel +
-  coverage warning + Launch button.
+  Consumes the 5-stage selection shape from SpawnWizardV9:
+    {
+      template, repo, members[], teamName,
+      skillOverrides:           { roleID → string[] },
+      typeAccounts:             { agentType → vaultEntryID },
+      agentAccountOverrides:    { agentLabel → vaultEntryID },
+    }
 
-  Per-agent shape (v0.9.1):
-    { label, role_id, owned_skills[], owned_skills_scope{}, agent_type,
-      account_id, account_class }
+  Per-agent resolution at Launch time:
+    accountID(a)  = agentAccountOverrides[a.label]
+                    || typeAccounts[a.agent_type || 'claude-code']
+                    || ''
+    ownedSkills(a)= skillOverrides[a.role_id]
+                    || a.owned_skills
+                    || [a.primary_skill]
 
-  Backward-compat: falls back to legacy primary_skill / additional_skills
-  when v0.9.1 fields are absent so the wizard still works against
-  /api/v1/team-templates returning v0.9.0 shape.
-
-  Launch policy per architect: warnings (incomplete coverage, etc.) are
-  INFORMATIONAL ONLY — Launch stays enabled unless a true failure
-  (preflight.anyFail) prevents spawn. Coverage gaps are surfaced
-  inline so the operator sees them but the button is never blocked
-  on stylistic concerns.
-
-  Props:
-    selection: { template, repo, members, teamName }
-    saveAsRecipe: $bindable — toggle
-    onlaunch():    callback when Launch fires
+  Operator-locked policy 2026-05-29:
+    Launch is BLOCKED if any agent has no resolvable account_id.
+    No auto-pick fallback; the wizard's `canAdvance` at Stage 4
+    already enforces this — this stage just guards the POST too.
 -->
 <script>
   import PreflightChecks from './PreflightChecks.svelte';
@@ -41,9 +39,7 @@
       if (!r.ok) return;
       const j = await r.json();
       const m = {};
-      for (const s of (j.skills || [])) {
-        m[s.id] = s;
-      }
+      for (const s of (j.skills || [])) m[s.id] = s;
       skillCache = m;
     } catch {}
   }
@@ -53,7 +49,6 @@
       if (!r.ok) return;
       const j = await r.json();
       const m = {};
-      // /api/v1/roles returns a bare array per roles_v194.go.
       const list = Array.isArray(j) ? j : (j.roles || []);
       for (const role of list) m[role.id] = role;
       roleCache = m;
@@ -61,47 +56,48 @@
   }
   $effect(() => { loadSkillNames(); loadRoleNames(); });
 
-  function skillName(id) {
-    if (!id) return '—';
-    return skillCache[id]?.name || id;
-  }
-  function roleName(id) {
-    if (!id) return '—';
-    return roleCache[id]?.name || id;
-  }
+  function skillName(id) { return id ? (skillCache[id]?.name || id) : '—'; }
+  function roleName(id)  { return id ? (roleCache[id]?.name || id) : '—'; }
 
-  // Render the role for a member — prefer v0.9.1 role_id, fall back
-  // to legacy primary_skill so a v0.9.0 server response still renders.
-  function memberRole(m) {
-    return m.role_id || m.primary_skill || '';
-  }
-  function memberOwnedSkills(m) {
+  function memberRole(m) { return m.role_id || m.primary_skill || ''; }
+
+  // Skills: Stage 3 per-team override wins; otherwise use the
+  // member's owned_skills (Stage 1 template default).
+  function ownedSkillsFor(m) {
+    const rID = memberRole(m);
+    const override = selection?.skillOverrides?.[rID];
+    if (Array.isArray(override) && override.length >= 0) return override;
     if (m.owned_skills && m.owned_skills.length) return m.owned_skills;
     if (m.additional_skills && m.additional_skills.length) return m.additional_skills;
     if (m.primary_skill) return [m.primary_skill];
     return [];
   }
-  function memberScope(m, skillID) {
-    return m.owned_skills_scope?.[skillID] || '';
+  function memberScope(m, skillID) { return m.owned_skills_scope?.[skillID] || ''; }
+
+  // Account resolution: per-agent override > per-type default.
+  function accountFor(m) {
+    const ov = selection?.agentAccountOverrides?.[m.label];
+    if (ov) return ov;
+    const t = m.agent_type || 'claude-code';
+    return selection?.typeAccounts?.[t] || '';
   }
 
-  // Reused-credentials roll-up.
+  // Account chips roll-up — group members by resolved accountID.
   const reused = $derived.by(() => {
     const counts = new Map();
-    for (const m of selection?.members || []) {
-      const k = m.account_id || `default-${m.account_class || 'unknown'}`;
+    for (const m of (selection?.members || [])) {
+      const k = accountFor(m) || `(unset-${m.agent_type || 'claude-code'})`;
       counts.set(k, (counts.get(k) || 0) + 1);
     }
     return [...counts.entries()].map(([k, n]) => ({ account: k, count: n }));
   });
 
-  // Coverage — same calculation as Stage 3 with team_only filter
-  // (#200 Bug 3). Informational only at this stage; Launch stays
-  // enabled regardless.
+  // Coverage informational — same logic as before but with the
+  // Stage-3 override applied.
   const coverage = $derived.by(() => {
     const owned = new Set();
-    for (const m of selection?.members || []) {
-      for (const sk of memberOwnedSkills(m)) owned.add(sk);
+    for (const m of (selection?.members || [])) {
+      for (const sk of ownedSkillsFor(m)) owned.add(sk);
     }
     const teamSize = (selection?.members || []).length;
     const builtins = Object.values(skillCache).filter(s => s.read_only);
@@ -117,45 +113,41 @@
     };
   });
 
-  // Launch — issues one POST /api/v1/sessions per member. v0.9.1 sends
-  // role_id + owned_skills + owned_skills_scope alongside the legacy
-  // primary_skill / system_prompt fields for backend-side backward
-  // compat. The runtime resolves the effective system prompt from
-  // role.PrimaryPrompt + skill.EffectiveBody() (Layer 2 of the
-  // 3-layer context).
+  // Gate Launch on every agent having a resolvable account_id —
+  // belt-and-braces alongside Stage 4 canAdvance.
+  const allAccountsResolved = $derived.by(() =>
+    (selection?.members || []).every(m => !!accountFor(m))
+  );
+
   async function launch() {
+    if (!allAccountsResolved) {
+      launchError = 'Every agent needs an account selected. Go back to Accounts.';
+      return;
+    }
     launching = true;
     launchError = '';
     try {
       const members = selection?.members || [];
-      // Pull skill catalogue (already cached, but make sure we have
-      // the latest including any Layer-2 overrides).
       const skResp = await fetch('/api-v08/v1/skills');
       const skJson = skResp.ok ? await skResp.json() : { skills: [] };
       const skByID = {};
       for (const s of (skJson.skills || [])) skByID[s.id] = s;
 
       for (const m of members) {
-        const ownedSkills = memberOwnedSkills(m);
-        // Resolve first owned skill for the legacy system_prompt field.
+        const ownedSkills = ownedSkillsFor(m);
         const firstSkill = ownedSkills.length ? skByID[ownedSkills[0]] || {} : {};
+        const accountID = accountFor(m);
         const body = {
           name: m.label,
           agent: m.agent_type || 'claude-code',
           team: selection?.teamName,
           role: 'worker',
           cwd: '/home/chepherd/repos',
-          // v0.9.1 fields
           role_id: memberRole(m),
           owned_skills: ownedSkills,
           owned_skills_scope: m.owned_skills_scope || {},
-          // Operator-chosen vault credential (empty = let server pick
-          // newest matching account_class). Without this, claude-code
-          // agents would fall through to host-claude auto-detect (or
-          // fail when CHEPHERD_NO_HOST_CLAUDE=1).
-          account_id: m.account_id || '',
-          claude_token_id: m.account_id || '',
-          // Legacy fields preserved for backend-side backward compat
+          account_id: accountID,
+          claude_token_id: accountID,
           system_prompt: firstSkill.prompt_override || firstSkill.org_override_body || '',
           stat_sheet: firstSkill.stat_sheet || undefined,
         };
@@ -178,7 +170,7 @@
   }
 </script>
 
-<div class="stage4">
+<div class="stage5">
   <h2>Ready to spawn</h2>
 
   <dl class="summary">
@@ -193,13 +185,15 @@
       <li>
         <span class="m-label">{m.label}</span>
         <span class="m-role">{roleName(memberRole(m))}</span>
-        {#each memberOwnedSkills(m) as sid}
+        {#each ownedSkillsFor(m) as sid}
           <span class="m-skill">
             {skillName(sid)}{#if memberScope(m, sid)} <em>({memberScope(m, sid)})</em>{/if}
           </span>
         {/each}
-        {#if m.account_id}
-          <span class="m-account">⚓ {m.account_id}</span>
+        {#if accountFor(m)}
+          <span class="m-account">⚓ {accountFor(m)}</span>
+        {:else}
+          <span class="m-account miss">⚠ no account</span>
         {/if}
       </li>
     {/each}
@@ -207,7 +201,7 @@
 
   {#if reused.length > 0}
     <div class="reused">
-      <span class="reused-lbl">Reused:</span>
+      <span class="reused-lbl">Accounts:</span>
       {#each reused as r}
         <span class="reused-chip">⚓ {r.account} (×{r.count})</span>
       {/each}
@@ -239,15 +233,16 @@
   <button
     type="button"
     class="launch"
-    disabled={preflight.anyFail || launching}
+    disabled={preflight.anyFail || launching || !allAccountsResolved}
     onclick={launch}
+    title={!allAccountsResolved ? 'Every agent needs an account selected — back to Accounts' : ''}
   >
     {launching ? 'Launching…' : '⚡ Launch'}
   </button>
 </div>
 
 <style>
-  .stage4 { padding: 1.25rem; }
+  .stage5 { padding: 1.25rem; }
   h2 { font-size: 1.15rem; margin: 0 0 1rem 0; }
 
   .summary { display: grid; grid-template-columns: 100px 1fr; gap: 0.4rem 0.85rem; margin: 0 0 0.85rem 0; font-size: 0.9rem; }
@@ -262,12 +257,12 @@
   .m-skill { font-size: 0.72rem; padding: 0.04rem 0.4rem; border-radius: 999px; background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a); color: var(--fg-muted, #aaa); }
   .m-skill em { color: var(--fg-faint, #777); font-style: italic; font-size: 0.68rem; }
   .m-account { color: var(--fg-muted, #888); font-size: 0.82rem; margin-left: auto; }
+  .m-account.miss { color: #e74c3c; }
 
   .reused { background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a); border-radius: 4px; padding: 0.4rem 0.65rem; margin-bottom: 0.85rem; font-size: 0.82rem; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
   .reused-lbl { color: var(--fg-muted, #888); }
   .reused-chip { color: var(--accent-2, #87ceeb); }
 
-  /* Coverage warning — informational only, Launch stays enabled */
   .warn {
     background: rgba(255, 193, 7, 0.08); border: 1px solid rgba(255, 193, 7, 0.3);
     border-radius: 5px; padding: 0.4rem 0.7rem; margin: 0 0 0.85rem 0;

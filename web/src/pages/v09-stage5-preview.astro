@@ -1,6 +1,6 @@
 ---
 import WizardStepper from '../components/v09/WizardStepper.svelte';
-import Stage4Launch from '../components/v09/Stage4Launch.svelte';
+import Stage5Launch from '../components/v09/Stage5Launch.svelte';
 import '../styles/global.css';
 ---
 <!DOCTYPE html>
@@ -8,7 +8,7 @@ import '../styles/global.css';
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>chepherd v0.9 — Stage 4 (Launch) preview</title>
+    <title>chepherd v0.9 — Stage 5 (Launch) preview</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
       html, body { margin: 0; padding: 0; min-height: 100vh; background: #0a0a0a; color: #f5f5f5; font-family: ui-sans-serif, system-ui, sans-serif; }
@@ -36,20 +36,28 @@ import '../styles/global.css';
       }
     </script>
     <div class="container">
-      <!-- Stepper label updated per architect 2026-05-27: Members → Agents -->
-      <WizardStepper client:load steps={[{label:'Shape'},{label:'Repo'},{label:'Agents'},{label:'Launch'}]} current={4} />
-      <Stage4Launch
+      <WizardStepper client:load steps={[{label:'Shape'},{label:'Repo'},{label:'Skills'},{label:'Accounts'},{label:'Launch'}]} current={5} />
+      <Stage5Launch
         client:load
         selection={{
           template: { id: 'scrum', name: 'Scrum Team' },
           repo: { kind: 'builtin', full_name: 'chepherd-admin/scrum-walk', default_branch: 'main' },
           teamName: 'scrum-team',
+          skillOverrides: {
+            'product-owner':        ['spec-driven','planning'],
+            'scrum-master':         ['team-orchestration','process-coaching'],
+            'architect':            ['planning','api-design','security-review','code-review'],
+            'full-stack-developer': ['tdd','debugging','api-design','e2e-testing'],
+            'qa-engineer':          ['e2e-testing'],
+          },
+          typeAccounts: { 'claude-code': 'demo-anthropic' },
+          agentAccountOverrides: {},
           members: [
-            { label: 'po-1',   role_id: 'product-owner',        owned_skills: ['spec-driven','planning'], account_class: 'anthropic' },
-            { label: 'sm-1',   role_id: 'scrum-master',         owned_skills: ['team-orchestration','process-coaching'], account_class: 'anthropic' },
-            { label: 'arch-1', role_id: 'architect',            owned_skills: ['planning','api-design','security-review','code-review'], account_class: 'anthropic' },
-            { label: 'impl-1', role_id: 'full-stack-developer', owned_skills: ['tdd','debugging','api-design','e2e-testing'], account_class: 'anthropic' },
-            { label: 'qa-1',   role_id: 'qa-engineer',          owned_skills: ['e2e-testing'], account_class: 'anthropic' },
+            { label: 'po-1',   role_id: 'product-owner',        agent_type: 'claude-code', account_class: 'anthropic' },
+            { label: 'sm-1',   role_id: 'scrum-master',         agent_type: 'claude-code', account_class: 'anthropic' },
+            { label: 'arch-1', role_id: 'architect',            agent_type: 'claude-code', account_class: 'anthropic' },
+            { label: 'impl-1', role_id: 'full-stack-developer', agent_type: 'claude-code', account_class: 'anthropic' },
+            { label: 'qa-1',   role_id: 'qa-engineer',          agent_type: 'claude-code', account_class: 'anthropic' },
           ]
         }}
       />
