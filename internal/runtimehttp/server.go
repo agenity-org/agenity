@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -590,15 +591,29 @@ func (s *Server) gitProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// gitProviderByID — DELETE /api/v1/git-providers/{id}
+// gitProviderByID — DELETE /api/v1/git-providers/{id} OR
+// DELETE /api/v1/git-providers/?id=<composite-id>
+//
+// git-provider IDs are composite ("github:https://github.com/<org>/<repo>")
+// and CANNOT be passed via path segment — Go's http.ServeMux issues a
+// 301 redirect that collapses "//" → "/" before this handler runs,
+// breaking the lookup. Composite IDs must use the query-param form.
+// Opaque slug IDs ("embedded") still work as path segments. Same fix
+// as the discovery handler (#200 walk).
 func (s *Server) gitProviderByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/git-providers/")
-	if id == "" {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Query-param form wins (composite IDs); fall back to path segment
+	// for opaque slugs.
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		rawTail := strings.TrimPrefix(r.URL.EscapedPath(), "/api/v1/git-providers/")
+		id, _ = url.QueryUnescape(rawTail)
+	}
+	if id == "" {
+		http.NotFound(w, r)
 		return
 	}
 	if err := runtime.DeleteGitProvider(s.rt.StateDir(), id); err != nil {
