@@ -42,12 +42,26 @@
     }
   }
   function tabLabel(t) {
-    const w = WIDGET_LABELS[t.widget] || t.widget || '?';
-    // Strip the leading icon glyph to keep tab labels compact.
+    if (!t.widget) return '+ pick widget';
+    const w = WIDGET_LABELS[t.widget] || t.widget;
     const noGlyph = w.replace(/^[^a-zA-Z]+\s*/, '');
     if (t.widget === 'terminal' && t.config?.agent) return noGlyph + ' · ' + t.config.agent;
+    if (t.widget === 'terminal') return noGlyph + ' · pick agent';
     return noGlyph;
   }
+
+  // Right-click context picker (operator 2026-05-29: 'if the user is
+  // willing to change the content of the tab, let him right clicking
+  // on the tab'). For terminal tabs starts at agent level; the agent
+  // picker has a "← change widget" back button.
+  let menu = $state(null); // { tabIdx, level: 'widget'|'agent' }
+  function onTabContext(ev, i) {
+    ev.preventDefault();
+    const t = (node.tabs || [])[i] || { widget: '' };
+    const level = t.widget === 'terminal' ? 'agent' : 'widget';
+    menu = { tabIdx: i, level };
+  }
+  function closeMenu() { menu = null; }
   function snapshotActive() {
     if (node.kind !== 'pane') return;
     ensureTabs();
@@ -68,20 +82,49 @@
     applyTab(i);
     saveLayout();
   }
-  function addTab(opts = {}) {
+  function addTab() {
+    // Operator 2026-05-29: new tabs open EMPTY with a center card picker
+    // — pick a widget; for terminal, cascade to pick an agent.
     ensureTabs();
     snapshotActive();
-    // Default: duplicate the current widget with a fresh agent slot.
-    // For terminal widgets, an empty agent means "auto-pick" (matches
-    // WidgetTerminal's default behaviour).
-    const fresh = {
-      widget: opts.widget || node.widget,
-      config: opts.widget === 'terminal' || node.widget === 'terminal'
-        ? { agent: '' }
-        : { ...(node.config || {}) },
-    };
-    node.tabs = [...node.tabs, fresh];
+    node.tabs = [...node.tabs, { widget: '', config: {} }];
     applyTab(node.tabs.length - 1);
+    menu = null;
+    saveLayout();
+  }
+  // Set the (widget, config) of a tab by index — used by both the
+  // center empty-tab picker and the right-click context menu.
+  function setTabWidget(tabIdx, w) {
+    ensureTabs();
+    const t = node.tabs[tabIdx] || { widget: '', config: {} };
+    const newConfig = w === 'terminal' ? { agent: t.config?.agent || '' } : {};
+    node.tabs[tabIdx] = { widget: w, config: newConfig };
+    if (tabIdx === node.activeTab) {
+      node.widget = w;
+      node.config = newConfig;
+    }
+    saveLayout();
+  }
+  function setTabAgent(tabIdx, agentName) {
+    ensureTabs();
+    const cfg = { agent: agentName };
+    node.tabs[tabIdx] = { widget: 'terminal', config: cfg };
+    if (tabIdx === node.activeTab) {
+      node.widget = 'terminal';
+      node.config = cfg;
+    }
+    menu = null;
+    saveLayout();
+  }
+  // Reset a tab back to the widget-cards view (used by the "← change
+  // widget" button in the agent picker for terminal tabs).
+  function resetTabToWidgetPicker(tabIdx) {
+    ensureTabs();
+    node.tabs[tabIdx] = { widget: '', config: {} };
+    if (tabIdx === node.activeTab) {
+      node.widget = '';
+      node.config = {};
+    }
     saveLayout();
   }
   function closeTab(i, ev) {
@@ -211,12 +254,6 @@
 
   let fullscreen = $state(false);
   function toggleFullscreen() { fullscreen = !fullscreen; }
-
-  // Operator 2026-05-29: 'second click on the tab header can still show
-  // the dropdown to change to'. Active-tab click toggles this; selecting
-  // a widget closes it.
-  let pickerOpen = $state(false);
-  function togglePicker() { pickerOpen = !pickerOpen; }
 </script>
 
 {#if node.kind === 'h'}
@@ -262,8 +299,10 @@
             role="tab"
             class="ph-tab"
             class:active={isActive}
-            on:click={() => { if (isActive) togglePicker(); else { switchTab(i); pickerOpen = false; } }}
-            title={isActive ? 'click again to change widget/agent · Ctrl+Alt+Tab cycles' : 'click to switch to this tab'}
+            class:empty={!t.widget}
+            on:click={() => switchTab(i)}
+            on:contextmenu={(e) => onTabContext(e, i)}
+            title="left-click: switch · right-click: change widget/agent · Ctrl+Alt+Tab cycles"
           >
             <span class="ph-tab-label">{tabLabel(t)}</span>
             {#if (node.tabs?.length || 0) > 1}
@@ -277,24 +316,10 @@
           title="new tab (Ctrl+Alt+T · plain Ctrl+T works only when chepherd is installed as a PWA — Chrome steals Ctrl+T from regular tabs)"
         >+</button>
       </div>
-      {#if pickerOpen}
-        <select class="widget-pick" value={node.widget} on:change={(e) => { changeWidget(node.id, e.target.value); pickerOpen = false; }}>
-          {#each WIDGETS as w}
-            <option value={w}>{WIDGET_LABELS[w]}</option>
-          {/each}
-        </select>
-      {/if}
 
-      {#if node.widget === 'terminal'}
-        <!-- Terminal-specific header content: agent picker + status chips,
-             in the same single header line per operator request. No
-             secondary header inside WidgetTerminal. -->
-        <select class="agent-pick" value={node.config?.agent || selectedAgent || ''} on:change={pickPaneAgent} title="agent attached to this terminal">
-          <option value="">(pick agent)</option>
-          {#each (sessions || []) as s}
-            <option value={s.name}>{s.role === 'shepherd' ? '✻ ' : '● '}{s.name}</option>
-          {/each}
-        </select>
+      {#if node.widget === 'terminal' && node.config?.agent}
+        <!-- Chips for the active terminal tab. Right-click the tab to
+             pick a different agent — the inline dropdown is gone. -->
         {@const a = paneAgent()}
         {#if a}
           <span class="chip ok" title="agent is live + reading from its PTY">● Live</span>
@@ -318,7 +343,41 @@
       <button title="close" on:click={() => removePane(node.id)}>×</button>
     </header>
     <div class="pane-body">
-      {#if node.widget === 'terminal'}
+      {#if !node.widget}
+        <!-- Empty tab — operator 2026-05-29: 'when user opens a new tab,
+             let the center of the pane show the options in card view'. -->
+        <div class="pane-picker center">
+          <h4 class="pp-title">Pick a widget</h4>
+          <div class="pp-grid">
+            {#each WIDGETS as w}
+              <button class="pp-card" on:click={() => setTabWidget(node.activeTab || 0, w)}>
+                <span class="pp-icon">{(WIDGET_LABELS[w] || w).split(' ')[0]}</span>
+                <span class="pp-name">{(WIDGET_LABELS[w] || w).replace(/^[^a-zA-Z]+\s*/, '')}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {:else if node.widget === 'terminal' && !node.config?.agent}
+        <!-- Terminal cascade — operator 2026-05-29: 'since terminal has
+             a cascaded 2-level behaviour selecting the terminal card
+             should list all the agents to select'. -->
+        <div class="pane-picker center">
+          <button class="pp-back" on:click={() => resetTabToWidgetPicker(node.activeTab || 0)} title="back to widget picker">← change widget</button>
+          <h4 class="pp-title">Pick an agent</h4>
+          <div class="pp-grid agents">
+            {#each (sessions || []) as s}
+              <button class="pp-card agent" on:click={() => setTabAgent(node.activeTab || 0, s.name)}>
+                <span class="pp-dot" class:live={!s.exited} class:dead={s.exited}>{s.exited ? '○' : '●'}</span>
+                <span class="pp-name">{s.name}</span>
+                {#if s.role && s.role !== 'worker'}<span class="pp-meta">{s.role}</span>{/if}
+              </button>
+            {/each}
+            {#if (sessions || []).length === 0}
+              <div class="pp-empty">No agents running. Spawn one via <kbd>+ new</kbd> in the top bar.</div>
+            {/if}
+          </div>
+        </div>
+      {:else if node.widget === 'terminal'}
         <WidgetTerminal {selectedAgent} {sessions} {node} />
       {:else if node.widget === 'session-list'}
         <WidgetSessionList {sessions} {teams} {memberships} {selectedAgent} {selectAgent} />
@@ -352,6 +411,48 @@
         <WidgetRoleMatrix />
       {:else}
         <div class="empty">widget: {node.widget}</div>
+      {/if}
+
+      {#if menu}
+        <!-- Right-click context picker (operator 2026-05-29). Overlay
+             over the pane body. For terminal tabs starts at agent level
+             with a "← change widget" back button. -->
+        <div class="pane-picker overlay" on:click|self={closeMenu}>
+          <div class="pane-picker-card" on:click|stopPropagation>
+            <header class="pp-head">
+              {#if menu.level === 'agent'}
+                <button class="pp-back" on:click={() => menu = { ...menu, level: 'widget' }}>← change widget</button>
+                <h4 class="pp-title">Pick an agent</h4>
+              {:else}
+                <h4 class="pp-title">Pick a widget</h4>
+              {/if}
+              <button class="pp-close" on:click={closeMenu} title="close">×</button>
+            </header>
+            {#if menu.level === 'widget'}
+              <div class="pp-grid">
+                {#each WIDGETS as w}
+                  <button class="pp-card" on:click={() => { setTabWidget(menu.tabIdx, w); if (w !== 'terminal') closeMenu(); else menu = { ...menu, level: 'agent' }; }}>
+                    <span class="pp-icon">{(WIDGET_LABELS[w] || w).split(' ')[0]}</span>
+                    <span class="pp-name">{(WIDGET_LABELS[w] || w).replace(/^[^a-zA-Z]+\s*/, '')}</span>
+                  </button>
+                {/each}
+              </div>
+            {:else}
+              <div class="pp-grid agents">
+                {#each (sessions || []) as s}
+                  <button class="pp-card agent" on:click={() => setTabAgent(menu.tabIdx, s.name)}>
+                    <span class="pp-dot" class:live={!s.exited} class:dead={s.exited}>{s.exited ? '○' : '●'}</span>
+                    <span class="pp-name">{s.name}</span>
+                    {#if s.role && s.role !== 'worker'}<span class="pp-meta">{s.role}</span>{/if}
+                  </button>
+                {/each}
+                {#if (sessions || []).length === 0}
+                  <div class="pp-empty">No agents running.</div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
       {/if}
     </div>
   </div>
@@ -394,6 +495,71 @@
     font: inherit; font-size: 0.95rem; padding: 0 0.45rem; cursor: pointer;
   }
   .ph-tab-add:hover { color: var(--accent, #87ceeb); }
+  .ph-tab.empty { color: var(--accent-2, #87ceeb); font-style: italic; }
+
+  /* Pane picker — card grid shown either in the centre of an empty tab
+     (operator: 'when user opens a new tab, let the centre of the pane
+     show the options in card view') or as an overlay over the body
+     when the operator right-clicks a tab. Same component, two
+     contexts. */
+  .pane-picker.center {
+    height: 100%; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 1rem; gap: 0.85rem;
+  }
+  .pane-picker.overlay {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding-top: 2rem;
+    z-index: 50;
+  }
+  .pane-picker-card {
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.9rem 1rem;
+    max-width: min(90%, 32rem);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+  }
+  .pp-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.65rem; }
+  .pp-title { margin: 0; flex: 1; font-size: 0.92rem; color: var(--fg); font-weight: 600; }
+  .pp-back {
+    background: transparent; border: 0; color: var(--accent-2, #87ceeb);
+    font: inherit; font-size: 0.78rem; cursor: pointer; padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+  }
+  .pp-back:hover { background: rgba(135,206,235,0.12); }
+  .pp-close {
+    background: transparent; border: 0; color: var(--fg-muted);
+    font: inherit; font-size: 1.1rem; line-height: 1; cursor: pointer;
+    padding: 0 0.3rem;
+  }
+  .pp-close:hover { color: #e74c3c; }
+  .pp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+    gap: 0.5rem;
+  }
+  .pp-grid.agents { grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); }
+  .pp-card {
+    display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+    padding: 0.7rem 0.5rem; border-radius: 7px;
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--fg); cursor: pointer; font: inherit; text-align: center;
+    transition: border-color 80ms, background 80ms;
+  }
+  .pp-card:hover { border-color: var(--accent-2, #87ceeb); background: rgba(135,206,235,0.06); }
+  .pp-card.agent { flex-direction: row; justify-content: flex-start; gap: 0.4rem; text-align: left; padding: 0.5rem 0.65rem; }
+  .pp-icon { font-size: 1.25rem; line-height: 1; color: var(--accent-2, #87ceeb); }
+  .pp-name { font-size: 0.82rem; font-weight: 600; }
+  .pp-meta { font-size: 0.7rem; color: var(--fg-muted); margin-left: auto; }
+  .pp-dot { font-size: 0.7rem; line-height: 1; }
+  .pp-dot.live { color: #2ed573; }
+  .pp-dot.dead { color: var(--fg-faint); }
+  .pp-empty { grid-column: 1 / -1; color: var(--fg-muted); font-size: 0.85rem; text-align: center; padding: 1rem 0; }
+  .pp-empty kbd { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 0 0.25rem; }
+
+  /* Make the leaf pane a positioning context so overlay sits above body. */
+  .pane { position: relative; }
   .pane.fullscreen { position: fixed; inset: 0; z-index: 900; border-radius: 0; border: none; }
   /* Ctrl+Arrow pane focus indicator (operator request 2026-05-29). */
   .pane.is-focused { border-color: var(--accent, #87ceeb); box-shadow: inset 0 0 0 1px var(--accent, #87ceeb); }
