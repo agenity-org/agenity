@@ -38,35 +38,54 @@ func (s *Server) discoveryRouter(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "discovery service not initialised"})
 		return
 	}
-	// Use EscapedPath() rather than r.URL.Path: Go's net/http ServeMux
-	// path-cleans the URL before dispatch, collapsing "//" → "/" — which
-	// mangles composite IDs like "github:https://github.com/<org>/<repo>"
-	// that the v0.8 git-providers list emits. EscapedPath preserves the
-	// original percent-encoded form ("%2F%2F") so we can decode it
-	// ourselves and reach the lookup with the exact stored ID.
-	rawPath := r.URL.EscapedPath()
-	rawPath = strings.TrimPrefix(rawPath, "/api/v1/discovery/")
-	// Operator-friendly fallback: also accept the legacy ?token-id=
-	// query-param form some UI callers still use. The path segment
-	// remains the canonical contract.
-	if rawPath == "" {
-		if q := r.URL.Query().Get("token-id"); q != "" {
-			rawPath = url.QueryEscape(q)
-		}
-	}
-	path, _ := url.QueryUnescape(rawPath)
+	// Two URL forms supported (see DiscoveryTree.svelte):
+	//
+	//   PATH FORM (opaque UUID, the #195 contract):
+	//     GET   /api/v1/discovery/{token-id}
+	//     POST  /api/v1/discovery/{token-id}/refresh
+	//     GET   /api/v1/discovery/{token-id}/repos?q=
+	//
+	//   QUERY FORM (composite IDs containing ':' or '/'):
+	//     GET   /api/v1/discovery/?token-id=<composite>
+	//     POST  /api/v1/discovery/refresh?token-id=<composite>
+	//     GET   /api/v1/discovery/repos?token-id=<composite>&q=
+	//
+	// The query form exists because Go's http.ServeMux issues a 301
+	// redirect that collapses "//" → "/" on any path containing
+	// double-slashes — which mangles composite IDs like
+	// "github:https://github.com/<org>/<repo>" before any handler can
+	// run. Query parameters survive the mux's path-cleaner untouched.
+	//
+	// We resolve in priority order: query param ?token-id= wins if
+	// present (it's the explicit composite-ID form); otherwise we
+	// fall back to the path segment.
+	pathTail := strings.TrimPrefix(r.URL.Path, "/api/v1/discovery/")
 	action := ""
-	tokenID := ""
 	switch {
-	case strings.HasSuffix(path, "/refresh"):
+	case pathTail == "refresh" || strings.HasSuffix(pathTail, "/refresh"):
 		action = "refresh"
-		tokenID = strings.TrimSuffix(path, "/refresh")
-	case strings.HasSuffix(path, "/repos"):
+		pathTail = strings.TrimSuffix(pathTail, "/refresh")
+		pathTail = strings.TrimPrefix(pathTail, "refresh")
+	case pathTail == "repos" || strings.HasSuffix(pathTail, "/repos"):
 		action = "repos"
-		tokenID = strings.TrimSuffix(path, "/repos")
-	default:
-		tokenID = path
+		pathTail = strings.TrimSuffix(pathTail, "/repos")
+		pathTail = strings.TrimPrefix(pathTail, "repos")
 	}
+
+	tokenID := r.URL.Query().Get("token-id")
+	if tokenID == "" {
+		// Path-segment form (opaque UUID). EscapedPath preserves any
+		// percent-encoding the mux didn't redirect-clean away.
+		rawPathTail := strings.TrimPrefix(r.URL.EscapedPath(), "/api/v1/discovery/")
+		switch action {
+		case "refresh":
+			rawPathTail = strings.TrimSuffix(rawPathTail, "/refresh")
+		case "repos":
+			rawPathTail = strings.TrimSuffix(rawPathTail, "/repos")
+		}
+		tokenID, _ = url.QueryUnescape(rawPathTail)
+	}
+	_ = pathTail // path tail kept only for action discrimination above
 
 	// #195 — empty token-id must return 400 with structured JSON.
 	if tokenID == "" {

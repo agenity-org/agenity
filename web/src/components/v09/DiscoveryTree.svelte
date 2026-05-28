@@ -28,13 +28,22 @@
     loading = true;
     error = '';
     try {
-      // #200 Bug 6 fix: discovery API expects {token-id} as PATH
-      // segment per #195 contract, NOT as ?token-id= query param.
-      // Sending the legacy query-param form returned 400 "token-id
-      // required" because the path segment was empty.
+      // Composite IDs (containing ':' or '/' — the v0.8 git-providers
+      // shape) cannot live in a URL path segment: Go's http.ServeMux
+      // path-cleans "//" → "/" and issues a 301 redirect before any
+      // handler runs, which mangles "https://" into "https:/" and
+      // breaks the lookup. Send composite IDs via QUERY PARAM where
+      // the encoding survives. Opaque-UUID callers stay on the
+      // path-segment form (the #195 contract).
+      const containsSep = /[:/]/.test(tokenID);
+      const enc = encodeURIComponent(tokenID);
       const url = force
-        ? `/api-v08/v1/discovery/${encodeURIComponent(tokenID)}/refresh`
-        : `/api-v08/v1/discovery/${encodeURIComponent(tokenID)}`;
+        ? (containsSep
+            ? `/api-v08/v1/discovery/refresh?token-id=${enc}`
+            : `/api-v08/v1/discovery/${enc}/refresh`)
+        : (containsSep
+            ? `/api-v08/v1/discovery/?token-id=${enc}`
+            : `/api-v08/v1/discovery/${enc}`);
       const r = await fetch(url, { method: force ? 'POST' : 'GET' });
       if (!r.ok) {
         const t = await r.text();
