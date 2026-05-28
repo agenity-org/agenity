@@ -77,7 +77,15 @@
   async function loadVault() {
     try {
       const r = await fetch('/api-v08/v1/vault');
-      if (r.ok) vault = (await r.json()).creds || [];
+      if (!r.ok) return;
+      const j = await r.json();
+      // Shape coercion: /api/v1/vault returns a bare array, not
+      // {creds: [...]}. Same wrong-default pattern that broke
+      // git-providers earlier — surfaced here as the Claude banner
+      // showing even when vault HAS claude-oauth entries.
+      vault = Array.isArray(j) ? j
+            : Array.isArray(j.creds) ? j.creds
+            : [];
     } catch {}
   }
   async function loadAgents() {
