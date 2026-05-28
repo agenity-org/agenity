@@ -22,15 +22,45 @@
 
   let { selectedRepo = $bindable(null), onselect } = $props();
 
-  // Per-provider PAT-create helper links — the architect-flagged fix
-  // for "no URL guidance for creating tokens". Each opens the
-  // provider's scoped token-create page.
+  // Per-provider PAT-create helper links. The scopes are the minimum
+  // chepherd needs: discover orgs + repos, clone, push branches +
+  // commits, open pull requests. Operators can tighten further per-
+  // provider if their orgs require it.
+  //
+  //   GitHub:    repo + read:org
+  //              - repo:        clone / push / branches / PRs
+  //              - read:org:    enumerate orgs the user belongs to
+  //              (workflow not needed unless chepherd updates Actions)
+  //   GitLab:    read_api + read_repository + write_repository
+  //              - read_api:           org/project enumeration + PRs
+  //              - read_repository:    clone
+  //              - write_repository:   push branches + commits
+  //              (api scope is "full access" — too broad; use the
+  //              three least-privilege scopes instead)
+  //   Bitbucket: app passwords don't accept scope params via URL —
+  //              instruct operators inline below the link.
+  //   Gitea / on-prem: instance-specific, operator's call.
   const PAT_HELPERS = {
-    github:    { url: 'https://github.com/settings/tokens/new?scopes=repo,read:org&description=chepherd', label: 'Create a GitHub PAT' },
-    gitlab:    { url: 'https://gitlab.com/-/user_settings/personal_access_tokens?scopes=api,read_repository', label: 'Create a GitLab PAT' },
-    bitbucket: { url: 'https://bitbucket.org/account/settings/app-passwords/', label: 'Create a Bitbucket app password' },
-    gitea:     { url: '', label: 'Create a Gitea access token (in your instance settings)' },
-    onprem:    { url: '', label: 'Open your instance\'s token-create page' },
+    github: {
+      url:   'https://github.com/settings/tokens/new?scopes=repo,read:org&description=chepherd',
+      label: 'Create a GitHub PAT (scopes: repo + read:org)',
+    },
+    gitlab: {
+      url:   'https://gitlab.com/-/user_settings/personal_access_tokens?scopes=read_api,read_repository,write_repository',
+      label: 'Create a GitLab PAT (scopes: read_api + read_repository + write_repository)',
+    },
+    bitbucket: {
+      url:   'https://bitbucket.org/account/settings/app-passwords/',
+      label: 'Create a Bitbucket app password — tick: Account(read) · Workspace(read) · Repositories(read+write) · Pull requests(read+write)',
+    },
+    gitea: {
+      url:   '',
+      label: 'Create a Gitea access token in your instance settings (scopes: repo + read:org)',
+    },
+    onprem: {
+      url:   '',
+      label: 'Open your instance\'s token-create page (scopes: repo read + repo write at minimum)',
+    },
   };
 
   // 6 provider cards in canonical order.
@@ -306,12 +336,11 @@
             <span>Instance URL</span>
             <input type="text" bind:value={pasteURL} placeholder={mode === 'onprem' ? 'https://git.example.com' : 'https://gitea.example.com'} />
           </label>
-        {:else}
-          <label class="onprem-row">
-            <span>Instance URL <em class="optional">(optional)</em></span>
-            <input type="text" bind:value={pasteURL} placeholder={'default: ' + DEFAULT_REPO_URL[mode]} />
-          </label>
         {/if}
+        <!-- For github / gitlab / bitbucket the URL is the canonical
+             host (github.com etc.) — no field shown. Operators using
+             self-hosted GitHub Enterprise / GitLab self-managed pick
+             the "On-prem" card instead, which collects the URL. -->
         <label class="onprem-row">
           <span>Personal Access Token</span>
           <input type="password" bind:value={pasteToken} placeholder="paste here" autocomplete="off" />
