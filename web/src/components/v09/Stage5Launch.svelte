@@ -84,7 +84,51 @@
       roleCache = m;
     } catch {}
   }
-  $effect(() => { loadSkillNames(); loadRoleNames(); });
+  // #274 — pre-Launch name-collision check. Cross-reference each
+  // proposed agent label against /api/v1/sessions to surface
+  // conflicts INLINE before the operator hits Launch, instead of
+  // watching M/N agents fail with `runtime.Spawn: name "X" already
+  // in use`. Walker hit this on a Squad-while-scrum scenario: 4/8
+  // agents share names with the live scrum team → 4 spawn errors
+  // with no upfront warning. Auto-suffixing (`scrum-master-2`) is
+  // proposed as the operator-friendly default; manual rename per row
+  // is the escape hatch.
+  let liveAgentNames = $state(new Set());
+  async function loadLiveAgentNames() {
+    try {
+      const r = await fetch('/api-v08/v1/sessions');
+      if (!r.ok) return;
+      const j = await r.json();
+      const list = Array.isArray(j?.sessions) ? j.sessions
+                 : Array.isArray(j) ? j : [];
+      liveAgentNames = new Set(list.map(s => s.name).filter(Boolean));
+    } catch {}
+  }
+  $effect(() => { loadSkillNames(); loadRoleNames(); loadLiveAgentNames(); });
+
+  // Map of proposed-label → effective-label (auto-suffix on collision).
+  // Operator can override by editing the label inline; for v0.9.2 we
+  // auto-suffix with a numeric counter and surface the rename in the
+  // table.
+  let labelOverrides = $state({});
+  function effectiveLabel(m) {
+    if (labelOverrides[m.label]) return labelOverrides[m.label];
+    if (!liveAgentNames.has(m.label)) return m.label;
+    // Find the lowest -N suffix that doesn't collide.
+    let i = 2;
+    while (liveAgentNames.has(m.label + '-' + i)) i++;
+    return m.label + '-' + i;
+  }
+  // List of (originalLabel, effectiveLabel) for agents whose name was
+  // auto-suffixed — drives the inline warning banner.
+  const collisions = $derived.by(() => {
+    const out = [];
+    for (const m of (selection?.members || [])) {
+      const eff = effectiveLabel(m);
+      if (eff !== m.label) out.push({ original: m.label, effective: eff });
+    }
+    return out;
+  });
 
   function skillName(id) { return id ? (skillCache[id]?.name || id) : '—'; }
   function roleName(id)  { return id ? (roleCache[id]?.name || id) : '—'; }
@@ -222,7 +266,11 @@
         ? { ...(firstSkill.stat_sheet || {}), ...(resolvedMod ? { model_tier: resolvedMod } : {}) }
         : undefined;
       const body = {
-        name: m.label,
+        // #274 — use the collision-resolved effective label so an
+        // operator launching Squad while a scrum team is alive auto-
+        // suffixes the duplicate names instead of getting M/N
+        // `runtime.Spawn: name "X" already in use` errors.
+        name: effectiveLabel(m),
         agent: resolvedAgent,
         team: selection?.teamName,
         role: 'worker',
@@ -349,6 +397,27 @@
     {/if}
   </div>
 
+  {#if collisions.length > 0 && !launchResults}
+    <!-- #274 — pre-Launch name-collision banner. Listing the auto-
+         suffixed renames inline so the operator sees the resolution
+         BEFORE clicking Launch + can intervene if they want to abort
+         vs accept the -N suffixes. -->
+    <div class="collision-banner" role="status">
+      <span class="cb-icon">⚠</span>
+      <div class="cb-text">
+        <strong>{collisions.length} agent {collisions.length === 1 ? 'name is' : 'names are'} already in use.</strong>
+        Auto-suffixing to avoid the
+        <code>runtime.Spawn: name "X" already in use</code> error:
+        <ul class="cb-list">
+          {#each collisions as c}
+            <li><code>{c.original}</code> → <code>{c.effective}</code></li>
+          {/each}
+        </ul>
+        <em>Stop the existing agent(s) first if you want the original names back.</em>
+      </div>
+    </div>
+  {/if}
+
   <table class="agents-table" class:launching={launchingNow || !!launchResults}>
     <thead>
       <tr>
@@ -367,7 +436,14 @@
             class:row-spawning={r?.status === 'spawning'}
             class:row-failed={r?.status === 'failed'}
             class:row-queued={r?.status === 'queued'}>
-          <td class="col-label">{m.label}</td>
+          <td class="col-label">
+            {#if effectiveLabel(m) !== m.label}
+              <span class="lbl-renamed" title={`Auto-suffixed: original "${m.label}" is already taken`}>{effectiveLabel(m)}</span>
+              <small class="lbl-was">was {m.label}</small>
+            {:else}
+              {m.label}
+            {/if}
+          </td>
           <td class="col-role" title={roleTooltip(m)}>{roleName(memberRole(m))}</td>
           <td class="col-type">{resolvedAgentType(m)}</td>
           <td class="col-model">{resolvedModel(m) || '—'}</td>
@@ -450,6 +526,38 @@
   /* Team header — single-row identity bar with team name + repo on
      the left and an account roll-up on the right when all agents
      share. Replaces the old <dl class="summary"> + .reused split. */
+  /* #274 — name-collision banner. Inline, non-blocking — operator
+     can still Launch + the renames have already happened. Stops short
+     of a modal because the resolution (-N suffix) is operator-friendly
+     and the alternative (stop existing agents) is operator's call. */
+  .collision-banner {
+    display: flex; gap: 0.7rem; align-items: flex-start;
+    padding: 0.6rem 0.85rem;
+    background: rgba(255, 193, 7, 0.08);
+    border: 1px solid rgba(255, 193, 7, 0.35);
+    border-radius: 5px;
+    margin-bottom: 0.9rem;
+    font-size: 0.82rem;
+  }
+  .cb-icon { color: #f7b500; font-size: 1rem; flex-shrink: 0; }
+  .cb-text { color: var(--fg, #f5f5f5); line-height: 1.45; }
+  .cb-text strong { color: #f7b500; }
+  .cb-text code {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.78rem;
+    padding: 0 0.25rem;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 3px;
+  }
+  .cb-list {
+    margin: 0.35rem 0 0.35rem 1.2rem;
+    padding: 0;
+  }
+  .cb-list li { padding: 0.08rem 0; }
+  .cb-text em { color: var(--fg-muted, #aaa); font-style: italic; font-size: 0.78rem; }
+  .lbl-renamed { color: #f7b500; font-weight: 600; }
+  .lbl-was { display: block; color: var(--fg-faint, #777); font-size: 0.7rem; margin-top: 0.1rem; }
+
   .team-header {
     display: flex; align-items: center; gap: 1rem;
     padding: 0.7rem 0.85rem;
