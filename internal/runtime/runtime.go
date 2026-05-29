@@ -253,6 +253,22 @@ type Runtime struct {
 	// Set via SetVault after vault.Open succeeds in main.
 	vault VaultProvider
 
+	// claudeRefreshMu serializes Claude-OAuth refresh-token POSTs in
+	// materializeAgentSecrets. #264 — when N agents spawn concurrently
+	// (operator launches a 5-agent team from the wizard), all N call
+	// refreshClaudeOAuthIfNeeded with the SAME stale refresh_token.
+	// Anthropic's OAuth endpoint invalidates the refresh_token on
+	// FIRST use, so calls 2…N get HTTP 401 and the spawned containers
+	// inherit a stale accessToken → claude-code OAuth-login UI on
+	// boot for 4/5 agents. The lock + re-read pattern ensures only
+	// the first racer hits Anthropic; the others read the vault entry
+	// that the first racer just wrote back, see it's now fresh, and
+	// skip the refresh. One mutex covers all token-ids — the spawn
+	// rate is bounded by operator clicks (single-digits per minute)
+	// so cross-token contention is irrelevant; per-token mutexes
+	// would add complexity for zero observable benefit.
+	claudeRefreshMu sync.Mutex
+
 	// extraAgentEnv is appended to every agent's spawn env. Used to
 	// inject the operator's MCP bearer token (CHEPHERD_TOKEN) so the
 	// agent's bridge subprocess can authenticate (#139).
@@ -1975,12 +1991,33 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 		// refreshToken for a fresh access+refresh pair via Anthropic's
 		// OAuth /token endpoint. Persist the new pair back to the vault
 		// so the next spawn doesn't re-burn the refresh.
+		//
+		// #264 — when a team of N agents spawn concurrently (operator
+		// hits Launch on a Squad/Scrum template), all N hit this branch
+		// at the same time with the SAME stale refresh_token. Anthropic
+		// invalidates the refresh_token on FIRST successful POST, so
+		// calls 2…N get HTTP 401 + the spawned containers inherit an
+		// already-stale accessToken → claude-code OAuth-login UI on
+		// boot for (N-1)/N agents. Operator hit 4/5 401s on the scrum
+		// team. Fix: serialize the refresh step behind
+		// claudeRefreshMu, and re-read the vault INSIDE the critical
+		// section so the second-and-later racers pick up the first
+		// racer's freshly-written pair (no spurious second POST).
+		r.claudeRefreshMu.Lock()
+		// Re-read vault inside the lock — by the time we got here,
+		// another racer may have already refreshed + written back.
+		if r.vault != nil && spec.ClaudeTokenID != "" {
+			if v, err := r.vault.GetValue(spec.ClaudeTokenID); err == nil && v != "" {
+				payload = v
+			}
+		}
 		if refreshed, ok := refreshClaudeOAuthIfNeeded(payload); ok {
 			payload = refreshed
 			if r.vault != nil && spec.ClaudeTokenID != "" {
 				_ = r.vault.UpdateValue(spec.ClaudeTokenID, refreshed)
 			}
 		}
+		r.claudeRefreshMu.Unlock()
 		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
 			return "", err
 		}
@@ -2422,7 +2459,15 @@ const claudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 // accepts grant_type=refresh_token. Same one claude-code itself uses
 // for its background refresh. Confirmed reachable from agent containers
 // (HTTP 200 on /; HTTP 400 on POST {} = endpoint exists, validates body).
+//
+// `claudeOAuthTokenEndpointOverride` is a test-seam: when non-empty,
+// refreshClaudeOAuthIfNeeded POSTs there instead of the canonical URL.
+// Production code never sets it; the #264 concurrency regression test
+// points it at an httptest.Server that COUNTS requests so we can
+// assert claudeRefreshMu serialised the N racers down to 1 POST.
 const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
+
+var claudeOAuthTokenEndpointOverride string
 
 // refreshClaudeOAuthIfNeeded inspects a credentials.json payload (the
 // JSON shape claude-code writes to ~/.claude/.credentials.json). If
@@ -2435,6 +2480,12 @@ const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 // This is the permanent fix for the "agent shows OAuth login screen
 // even though credentials are present" bug (operator walk 2026-05-28,
 // experimentally verified — see commit log).
+//
+// Note: this function is intentionally NOT goroutine-safe by itself —
+// the caller (`Runtime.materializeAgentSecrets`) serialises it via
+// `claudeRefreshMu` to prevent the #264 refresh-token race where N
+// concurrent spawns each POST the same refresh_token and Anthropic
+// 401s all but the first.
 func refreshClaudeOAuthIfNeeded(payload string) (string, bool) {
 	var doc struct {
 		ClaudeAiOauth struct {
@@ -2464,7 +2515,11 @@ func refreshClaudeOAuthIfNeeded(payload string) (string, bool) {
 		"client_id":     claudeOAuthClientID,
 	}
 	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequest(http.MethodPost, claudeOAuthTokenEndpoint, bytes.NewReader(bodyBytes))
+	endpoint := claudeOAuthTokenEndpoint
+	if claudeOAuthTokenEndpointOverride != "" {
+		endpoint = claudeOAuthTokenEndpointOverride
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return payload, false
 	}
