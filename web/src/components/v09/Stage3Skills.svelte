@@ -202,7 +202,15 @@
      accumulated min-widths exceed the container (mobile / 5+ roles). */
   .skills-grid { border-collapse: separate; border-spacing: 0; font-size: 0.84rem; width: 100%; table-layout: fixed; }
   .skills-grid thead th { color: var(--fg-muted, #aaa); font-weight: 600; padding: 0.4rem 0.55rem; text-align: center; border-bottom: 1px solid var(--border, #2a2a2a); }
-  .skills-grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.7rem; font-weight: 500; width: 14rem; max-width: 14rem; white-space: nowrap; }
+  /* #251 — `white-space: nowrap` alone lets long skill names visually
+     leak across the column boundary even though the cell's measured
+     width stays at 14rem. Adding `overflow: hidden` clips the bleed
+     + `text-overflow: ellipsis` gives the operator a readable
+     truncation marker. The full skill name is still accessible via
+     the existing title={sk.description} tooltip (line 156). The
+     thead's "skill" header cell shares the same class but is short
+     enough to never trip the ellipsis. */
+  .skills-grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.7rem; font-weight: 500; width: 14rem; max-width: 14rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .skills-grid .role-th { color: var(--accent-2, #87ceeb); min-width: 5rem; }
   .skills-grid .cnt { color: var(--fg-muted, #888); margin-left: 0.18rem; font-size: 0.72rem; }
   .cell {
