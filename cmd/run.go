@@ -32,6 +32,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/chepherd/chepherd/internal/federation"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
 	"github.com/chepherd/chepherd/internal/profile"
@@ -45,14 +46,16 @@ import (
 )
 
 var (
-	runFlagAgent      string
-	runFlagCwd        string
-	runFlagNoShepherd bool
-	runFlagStateDir   string
-	runFlagHeadless   bool
-	runFlagListen     string
-	runFlagWebDir     string
-	runFlagMCPListen  string
+	runFlagAgent                 string
+	runFlagCwd                   string
+	runFlagNoShepherd            bool
+	runFlagStateDir              string
+	runFlagHeadless              bool
+	runFlagListen                string
+	runFlagWebDir                string
+	runFlagMCPListen             string
+	runFlagFederationRegistryURL string // #225 row C1 — hosted peer registry
+	runFlagFederationPublicURL   string // #225 row C1 — this chepherd's public URL for announcements
 )
 
 var runCmd = &cobra.Command{
@@ -82,6 +85,15 @@ func init() {
 	runCmd.Flags().StringVar(&runFlagListen, "listen", "127.0.0.1:8080", "HTTP/WS listen addr (set to '' to disable; for web/mobile clients)")
 	runCmd.Flags().StringVar(&runFlagWebDir, "web-dir", "", "serve Astro static build from this dir (production mode; empty = dev-proxy mode)")
 	runCmd.Flags().StringVar(&runFlagMCPListen, "mcp-listen", "", "MCP HTTP/WS listen addr (default: $CHEPHERD_MCP_LISTEN or 0.0.0.0:9090)")
+	// #225 row C1 — federation peer registry. Empty string disables;
+	// when set, this chepherd announces itself + polls for peers + caches
+	// each peer's agent-card via AgentCardRepository. PublicURL is what
+	// peers will use to reach us (defaults to listen addr; override for
+	// reverse-proxy + DNS-name setups).
+	runCmd.Flags().StringVar(&runFlagFederationRegistryURL, "federation-registry-url", "",
+		"hosted peer registry URL (empty = disabled). Peer discovery POSTs /announce + GETs /peers here.")
+	runCmd.Flags().StringVar(&runFlagFederationPublicURL, "federation-public-url", "",
+		"this chepherd's public URL announced to peers (default: derived from --listen).")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -188,6 +200,32 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		rs := runtimehttp.New(rt)
 		rs.WebDir = runFlagWebDir
 		rs.Profile = &prof
+		rs.AgentCardStore = store.AgentCards()
+
+		// #225 row C1 — federation peer registry. Boot Federation when
+		// `--federation-registry-url` is set; cmd/run.go derives the
+		// announce-URL from --listen if --federation-public-url wasn't
+		// passed. The Federation runs in a goroutine for the chepherd
+		// process lifetime; ctx cancellation on SIGTERM stops it
+		// cleanly + flushes any in-flight fetches.
+		if runFlagFederationRegistryURL != "" {
+			selfURL := runFlagFederationPublicURL
+			if selfURL == "" {
+				selfURL = "http://" + runFlagListen
+			}
+			fed := federation.New(store.AgentCards())
+			fed.Register(&federation.HostedRegistryDiscoverer{
+				RegistryURL: runFlagFederationRegistryURL,
+				SelfSID:     rt.InstanceUUID(),
+				SelfURL:     selfURL,
+			})
+			fedCtx, fedCancel := context.WithCancel(context.Background())
+			defer fedCancel()
+			go fed.Run(fedCtx)
+			fmt.Printf("✓ Federation peer discovery via %s (announce as %s)\n",
+				runFlagFederationRegistryURL, selfURL)
+			rs.Federation = fed
+		}
 
 		// v0.9.2 (#208 follow-up): expose A2A on the same HTTP server the
 		// dashboard uses. The Deliverer constructed above is reused — the
