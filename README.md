@@ -87,6 +87,28 @@ chepherd status         # one-shot text status of all sessions
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 
+## v0.9.2 ship gate — end-to-end walk
+
+The v0.9.2 release closes via the canonical 9-step walk on a fresh provision
+(epic [#208](https://github.com/chepherd/chepherd/issues/208)). The in-process
+regression gate runs in CI on every commit:
+
+```bash
+go test ./internal/e2e/...
+```
+
+The operator-facing full walk (curl + dashboard screenshot + sub-agent reviewer)
+runs against a real `chepherd run` process:
+
+```bash
+chepherd run &                                            # step 1
+scripts/v092-e2e-walk.sh http://127.0.0.1:8083 <session>  # steps 3, 4, 6
+```
+
+Steps 2 (spawn), 5 (≥60s shepherd-tick wait), 7 (Playwright dashboard
+screenshot), 8 (epic comment), and 9 (4-eyes sub-agent review) are operator-driven.
+See `scripts/v092-e2e-walk.sh` for the exact contract.
+
 ## Roadmap
 
 - **v0.1** (this repo, current) — Go rewrite of the working Python supervisor + `chepherd status` text output that reads live state
