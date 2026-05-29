@@ -42,20 +42,20 @@ const (
 // session.Session is the live process; SessionInfo is the framework
 // context (name, team, role, etc.).
 type SessionInfo struct {
-	ID        string    `json:"id"`        // ptyhost session ID (stable across restart attempts)
-	Name      string    `json:"name"`      // canonical @-address (e.g. "iogrid-1")
-	AgentSlug string    `json:"agent"`     // claude-code, qwen-code, etc.
+	ID        string `json:"id"`    // ptyhost session ID (stable across restart attempts)
+	Name      string `json:"name"`  // canonical @-address (e.g. "iogrid-1")
+	AgentSlug string `json:"agent"` // claude-code, qwen-code, etc.
 
 	// #172 — first-class Agent entity backing this session. AgentID is
 	// the stable UUID; PVCHandle is the podman-volume / k8s-PVC mounted
 	// at /workspace inside the agent container. Both stay constant
 	// across resume / handoff (#173 / #STAGE-3); the live session ID
 	// (above) rotates per attach.
-	AgentID   string `json:"agent_id,omitempty"`
-	PVCHandle string `json:"pvc_handle,omitempty"`
-	Team      string    `json:"team"`      // team membership — workers in same team @-reach freely
-	Role      Role      `json:"role"`      // worker | shepherd
-	Cwd       string    `json:"cwd"`       // working directory the agent was spawned in
+	AgentID   string    `json:"agent_id,omitempty"`
+	PVCHandle string    `json:"pvc_handle,omitempty"`
+	Team      string    `json:"team"` // team membership — workers in same team @-reach freely
+	Role      Role      `json:"role"` // worker | shepherd
+	Cwd       string    `json:"cwd"`  // working directory the agent was spawned in
 	CreatedAt time.Time `json:"created_at"`
 	Paused    bool      `json:"paused"`
 
@@ -100,7 +100,7 @@ type SessionInfo struct {
 	// the most recent one (with timestamp + message). Empty until first
 	// non-silent verdict.
 	InterventionCount int       `json:"intervention_count,omitempty"`
-	LastVerdict       string    `json:"last_verdict,omitempty"`       // silent|praise|coach|intervene
+	LastVerdict       string    `json:"last_verdict,omitempty"` // silent|praise|coach|intervene
 	LastVerdictAt     time.Time `json:"last_verdict_at,omitempty"`
 	LastVerdictMsg    string    `json:"last_verdict_msg,omitempty"`
 
@@ -117,10 +117,10 @@ type SessionInfo struct {
 	// JSONL the spawned agent is writing to. Cheap to compute (we only
 	// scan the last ~50 lines of one file). Zero values when not applicable
 	// (non-claude-code agents) or when no JSONL has been written yet.
-	Model         string `json:"model,omitempty"`           // e.g. "claude-opus-4-7"
-	ContextSize   int    `json:"context_size,omitempty"`    // model context window (e.g. 200_000 or 1_000_000)
-	ContextTokens int    `json:"context_tokens,omitempty"`  // tokens currently held in the window (last usage block)
-	ClaudeUUID    string `json:"claude_uuid,omitempty"`     // sessionId of the JSONL Claude is appending to
+	Model         string `json:"model,omitempty"`          // e.g. "claude-opus-4-7"
+	ContextSize   int    `json:"context_size,omitempty"`   // model context window (e.g. 200_000 or 1_000_000)
+	ContextTokens int    `json:"context_tokens,omitempty"` // tokens currently held in the window (last usage block)
+	ClaudeUUID    string `json:"claude_uuid,omitempty"`    // sessionId of the JSONL Claude is appending to
 
 	// ContainerRuntime is "podman", "docker", or "bare" — how this agent was spawned.
 	ContainerRuntime string `json:"container_runtime,omitempty"`
@@ -188,11 +188,11 @@ func BandTickInterval(b TrustBand) time.Duration {
 // runtime's per-session sniffer goroutine to populate SessionInfo's
 // activity counters without locking the main runtime.
 type sessionActivity struct {
-	mu         sync.Mutex
-	total      int64
-	last       time.Time
-	created    time.Time
-	recent     []recentChunk // chunks within the last 5 minutes
+	mu      sync.Mutex
+	total   int64
+	last    time.Time
+	created time.Time
+	recent  []recentChunk // chunks within the last 5 minutes
 }
 
 type recentChunk struct {
@@ -268,7 +268,7 @@ type Runtime struct {
 	// sessionToAgent maps live session ID → Agent UUID so DetachSession
 	// can find the right record without a registry scan.
 	sessionToAgent map[string]uuid.UUID
-	extraEnvMu    sync.RWMutex
+	extraEnvMu     sync.RWMutex
 
 	// human-inbox sink
 	humanInbox []HumanInboxEntry
@@ -290,8 +290,8 @@ type Runtime struct {
 	// v0.6 unified data model — Agent + Team + Membership as first-class objects.
 	// Coexists with v0.5 SessionInfo during the transition; new MCP tools
 	// (create_team / join_team / leave_team / list_teams) operate on these.
-	teams        map[string]*Team        // by name
-	memberships  map[string]*Membership  // by composite key "agent_name|team_name"
+	teams       map[string]*Team       // by name
+	memberships map[string]*Membership // by composite key "agent_name|team_name"
 
 	// Per-axis review records (v0.6-C council pattern). Keyed by target
 	// agent name; inner map keyed by axis (G|V|F|E|D|custom).
@@ -306,6 +306,16 @@ type Runtime struct {
 	// spawn-and-manage runtime. cmd/run.go in v0.9.2 mode calls
 	// rt.WithShepherd(shepherd.New(cfg)) to enable.
 	shepherd shepherd.Shepherd
+
+	// sessionsRepo is the SessionRepository handle (#208 v0.9.2).
+	// Set by NewWithStore when a persistence.Store is provided; Spawn
+	// writes an initial session record so shepherd.discoverSessions
+	// (which queries store.Sessions().List) can see runtime-spawned
+	// sessions. Pre-#216 the agent registry was wired through but the
+	// session repo was not — the shepherd tick loop saw an empty list
+	// forever even though sessions existed in the runtime's in-memory
+	// map. Nil → file-on-disk fallback (v0.9.1 mode).
+	sessionsRepo persistence.SessionRepository
 }
 
 // WithShepherd attaches a shepherd.Shepherd to this Runtime so every
@@ -528,19 +538,26 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		agentRegistry:    agentStore,
 		sessionToAgent:   make(map[string]uuid.UUID),
 	}
+	// #216 closes the Spawn ↔ SessionRepository seam left open by
+	// PR #211 (runtime migration) + PR #213 (daemon retire). With a
+	// store wired, Spawn writes the initial session row so shepherd's
+	// discoverSessions can see runtime-spawned sessions on every tick.
+	if store != nil {
+		r.sessionsRepo = store.Sessions()
+	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
 }
 
 // SpawnSpec describes how to bring up a new session.
 type SpawnSpec struct {
-	Name      string // canonical @-address; must be unique
-	AgentSlug string // claude-code | qwen-code | aider | ...
-	Team      string // default "default"
-	Role      Role   // default worker
-	Cwd       string // optional working dir
-	SystemPrompt string // optional override for the agent's system prompt
-	StatSheet   AgentStatSheet // optional override for the default per-role stat sheet
+	Name         string         // canonical @-address; must be unique
+	AgentSlug    string         // claude-code | qwen-code | aider | ...
+	Team         string         // default "default"
+	Role         Role           // default worker
+	Cwd          string         // optional working dir
+	SystemPrompt string         // optional override for the agent's system prompt
+	StatSheet    AgentStatSheet // optional override for the default per-role stat sheet
 
 	// AgentArgs is appended to the agent CLI's default args. Useful for
 	// passing --resume <uuid> or similar.
@@ -769,6 +786,11 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	if err := r.persistInfo(info); err != nil {
 		// Non-fatal: session is live, just won't survive restart.
 		fmt.Fprintf(os.Stderr, "runtime: persist %s failed: %v\n", id, err)
+	}
+	if err := r.persistInitialSessionState(context.Background(), id, spec, info, ag.ID.String()); err != nil {
+		// Non-fatal: session is live, just won't be discovered by shepherd
+		// until the next Spawn happens to write through.
+		fmt.Fprintf(os.Stderr, "runtime: session repo save %s: %v\n", id, err)
 	}
 	// Spawn a sniffer goroutine on the PTY output stream. It writes to
 	// the activity tracker without ever touching r.mu so it can't deadlock
@@ -2248,7 +2270,6 @@ func envSliceToMap(env []string) map[string]string {
 	return m
 }
 
-
 // claudeOAuthClientID is the public client_id claude-code uses in its
 // PKCE OAuth flow against Anthropic's IdP. Surfaced in every login URL
 // claude-code prints (operator confirmed by inspecting the OAuth URL
@@ -2276,10 +2297,10 @@ const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 func refreshClaudeOAuthIfNeeded(payload string) (string, bool) {
 	var doc struct {
 		ClaudeAiOauth struct {
-			AccessToken      string `json:"accessToken"`
-			RefreshToken     string `json:"refreshToken"`
-			ExpiresAt        int64  `json:"expiresAt"`
-			SubscriptionType string `json:"subscriptionType,omitempty"`
+			AccessToken      string   `json:"accessToken"`
+			RefreshToken     string   `json:"refreshToken"`
+			ExpiresAt        int64    `json:"expiresAt"`
+			SubscriptionType string   `json:"subscriptionType,omitempty"`
 			Scopes           []string `json:"scopes,omitempty"`
 		} `json:"claudeAiOauth"`
 	}
@@ -2348,4 +2369,31 @@ func refreshClaudeOAuthIfNeeded(payload string) (string, bool) {
 		return payload, false
 	}
 	return string(out), true
+}
+
+// persistInitialSessionState writes the initial session row into the
+// SessionRepository (#216). Closes the seam between Runtime.Spawn and
+// store.Sessions() left open by PR #211 (runtime migration) + PR #213
+// (daemon retire): pre-#216 the shepherd's discoverSessions queried
+// store.Sessions().List which was permanently empty because nothing
+// in the runtime ever wrote to it. The state map omits next_tick_at
+// on purpose — shepherd treats a missing next_tick_at as "due now"
+// (cf. tickOnce's adaptive-cadence skip in internal/shepherd/shepherd.go),
+// so the first tick after Spawn fires immediately and the worker is
+// observed within one tick interval. No-op when r.sessionsRepo is nil
+// (v0.9.1 file-on-disk mode).
+//
+// Refs #208.
+func (r *Runtime) persistInitialSessionState(ctx context.Context, sessionID string, spec SpawnSpec, info *SessionInfo, agentID string) error {
+	if r.sessionsRepo == nil {
+		return nil
+	}
+	state := map[string]any{
+		"agent_id":   agentID,
+		"name":       spec.Name,
+		"role":       string(spec.Role),
+		"team":       spec.Team,
+		"created_at": info.CreatedAt.Format(time.RFC3339),
+	}
+	return r.sessionsRepo.Save(ctx, sessionID, state)
 }
