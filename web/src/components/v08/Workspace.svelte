@@ -20,6 +20,13 @@
   import AgentSettings from './AgentSettings.svelte';
   import TeamSettings from './TeamSettings.svelte';
 
+  // #223 — version label shown in the topbar brand badge. Passed by
+  // each /vMAJOR.MINOR.PATCH/ Astro route so legacy /v0.8/ stays
+  // "v0.8" while the v0.9.X routes display the right release. Default
+  // matches the historical hardcoded value so any caller that doesn't
+  // pass the prop renders identically to pre-#223.
+  let { version = 'v0.8' } = $props();
+
   // #157 — install fetch-auth wrapper at module top-level, BEFORE any child
   // widget's onMount fires. (Previously it lived inside Workspace.onMount,
   // which runs AFTER children mount — so the first claude-status / sessions
@@ -513,7 +520,7 @@
 
 <div class="workspace">
   <header class="topbar">
-    <a href="/" class="brand"><span class="brand-mark">░</span>chepherd<span class="ver">v0.8</span></a>
+    <a href="/" class="brand"><span class="brand-mark">░</span>chepherd<span class="ver">{version}</span></a>
     <div class="stats">
       <!-- #148 — pluralize correctly. "1 agent" not "1 agents". -->
       {sessions.length} {sessions.length === 1 ? 'agent' : 'agents'} · {teams.length} {teams.length === 1 ? 'team' : 'teams'} · {memberships.length} {memberships.length === 1 ? 'membership' : 'memberships'}
