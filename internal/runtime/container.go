@@ -42,6 +42,19 @@ type ContainerRuntime interface {
 	// access to the token vault); the container runtime just bind-mounts
 	// it at /run/secrets.
 	SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string)
+	// StopContainer terminates + removes the named sibling container.
+	// #258 — Runtime.Stop only closed the PTY which left containers
+	// leaking on operator's `podman ps` (19 zombies counted).
+	// Implementations must be best-effort: a container that's already
+	// gone is not an error. `name` is the agent label (without the
+	// `chepherd-agent-` prefix); implementations prepend the prefix.
+	StopContainer(name string) error
+	// ListAgentContainers returns all live OR exited containers whose
+	// name starts with `chepherd-agent-`. Used by the startup orphan
+	// cleanup helper to garbage-collect zombies whose owning chepherd
+	// runtime is no longer aware of them (e.g. survived a chepherd
+	// crash, or were spawned by a prior chepherd run).
+	ListAgentContainers() ([]string, error)
 }
 
 // DetectRuntime returns the best available ContainerRuntime.
@@ -261,6 +274,55 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	return podArgs, nil
 }
 
+// StopContainer terminates + removes the sibling agent container.
+// Best-effort: a container that's already gone is not an error. We
+// run `podman stop --time 5` followed by `podman rm -f` so an
+// already-stopped-but-not-removed container still gets cleaned up.
+//
+// #258 — Before this PR, Runtime.Stop only closed the PTY; the
+// `podman run --rm` cleanup didn't fire reliably (operator counted
+// 19 zombies). Explicit stop+rm here is the source of truth.
+func (r *PodmanRuntime) StopContainer(name string) error {
+	full := "chepherd-agent-" + name
+	args := podmanArgs()
+	// `podman stop` returns non-zero if the container is not running;
+	// we ignore that — `podman rm -f` below handles both stopped +
+	// running cases.
+	_ = exec.Command(args[0], append(append([]string{}, args[1:]...), "stop", "--time", "5", full)...).Run()
+	rm := exec.Command(args[0], append(append([]string{}, args[1:]...), "rm", "-f", full)...)
+	if out, err := rm.CombinedOutput(); err != nil {
+		s := strings.ToLower(string(out))
+		// "no such container" / "not found" => already gone, success.
+		if strings.Contains(s, "no such container") || strings.Contains(s, "not found") {
+			return nil
+		}
+		return fmt.Errorf("podman rm %s: %w (%s)", full, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// ListAgentContainers returns the names of all containers whose name
+// starts with `chepherd-agent-`. Includes BOTH running + exited so
+// the orphan cleanup helper can reap exited shells too. Empty list
+// when no agents exist; error only on podman-call failure.
+func (r *PodmanRuntime) ListAgentContainers() ([]string, error) {
+	args := podmanArgs()
+	psArgs := append(append([]string{}, args[1:]...),
+		"ps", "-a", "--filter", "name=chepherd-agent-", "--format", "{{.Names}}")
+	out, err := exec.Command(args[0], psArgs...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("podman ps: %w", err)
+	}
+	names := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		n := strings.TrimSpace(line)
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	return names, nil
+}
+
 // ─── Docker ──────────────────────────────────────────────────────────────────
 
 type DockerRuntime struct{}
@@ -277,6 +339,33 @@ func (r *DockerRuntime) Available() error {
 }
 func (r *DockerRuntime) AgentHomeDir(agentName, stateDir string) (string, error) {
 	return (&PodmanRuntime{}).AgentHomeDir(agentName, stateDir)
+}
+func (r *DockerRuntime) StopContainer(name string) error {
+	full := "chepherd-agent-" + name
+	_ = exec.Command("docker", "stop", "--time", "5", full).Run()
+	rm := exec.Command("docker", "rm", "-f", full)
+	if out, err := rm.CombinedOutput(); err != nil {
+		s := strings.ToLower(string(out))
+		if strings.Contains(s, "no such container") || strings.Contains(s, "not found") {
+			return nil
+		}
+		return fmt.Errorf("docker rm %s: %w (%s)", full, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+func (r *DockerRuntime) ListAgentContainers() ([]string, error) {
+	out, err := exec.Command("docker", "ps", "-a", "--filter", "name=chepherd-agent-", "--format", "{{.Names}}").Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker ps: %w", err)
+	}
+	names := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		n := strings.TrimSpace(line)
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	return names, nil
 }
 func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	// Docker variant — same flags as Podman except no :U mount option
@@ -332,6 +421,9 @@ func (r *BareExecRuntime) AgentHomeDir(agentName, stateDir string) (string, erro
 func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	return argv, env
 }
+// BareExec has no container — Runtime.Stop's PTY close is sufficient.
+func (r *BareExecRuntime) StopContainer(name string) error      { return nil }
+func (r *BareExecRuntime) ListAgentContainers() ([]string, error) { return nil, nil }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

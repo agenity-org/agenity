@@ -1341,6 +1341,14 @@ func (r *Runtime) Pause(name string, paused bool) error {
 }
 
 // Stop closes the named session's PTY and removes it from the registry.
+//
+// #258 — also calls containerRuntime.StopContainer so the sibling
+// podman/docker container is actually terminated. Pre-#258 this
+// function only closed the PTY; in practice `podman run --rm`'s
+// cleanup didn't fire reliably when ptyhost dropped the FD (operator
+// counted 19 zombie chepherd-agent-* containers on `podman ps -a`).
+// StopContainer is best-effort — a container that's already gone is
+// not an error.
 func (r *Runtime) Stop(name string) error {
 	r.mu.Lock()
 	id, ok := r.byName[name]
@@ -1357,8 +1365,67 @@ func (r *Runtime) Stop(name string) error {
 		_ = s.Close()
 	}
 	_ = os.Remove(filepath.Join(r.stateDir, "sessions", id+".json"))
+	// #258 — kill the sibling container explicitly. PTY close alone
+	// doesn't reliably propagate to `podman run --rm`'s cleanup. Run
+	// before broadcast so the next List() doesn't include a row whose
+	// container is still up (small race avoided).
+	if r.containerRuntime != nil {
+		if err := r.containerRuntime.StopContainer(name); err != nil {
+			fmt.Fprintf(os.Stderr, "runtime.Stop: container teardown for %s: %v\n", name, err)
+		}
+	}
 	r.broadcast()
 	return nil
+}
+
+// ReapOrphanContainers garbage-collects sibling agent containers that
+// aren't tracked by the live runtime — they survived a chepherd crash
+// or were spawned by a prior chepherd run. Called once at chepherd
+// startup from cmd/run.go. Best-effort: a podman-list failure logs +
+// returns nil so chepherd boot doesn't block on container-runtime
+// flakiness.
+//
+// #258 — bundled with the Runtime.Stop fix to clean up the 19 zombies
+// the operator already has. New chepherd boot enumerates all
+// `chepherd-agent-*` containers via `podman ps -a` then removes any
+// whose agent name isn't in the live registry.
+func (r *Runtime) ReapOrphanContainers() int {
+	if r.containerRuntime == nil {
+		return 0
+	}
+	all, err := r.containerRuntime.ListAgentContainers()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "runtime.ReapOrphanContainers: list: %v\n", err)
+		return 0
+	}
+	live := map[string]struct{}{}
+	r.mu.Lock()
+	for name := range r.byName {
+		live["chepherd-agent-"+name] = struct{}{}
+	}
+	r.mu.Unlock()
+	reaped := 0
+	for _, full := range all {
+		if _, ok := live[full]; ok {
+			continue
+		}
+		// Strip the prefix so StopContainer can re-add it. Skip names
+		// that don't carry the expected prefix (defensive).
+		const prefix = "chepherd-agent-"
+		if len(full) <= len(prefix) || full[:len(prefix)] != prefix {
+			continue
+		}
+		name := full[len(prefix):]
+		if err := r.containerRuntime.StopContainer(name); err != nil {
+			fmt.Fprintf(os.Stderr, "runtime.ReapOrphanContainers: stop %s: %v\n", full, err)
+			continue
+		}
+		reaped++
+	}
+	if reaped > 0 {
+		fmt.Fprintf(os.Stderr, "runtime: reaped %d orphan agent container(s) at startup (#258)\n", reaped)
+	}
+	return reaped
 }
 
 // claudeRuntimeExtras reads the most recent Claude JSONL written under
