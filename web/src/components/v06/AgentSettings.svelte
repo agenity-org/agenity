@@ -141,7 +141,7 @@
         <div class="row"><button class="primary" on:click={savePrompt} disabled={promptSaving || !promptDirty}>{promptSaving ? 'Sending…' : 'Send to agent'}</button></div>
       {:else if tab === 'skills'}
         <p class="hint">Per-agent stat sheet — defaults shipped per role; override only what you want. Save patches the runtime.</p>
-        <div class="grid">
+        <div class="settings-grid">
           <label>Context budget<input type="number" min="0" step="10000" bind:value={skills.context_budget} /></label>
           <label>Model tier
             <select bind:value={skills.model_tier}>
@@ -178,7 +178,7 @@
         {/if}
       {:else if tab === 'membership'}
         <p class="hint">Move this agent to a different team or change its role. Existing memberships are removed first.</p>
-        <div class="grid">
+        <div class="settings-grid">
           <label>Team
             <select bind:value={pickTeam}>
               {#each (teams || []) as t}<option value={t.name}>{t.name}</option>{/each}
@@ -217,7 +217,7 @@
   .body { padding: 1rem 1.2rem; overflow-y: auto; flex: 1; min-height: 280px; }
   .hint { color: var(--fg-muted); margin: 0 0 0.7rem 0; }
   textarea { width: 100%; padding: 0.55rem 0.7rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; resize: vertical; box-sizing: border-box; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.7rem; }
+  .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.7rem; }
   label { display: block; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   input, select { width: 100%; padding: 0.4rem 0.55rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-family: ui-monospace, monospace; margin-top: 0.15rem; box-sizing: border-box; }
   pre.body { background: var(--bg-input); padding: 0.7rem; border-radius: 6px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; max-height: 50vh; }

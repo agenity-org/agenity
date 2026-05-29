@@ -61,7 +61,7 @@
   {#if !agent}
     <p class="empty">No agent selected.</p>
   {:else if editing}
-    <div class="grid">
+    <div class="skills-grid">
       <label>Context budget (tokens)<input type="number" min="0" step="10000" bind:value={draft.context_budget} /></label>
       <label>Model tier
         <select bind:value={draft.model_tier}>
@@ -106,9 +106,9 @@
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.7rem; padding: 0.5rem 0.7rem; margin: 0; font-size: 0.75rem; }
   .kv dt { color: var(--fg-muted); }
   .kv dd { margin: 0; color: var(--fg); font-family: ui-monospace, monospace; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.65rem; padding: 0.5rem 0.7rem; }
-  .grid label { display: block; color: var(--fg-muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
-  .grid input, .grid select { width: 100%; padding: 0.3rem 0.45rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-family: ui-monospace, monospace; font-size: 0.78rem; margin-top: 0.15rem; }
+  .skills-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.65rem; padding: 0.5rem 0.7rem; }
+  .skills-grid label { display: block; color: var(--fg-muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .skills-grid input, .skills-grid select { width: 100%; padding: 0.3rem 0.45rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-family: ui-monospace, monospace; font-size: 0.78rem; margin-top: 0.15rem; }
   .empty { color: var(--fg-muted); padding: 0.6rem 0.7rem; }
   .err { color: var(--danger); padding: 0.35rem 0.55rem; font-size: 0.72rem; }
 </style>

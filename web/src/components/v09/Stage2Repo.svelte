@@ -244,7 +244,7 @@
   <h2>Where's the code?</h2>
   <p class="lead">Pick a provider. Saved accounts auto-load their repo tree below.</p>
 
-  <div class="grid" role="radiogroup" aria-label="provider">
+  <div class="repo-providers-grid" role="radiogroup" aria-label="provider">
     {#each CARDS as c}
       <button
         type="button"
@@ -377,7 +377,7 @@
   h2 { font-size: 1.15rem; margin: 0 0 0.35rem 0; }
   h3 { font-size: 0.92rem; margin: 0 0 0.5rem 0; color: var(--fg, #fff); }
   .lead { color: var(--fg-muted, #888); margin: 0 0 1.2rem 0; font-size: 0.9rem; }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; margin-bottom: 1rem; }
+  .repo-providers-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; margin-bottom: 1rem; }
   .card {
     display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
     padding: 1.05rem 0.55rem 0.95rem; border-radius: 8px;

@@ -138,7 +138,7 @@
   {:else}
     {@const groups = groupedRoles()}
     <div class="grid-wrap">
-      <table class="grid">
+      <table class="role-grid">
         <thead>
           <tr>
             <th class="skill-th"></th>
@@ -196,12 +196,12 @@
   .link { background: transparent; border: 0; color: var(--accent-2, #87ceeb); cursor: pointer; font: inherit; font-size: 0.86rem; padding: 0; }
   .link:hover { text-decoration: underline; }
   .grid-wrap { overflow-x: auto; }
-  .grid { border-collapse: separate; border-spacing: 0; font-size: 0.78rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .grid thead th { color: var(--fg-muted); font-weight: 600; padding: 0.25rem 0.4rem; text-align: center; }
-  .grid .cat-h { color: var(--fg, #f5f5f5); font-size: 0.7rem; text-transform: lowercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border, #2a2a2a); }
-  .grid .role-th { color: var(--accent-2, #87ceeb); min-width: 2.2rem; }
-  .grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.6rem; font-weight: 500; max-width: 12rem; white-space: nowrap; }
-  .grid .divider-th, .grid .divider-td { width: 0.45rem; color: var(--border, #2a2a2a); padding: 0; text-align: center; }
+  .role-grid { border-collapse: separate; border-spacing: 0; font-size: 0.78rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .role-grid thead th { color: var(--fg-muted); font-weight: 600; padding: 0.25rem 0.4rem; text-align: center; }
+  .role-grid .cat-h { color: var(--fg, #f5f5f5); font-size: 0.7rem; text-transform: lowercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border, #2a2a2a); }
+  .role-grid .role-th { color: var(--accent-2, #87ceeb); min-width: 2.2rem; }
+  .role-grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.6rem; font-weight: 500; max-width: 12rem; white-space: nowrap; }
+  .role-grid .divider-th, .role-grid .divider-td { width: 0.45rem; color: var(--border, #2a2a2a); padding: 0; text-align: center; }
   .cell {
     text-align: center; cursor: pointer; user-select: none;
     padding: 0.25rem 0.4rem; min-width: 2.2rem;
@@ -212,7 +212,7 @@
   .cell.on { color: var(--accent-2, #87ceeb); background: rgba(135,206,235,0.10); }
   .cell.on:hover { background: rgba(135, 206, 235, 0.18); }
   .cell.saving { opacity: 0.5; cursor: progress; }
-  .grid tbody tr:hover { background: rgba(255,255,255,0.02); }
+  .role-grid tbody tr:hover { background: rgba(255,255,255,0.02); }
   .note { color: var(--fg-muted, #888); font-size: 0.74rem; margin-top: 0.7rem; line-height: 1.5; }
   .note code { color: var(--accent-2, #87ceeb); font-size: 0.74rem; }
   .hint { color: var(--fg-muted, #888); font-size: 0.84rem; padding: 0.4rem 0; }
