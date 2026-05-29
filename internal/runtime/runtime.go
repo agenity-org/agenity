@@ -436,6 +436,65 @@ func (r *Runtime) agentEnvOverlay() []string {
 	return out
 }
 
+// agentAuthEnv returns the per-flavor Anthropic-auth env-var slice for
+// the given agent slug, sourced from the vault's claude-oauth entries
+// (most-recently-updated wins, matching the file-mount fallback chain
+// in materializeAgentSecrets). The v0.9.2 mapping per architect call
+// on #218:
+//
+//	claude-code → CLAUDE_CODE_OAUTH_TOKEN=<vault.claude-oauth.accessToken>
+//
+// CLAUDE_CODE_OAUTH_TOKEN is the env var claude-code reads for OAuth
+// access tokens (sk-ant-oat01-...). ANTHROPIC_API_KEY is for direct
+// API keys (sk-ant-api03-...); the chepherd vault stores OAuth tokens
+// so the OAuth env var is the right pick. Confirmed via
+// `claude --help` bare-mode docstring ("Anthropic auth is strictly
+// ANTHROPIC_API_KEY ... OAuth and keychain are never read") and the
+// claude binary's strings ("ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
+// env var is required").
+//
+// Returns nil when:
+//   - r.vault is unset (no vault configured — v0.5/v0.7 fallback path)
+//   - no claude-oauth provider entries exist in the vault
+//   - the credential payload doesn't parse as the expected
+//     {"claudeAiOauth":{"accessToken":...}} shape
+//   - the slug is not a flavor with a defined mapping
+//
+// Other flavors (qwen-code, aider, gemini-cli, opencode) are
+// scaffolded for v0.9.3+ but return nil today. Closes #218.
+//
+// Refs #208.
+func (r *Runtime) agentAuthEnv(slug string) []string {
+	if r.vault == nil {
+		return nil
+	}
+	switch slug {
+	case "claude-code", "claude":
+		creds := r.vault.ListByProvider("claude-oauth")
+		if len(creds) == 0 {
+			return nil
+		}
+		latest := creds[len(creds)-1]
+		payload, err := r.vault.GetValue(latest.ID)
+		if err != nil || payload == "" {
+			return nil
+		}
+		var blob struct {
+			ClaudeAiOauth struct {
+				AccessToken string `json:"accessToken"`
+			} `json:"claudeAiOauth"`
+		}
+		if err := json.Unmarshal([]byte(payload), &blob); err != nil {
+			return nil
+		}
+		if blob.ClaudeAiOauth.AccessToken == "" {
+			return nil
+		}
+		return []string{"CLAUDE_CODE_OAUTH_TOKEN=" + blob.ClaudeAiOauth.AccessToken}
+	}
+	return nil
+}
+
 // StateDir returns the root state directory for this runtime
 // (~/.local/state/chepherd-v0X). Used by HTTP server for workspace
 // persistence paths.
@@ -643,6 +702,14 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// for MCP auth, #139). Inserted before AGENT_NAME so per-spawn
 	// overrides win.
 	envWithMCP = append(envWithMCP, r.agentEnvOverlay()...)
+	// #218: append per-flavor Anthropic-auth env. For claude-code this
+	// surfaces vault.claude-oauth.accessToken as CLAUDE_CODE_OAUTH_TOKEN
+	// so the spawned worker has a valid token from process-start —
+	// independent of the /run/secrets/claude-credentials file mount.
+	// Without this, claude-code's start-up auth check could race with
+	// the file-mount entrypoint script + the container could idle-exit
+	// before any operator interaction lands.
+	envWithMCP = append(envWithMCP, r.agentAuthEnv(spec.AgentSlug)...)
 	// Tag the child process with its agent name so the MCP bridge can
 	// forward it as actor identity on every JSON-RPC call. Without this
 	// the server can't tell which shepherd / worker made which call
