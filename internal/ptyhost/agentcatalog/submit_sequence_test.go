@@ -29,9 +29,10 @@ func TestEffectiveSubmitSequence_HonorsOverride(t *testing.T) {
 
 func TestBuiltin_AllFlavorsHaveSubmitSequence(t *testing.T) {
 	t.Parallel()
-	// All 6 builtin chepherd worker flavors should have a defined
-	// submit sequence (default CR is fine; explicit override also OK).
-	// Sovereign-shell + cursor-agent stand-ins included.
+	// Every builtin chepherd worker flavor should have a defined submit
+	// sequence (default CR is fine; explicit override also OK).
+	// 7 flavors: aider, claude-code, cursor-agent, little-coder,
+	// opencode, qwen-code, sovereign-shell.
 	for _, a := range Builtin {
 		got := a.EffectiveSubmitSequence()
 		if len(got) == 0 {

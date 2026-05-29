@@ -19,9 +19,9 @@
 //     intelligence pushed it past the comprehensibility threshold
 //   - shepherd-as-its-own-package means shepherd unit tests don't
 //     need to spin up Runtime+PTY; consumer is an injected interface
-//   - future evolution (multi-shepherd hierarchies, federation S5
-//     cross-deployment shepherd-tier scoring, shepherd-as-agent
-//     spawning sub-shepherds) ripples cleanly INTO this package
+//   - future evolution (multi-shepherd hierarchies, S5 cross-org
+//     shepherd-tier scoring, shepherd-as-agent spawning sub-
+//     shepherds) ripples cleanly INTO this package
 //
 // The Shepherd interface is the contract Runtime consumes (nil-OK
 // pattern when no shepherd is wired). Concrete implementations live
