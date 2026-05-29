@@ -33,6 +33,7 @@ import (
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
@@ -148,6 +149,22 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
+
+	// v0.9.2 (#208): wire the shepherd tier. Constructs Shepherd from
+	// the same persistence.Store the runtime uses; attaches via
+	// Runtime.WithShepherd so RecordEvent broadcasts reach Observe;
+	// kicks off the periodic tick loop in a goroutine bound to the
+	// process-lifetime context so ctrl-C cleanly shuts it down.
+	shepCfg := shepherd.Config{JudgeCfg: shepherd.DefaultJudgeConfig()}
+	shep := shepherd.NewWithStore(store, shepCfg)
+	rt.WithShepherd(shep)
+	shepCtx, shepCancel := context.WithCancel(context.Background())
+	defer shepCancel()
+	go func() {
+		if err := shep.Run(shepCtx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "shepherd Run: %v\n", err)
+		}
+	}()
 	fmt.Printf("✓ MCP server (HTTP/WS) listening on http://%s/mcp/ws\n", mcpListen)
 
 	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),

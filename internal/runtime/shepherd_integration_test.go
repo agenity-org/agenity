@@ -27,6 +27,8 @@ func (f *fakeShepherd) Judge(_ context.Context, _ string, _ []byte) (*shepherd.V
 
 func (f *fakeShepherd) Alert(_ context.Context, _ *shepherd.Verdict) error { return nil }
 
+func (f *fakeShepherd) Run(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+
 func TestRuntime_WithShepherd_BroadcastsRecordEvent(t *testing.T) {
 	t.Parallel()
 	rt, err := New(t.TempDir())
