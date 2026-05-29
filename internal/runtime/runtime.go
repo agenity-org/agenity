@@ -1751,10 +1751,9 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 	// Per-spawn UNIQUE secrets dir. The previous spawn's :U mount option
 	// chowns the host-side directory into the container's user namespace
 	// (~UID 100999), which means the host chepherd process can no longer
-	// write to it. Solution: each spawn gets a fresh timestamped dir.
-	// Old dirs are cleaned up by container teardown via `podman unshare`
-	// in a future commit; for now they linger harmlessly under
-	// agents/<name>/secrets-*.
+	// write to it. Solution: each spawn gets a fresh timestamped dir
+	// under agents/<name>/secrets-*. Old dirs are cleaned up by container
+	// teardown via `podman unshare` (see #208 cleanup tracker).
 	parent, err := agentSecretsDirPath(spec.Name, r.stateDir)
 	if err != nil {
 		return "", err

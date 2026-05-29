@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/chepherd/chepherd/internal/persistence"
 )
 
 // Canon is the singleton operator-canon record.
@@ -39,9 +41,16 @@ type Canon struct {
 }
 
 // Store is the persistence layer.
+//
+// Two backing modes (mutually exclusive; chosen by constructor):
+//   - File-on-disk under $stateDir/canon/ (v0.9.1 default, kept for
+//     backward compat — use NewStore(stateDir))
+//   - persistence.CanonRepository delegate (v0.9.2 path — use
+//     NewStoreFromRepository; see store_repo.go)
 type Store struct {
-	dir string
-	mu  sync.RWMutex
+	dir  string                       // file-on-disk mode
+	repo persistence.CanonRepository  // repo mode (v0.9.2)
+	mu   sync.RWMutex
 }
 
 // NewStore opens (or initialises) the canon directory.
@@ -56,6 +65,9 @@ func NewStore(stateDir string) (*Store, error) {
 // Get returns the current canon. If none exists yet, returns a blank
 // canon with version=0 — never nil.
 func (s *Store) Get() (*Canon, error) {
+	if s.repo != nil {
+		return s.repoGet()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	b, err := os.ReadFile(s.currentPath())
@@ -83,6 +95,9 @@ func (s *Store) Get() (*Canon, error) {
 // Put replaces the canon body. Bumps Version, archives the prior
 // version under /history/.
 func (s *Store) Put(body, updatedBy, title string) (*Canon, error) {
+	if s.repo != nil {
+		return s.repoPut(body, updatedBy, title)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, err := s.getLocked()
@@ -121,6 +136,9 @@ func (s *Store) Put(body, updatedBy, title string) (*Canon, error) {
 // History returns up to `limit` prior versions, newest-first. The
 // current version is NOT included (use Get for that).
 func (s *Store) History(limit int) ([]*Canon, error) {
+	if s.repo != nil {
+		return s.repoHistory(limit)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	entries, err := os.ReadDir(filepath.Join(s.dir, "history"))
@@ -155,6 +173,9 @@ func (s *Store) History(limit int) ([]*Canon, error) {
 // Rollback restores a prior version's body as the current canon (bumps
 // Version, archives current). Returns the new current.
 func (s *Store) Rollback(toVersion int, actor string) (*Canon, error) {
+	if s.repo != nil {
+		return s.repoRollback(toVersion, actor)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	hpath := filepath.Join(s.dir, "history", "v"+strconv.Itoa(toVersion)+".json")

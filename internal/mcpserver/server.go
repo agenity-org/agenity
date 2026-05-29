@@ -49,9 +49,10 @@ type Server struct {
 	// lastCaller is the most-recently-identified agent name. Set per
 	// dispatch in dispatchWithAgent — handlers read it to attribute
 	// events. NOT thread-safe across concurrent dispatches; serveConn
-	// is per-connection sequential so this works for now (one agent
-	// per conn). Future: pass through context.Context if we need
-	// concurrent calls per conn.
+	// is per-connection sequential (one agent per conn), which makes
+	// this safe under the current invariant. The v0.9.2 runner-split
+	// (#208) makes this per-runner-process and passes through
+	// context.Context.
 	lastCaller string
 }
 
