@@ -1383,10 +1383,18 @@ func (r *Runtime) Pause(name string, paused bool) error {
 // StopContainer is best-effort — a container that's already gone is
 // not an error.
 func (r *Runtime) Stop(name string) error {
+	// #272 — log every Stop entry/exit so silent-Stop bugs are traceable.
+	// Walker on #258 (round 2) found zero log lines for a Stop click;
+	// either Runtime.Stop's name lookup returned "unknown session" + early-
+	// returned (no log line at the StopContainer layer), or some other path
+	// fired the container removal. Both cases are now diagnosable from
+	// stderr.
+	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: enter Runtime.Stop\n", name)
 	r.mu.Lock()
 	id, ok := r.byName[name]
 	if !ok {
 		r.mu.Unlock()
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: not in byName registry — returning unknown-session error (no container teardown attempted)\n", name)
 		return fmt.Errorf("runtime.Stop: unknown session %q", name)
 	}
 	s := r.sessions[id]
@@ -1394,8 +1402,10 @@ func (r *Runtime) Stop(name string) error {
 	delete(r.byName, name)
 	delete(r.info, id)
 	r.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: removed from registry (session id %s)\n", name, id)
 	if s != nil {
 		_ = s.Close()
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: PTY closed\n", name)
 	}
 	_ = os.Remove(filepath.Join(r.stateDir, "sessions", id+".json"))
 	// #258 — kill the sibling container explicitly. PTY close alone
@@ -1403,11 +1413,15 @@ func (r *Runtime) Stop(name string) error {
 	// before broadcast so the next List() doesn't include a row whose
 	// container is still up (small race avoided).
 	if r.containerRuntime != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: calling containerRuntime.StopContainer\n", name)
 		if err := r.containerRuntime.StopContainer(name); err != nil {
-			fmt.Fprintf(os.Stderr, "runtime.Stop: container teardown for %s: %v\n", name, err)
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: container teardown error: %v\n", name, err)
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: containerRuntime nil — no container teardown (BareExec mode)\n", name)
 	}
 	r.broadcast()
+	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: exit Runtime.Stop ok\n", name)
 	return nil
 }
 
@@ -1490,7 +1504,15 @@ func (r *Runtime) ReapOrphanContainers() int {
 		reaped++
 	}
 	if reaped > 0 {
-		fmt.Fprintf(os.Stderr, "runtime: reaped %d orphan agent container(s) at startup for instance %s (#258 #270)\n", reaped, r.instanceUUID)
+		// #272 — `[chepherd-stop]` prefix so the reaper's mass-removals
+		// show up under the same grep token as Stop-click teardowns.
+		// Walker's earlier observation of "9 agents Stop+Remove'd between
+		// 21:15:07-21:15:24 with ZERO log lines" was specifically about
+		// the reaper-vs-Stop-click ambiguity — now it's traceable to the
+		// boot-time reap pass via this log line + the per-container
+		// `[chepherd-stop] <name>: PodmanRuntime.StopContainer enter`
+		// trail above.
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] reaper-pass: removed %d orphan agent container(s) for instance %s (#258 #270 #272)\n", reaped, r.instanceUUID)
 	}
 	return reaped
 }
@@ -1994,17 +2016,20 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 	dst := filepath.Join(dir, "claude-credentials")
 
 	var payload string
+	var src string
 	// __none__ is a sentinel set by the OAuth login-capture flow (R5):
 	// the ephemeral agent must have NO credentials so claude-code falls
 	// into its OAuth prompt and prints the URL we'll capture. Skip both
 	// vault and host fallbacks in that case.
 	if spec.ClaudeTokenID == "__none__" {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: ClaudeTokenID=__none__ — empty creds dir intentional (OAuth-capture)\n", spec.Name)
 		return dir, nil
 	}
 	if r.vault != nil {
 		if spec.ClaudeTokenID != "" {
 			if v, err := r.vault.GetValue(spec.ClaudeTokenID); err == nil {
 				payload = v
+				src = "vault:by-token-id:" + spec.ClaudeTokenID
 			}
 		}
 		if payload == "" {
@@ -2015,6 +2040,7 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 				latest := creds[len(creds)-1]
 				if v, err := r.vault.GetValue(latest.ID); err == nil {
 					payload = v
+					src = "vault:fallback-most-recent-claude-oauth:" + latest.ID
 				}
 			}
 		}
@@ -2022,12 +2048,27 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 	if payload == "" {
 		// Host-fallback so single-user installs without a vault entry
 		// keep working — preserves the v0.5–v0.7 behavior.
-		if src := hostClaudeCredentialsPath(); src != "" {
-			if b, err := os.ReadFile(src); err == nil {
+		if hostSrc := hostClaudeCredentialsPath(); hostSrc != "" {
+			if b, err := os.ReadFile(hostSrc); err == nil {
 				payload = string(b)
+				src = "host-fallback:" + hostSrc
 			}
 		}
 	}
+	// #273 — diagnostic stderr logging so the operator's bastion logs
+	// (journalctl / docker logs / stderr tail) carry a clear trace of
+	// which credential source produced the payload for each spawn. Pre-
+	// #273 this was silent — when a spawn produced an empty
+	// /run/secrets/claude-credentials, the operator had no way to tell
+	// whether (a) vault was nil, (b) the token-id mismatched, (c) the
+	// claude-oauth fallback returned 0 entries, or (d) the host fallback
+	// path didn't exist. Now the log line says exactly which source won.
+	if payload == "" {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: NO CREDENTIAL SOURCE produced a payload — vault=%v ClaudeTokenID=%q claude-oauth-fallback=tried host-fallback=%q. Spawn will refuse.\n",
+			spec.Name, r.vault != nil, spec.ClaudeTokenID, hostClaudeCredentialsPath())
+		return "", fmt.Errorf("materializeAgentSecrets: no Claude credential available for spawn (set claude_token_id in spawn POST OR seed ~/.claude/.credentials.json on the chepherd host)")
+	}
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: payload from %s (%d bytes)\n", spec.Name, src, len(payload))
 	if payload != "" {
 		// REFRESH-ON-SPAWN — empirically verified 2026-05-28 (operator
 		// walk #135). The vault stores a one-shot snapshot of the
@@ -2070,8 +2111,10 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 		}
 		r.claudeRefreshMu.Unlock()
 		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: WRITE FAILED to %s: %v\n", spec.Name, dst, err)
 			return "", err
 		}
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: wrote %d-byte credentials.json to %s\n", spec.Name, len(payload), dst)
 		// Also write the onboarding stub claude-code v2.1.150 requires
 		// in ~/.claude.json. Without hasCompletedOnboarding: true +
 		// userID + oauthAccount, claude-code re-runs the welcome /
