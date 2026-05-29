@@ -4,7 +4,7 @@ coturn:
     repository: coturn/coturn
     tag: "4.6.2"
   # External STUN port + TURN port — must reach the public IP via NodePort
-  # or LoadBalancer. For a Sovereign with Cilium GW, prefer LB with a
+  # or LoadBalancer. For an OpenOva instance with Cilium GW, prefer LB with a
   # reserved IP allocated from the operator's pool.
   stunPort: 3478
   turnTLSPort: 5349
@@ -18,7 +18,7 @@ coturn:
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits:   { cpu: 1, memory: 256Mi }
-  # Bandwidth cap for free tier — protects the host Sovereign from a
+  # Bandwidth cap for free tier — protects the host OpenOva instance from a
   # runaway TURN relay (15% of mobile sessions fall back to TURN).
   maxBpsPerSession: 256000  # 256 kbps; fine for chepherd dashboard updates
 

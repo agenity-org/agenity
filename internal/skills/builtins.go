@@ -17,7 +17,7 @@ import "time"
 //   - affaan-m/ECC@main            — Engineering Cognitive Cube taxonomy
 //   - chepherd@v0.9                — in-house skills with no public upstream
 //
-// Banned vocabulary: NO "shepherd" / "Stack Trio" / "RACI" anywhere in
+// Banned vocabulary: NO the historical banned-vocab list anywhere in
 // builtin IDs, names, bodies, or tags — enforced by TestNoBannedVocab.
 func builtinSet() []Skill {
 	now := time.Now().UTC()

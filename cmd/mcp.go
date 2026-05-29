@@ -9,8 +9,8 @@
 // state).
 //
 // Transport changed in v0.8: Unix socket → HTTP/WS so the same binary
-// works on hobby Podman, multi-cluster Kubernetes, and the OpenOva
-// Sovereign without changes. Closes #124.
+// works on hobby Podman, multi-cluster Kubernetes, and an OpenOva
+// instance without changes. Closes #124.
 package cmd
 
 import (

@@ -23,7 +23,7 @@ import "time"
 //   - OwnedSkills from internal/skills (10 LEAN)
 //   - OwnedSkillsScope when the role+skill pair is ambiguous
 //
-// Banned vocabulary check: no "shepherd" / "Stack Trio" / "RACI"
+// Banned vocabulary check: no the historical banned-vocab list
 // anywhere in IDs, names, descriptions, slot labels, or whenToUse —
 // enforced by TestNoBannedVocab in registry_test.go.
 func builtinSet() []Template {

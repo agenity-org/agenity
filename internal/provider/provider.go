@@ -29,7 +29,7 @@ const (
 	KindAnthropicAPI  Kind = "anthropic-api"  // direct Anthropic API
 	KindOpenRouter    Kind = "openrouter"
 	KindOpenAI        Kind = "openai"
-	KindOpenOvaNewAPI Kind = "openova-newapi" // an OpenOva Sovereign's NewAPI gateway
+	KindOpenOvaNewAPI Kind = "openova-newapi" // an OpenOva instance's NewAPI gateway
 	KindOllama        Kind = "ollama"
 )
 

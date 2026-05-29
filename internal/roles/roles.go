@@ -11,7 +11,7 @@
 // JSON-per-id under $stateDir/roles-registry/.
 //
 // Banned vocabulary per #194 (operator decision 2026-05-28): no
-// "shepherd" / "Stack Trio" / "RACI" anywhere — enforced by
+// the historical banned-vocab list anywhere — enforced by
 // TestNoBannedVocabAnywhere.
 package roles
 

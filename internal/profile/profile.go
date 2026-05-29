@@ -5,7 +5,7 @@
 //
 //	minimal     — hobby Podman (local container, local JWT auth)
 //	standard    — generic K8s (operator spawner, local JWT auth, PVC)
-//	enterprise  — OpenOva Sovereign (operator spawner, Keycloak OIDC, Cilium)
+//	enterprise  — OpenOvan OpenOva instance (operator spawner, Keycloak OIDC, Cilium)
 //
 // The Resolve function is the single source of truth; both cmd/run.go and
 // the /healthz endpoint read its output so what the operator sees in the

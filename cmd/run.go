@@ -130,7 +130,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// MCP server on HTTP/WebSocket — `chepherd mcp` subprocess (used by
 	// agents) dials this endpoint and proxies JSON-RPC over the WS. One
 	// server per runtime. Works on local Podman, multi-cluster K8s, and
-	// the OpenOva Sovereign without any code change. Closes #124.
+	// the OpenOvan OpenOva instance without any code change. Closes #124.
 	mcpListen := runFlagMCPListen
 	if mcpListen == "" {
 		mcpListen = os.Getenv("CHEPHERD_MCP_LISTEN")

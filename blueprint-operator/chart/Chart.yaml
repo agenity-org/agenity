@@ -20,7 +20,7 @@ description: |
 
   This chart installs the CRD + the controller Deployment + the Kyverno
   policy. It does NOT install the chepherd daemon itself — that's
-  bp-chepherd. Both charts can be installed on the same Sovereign for the
+  bp-chepherd. Both charts can be installed on the same OpenOva instance for the
   enterprise profile.
 type: application
 version: 0.8.0

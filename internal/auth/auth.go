@@ -7,7 +7,7 @@
 //     dependency. The default for hobby Podman and single-user installs.
 //
 //   - OIDCProvider — validates Bearer tokens against an OpenID Connect
-//     JWKS endpoint (Keycloak on OpenOva Sovereign, but any compliant
+//     JWKS endpoint (Keycloak on OpenOvan OpenOva instance, but any compliant
 //     issuer works). Wired in when CHEPHERD_AUTH_MODE=oidc.
 //
 // The same interface lets HTTP middleware, the MCP server, and the
@@ -213,7 +213,7 @@ func hmacSHA256(key, msg []byte) []byte {
 // ─── OIDCProvider (scaffold for #128) ────────────────────────────────────────
 //
 // Validates Bearer JWTs against the issuer's JWKS endpoint. Wired in
-// when chepherd is deployed on OpenOva Sovereign or any K8s cluster
+// when chepherd is deployed on OpenOvan OpenOva instance or any K8s cluster
 // running Keycloak. Full implementation lands with the enterprise
 // profile (#129) — fetches JWKS, caches keys, validates signatures via
 // crypto/rsa or crypto/ecdsa depending on alg.

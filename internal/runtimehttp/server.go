@@ -2661,7 +2661,7 @@ func (s *Server) agentsCatalog(w http.ResponseWriter, r *http.Request) {
 		"cursor-agent":    {"Cursor Agent", "Cursor's headless agent — needs the LLM gateway", ""},
 		"little-coder":    {"Little Coder", "Minimal local agent — needs an OpenAI-compatible endpoint", "openai-api"},
 		"opencode":        {"OpenCode", "Community-built coding agent — needs an OpenAI-compatible endpoint", "openai-api"},
-		"sovereign-shell": {"Sovereign Shell", "Raw shell with no agent — useful as a rescue session", ""},
+		"sovereign-shell": {"Raw Shell", "Raw shell with no agent — useful as a rescue session", ""},
 	}
 	out := make([]entry, 0, len(agentcatalog.Builtin))
 	for _, a := range agentcatalog.Builtin {

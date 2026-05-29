@@ -78,7 +78,7 @@ func runSetupCmd(_ *cobra.Command, _ []string) error {
 		{provider.KindAnthropicAPI, "Anthropic API", "Paste an sk-ant-* API key"},
 		{provider.KindOpenRouter, "OpenRouter", "Many models, one bill — paste sk-or-* API key"},
 		{provider.KindOpenAI, "OpenAI", "Paste an sk-* API key"},
-		{provider.KindOpenOvaNewAPI, "OpenOva NewAPI", "Connect to your Sovereign's NewAPI gateway"},
+		{provider.KindOpenOvaNewAPI, "OpenOva NewAPI", "Connect to your OpenOva instance's NewAPI gateway"},
 		{provider.KindOllama, "Ollama (local)", "Free local models on http://localhost:11434"},
 	}
 	for i, o := range options {
@@ -122,7 +122,7 @@ func runSetupCmd(_ *cobra.Command, _ []string) error {
 		secret, _ = in.ReadString('\n')
 		secret = strings.TrimSpace(secret)
 	case provider.KindOpenOvaNewAPI:
-		fmt.Print("Sovereign FQDN (e.g. mysovereign.io): ")
+		fmt.Print("OpenOva instance FQDN (e.g. mysovereign.io): ")
 		fqdn, _ := in.ReadString('\n')
 		fqdn = strings.TrimSpace(fqdn)
 		if fqdn == "" {
