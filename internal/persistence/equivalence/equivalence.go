@@ -16,6 +16,7 @@ package equivalence
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -142,10 +143,10 @@ func templates(t *testing.T, r persistence.TemplateRepository) {
 	if got.Name != "n" || string(got.Body) != "yaml: data" {
 		t.Errorf("Get = %+v", got)
 	}
-	// Metadata round-trips intact.
-	if string(got.Metadata) != `{"icon":"PlusCircle","slots":[]}` {
-		t.Errorf("Metadata = %q, want round-trip", string(got.Metadata))
-	}
+	// Metadata round-trips intact (semantic-JSON compare so PostgreSQL
+	// JSONB whitespace normalization doesn't false-fail).
+	assertJSONEqual(t, got.Metadata, []byte(`{"icon":"PlusCircle","slots":[]}`),
+		"Template.Metadata")
 }
 
 func grants(t *testing.T, r persistence.RBACGrantRepository) {
@@ -259,9 +260,8 @@ func skills(t *testing.T, r persistence.SkillRepository) {
 	if got.OverrideBody != "Test first and assert on behavior." || got.SortOrder != 10 {
 		t.Errorf("Get = %+v", got)
 	}
-	if string(got.Metadata) != `{"icon":"Beaker","tags":["test"]}` {
-		t.Errorf("Skill.Metadata = %q, want round-trip", string(got.Metadata))
-	}
+	assertJSONEqual(t, got.Metadata, []byte(`{"icon":"Beaker","tags":["test"]}`),
+		"Skill.Metadata")
 	all, _ := r.List(ctx, persistence.SkillListOpts{})
 	if len(all) != 1 {
 		t.Errorf("List = %d, want 1", len(all))
@@ -290,9 +290,8 @@ func agents(t *testing.T, r persistence.AgentRepository) {
 		len(got.OwnedSkills) != 2 || len(got.Sessions) != 1 {
 		t.Errorf("Get = %+v", got)
 	}
-	if string(got.Metadata) != `{"pvc_handle":"pvc-eq"}` {
-		t.Errorf("Agent.Metadata = %q, want round-trip", string(got.Metadata))
-	}
+	assertJSONEqual(t, got.Metadata, []byte(`{"pvc_handle":"pvc-eq"}`),
+		"Agent.Metadata")
 }
 
 func canon(t *testing.T, r persistence.CanonRepository) {
@@ -349,5 +348,31 @@ func canon(t *testing.T, r persistence.CanonRepository) {
 	// Rollback to missing version → error.
 	if _, err := r.Rollback(ctx, 9999, "operator"); err == nil {
 		t.Error("Rollback to missing: want error, got nil")
+	}
+}
+
+// assertJSONEqual asserts that two JSON byte slices are SEMANTICALLY
+// equal — i.e. they parse to deeply-equal Go values. SQLite TEXT
+// columns round-trip bytes verbatim; PostgreSQL JSONB normalizes
+// whitespace on storage (`{"a":1}` may come back as `{"a": 1}`).
+// Equivalence assertions on Metadata round-trip must compare DATA,
+// not BYTES, so SQLite + PostgreSQL backends both satisfy the same
+// contract.
+//
+// Refs #208.
+func assertJSONEqual(t *testing.T, got, want []byte, label string) {
+	t.Helper()
+	var gotV, wantV any
+	if err := json.Unmarshal(got, &gotV); err != nil {
+		t.Errorf("%s: got is not valid JSON (%v): %q", label, err, string(got))
+		return
+	}
+	if err := json.Unmarshal(want, &wantV); err != nil {
+		t.Errorf("%s: want is not valid JSON (%v): %q", label, err, string(want))
+		return
+	}
+	if !reflect.DeepEqual(gotV, wantV) {
+		t.Errorf("%s: semantic JSON mismatch\n  got:  %s\n  want: %s",
+			label, string(got), string(want))
 	}
 }
