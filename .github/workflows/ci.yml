@@ -37,4 +37,13 @@ jobs:
         # operator-clicks-Launch time. See scripts/check-stage4-model-ids.sh
         # + issue #244 for context.
         run: bash scripts/check-stage4-model-ids.sh
+      - name: Agent entrypoint refresh-on-spawn guard (#254)
+        # Asserts agent-entrypoint.sh ALWAYS overwrites
+        # ~/.claude/.credentials.json + ~/.claude.json from /run/secrets/.
+        # The prior `[ ! -e ]` skip-if-exists guard pinned a first-spawn
+        # snapshot across subsequent spawns; the per-agent HOME volume
+        # persists across spawns so the existing-file check fires every
+        # time and the freshly-refreshed token never reaches the agent.
+        # See scripts/test-agent-entrypoint.sh + issue #254.
+        run: bash scripts/test-agent-entrypoint.sh
       - run: go test ./... -race -count=1
