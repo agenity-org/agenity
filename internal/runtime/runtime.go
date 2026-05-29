@@ -1185,6 +1185,32 @@ func (r *Runtime) Get(name string) (*session.Session, *SessionInfo) {
 	return r.sessions[id], r.info[id]
 }
 
+// GetByContextID resolves a session against EITHER its byID index OR
+// its byName index, in that order. Introduced to fix the A2A
+// contextId-vs-name ambiguity surfaced by PR #216's e2e walk:
+// /api/v1/sessions returns the full long-form session ID
+// ("shepherd-1780057429428571338"); historical chepherd convention is
+// the short @-name ("shepherd"). Both are legitimate identifiers and
+// A2A's spec gloss for contextId is "stable conversation identifier" —
+// callers can reasonably pass either.
+//
+// Lock-safe (same single-mutex contract as Get). Returns nil/nil when
+// neither lookup matches. Used by A2ADeliverer; legacy single-shape
+// callers can keep using Get.
+//
+// Refs #208.
+func (r *Runtime) GetByContextID(contextID string) (*session.Session, *SessionInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if info, ok := r.info[contextID]; ok {
+		return r.sessions[contextID], info
+	}
+	if id, ok := r.byName[contextID]; ok {
+		return r.sessions[id], r.info[id]
+	}
+	return nil, nil
+}
+
 // UpdateStatSheet replaces the operator-configurable stat sheet on a
 // running agent. Zero-valued fields in the patch are interpreted as
 // "leave alone" (per-field merge, not whole-sheet replace).

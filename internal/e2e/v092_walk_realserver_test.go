@@ -168,6 +168,269 @@ func TestV092Walk_RealServerExposesA2A(t *testing.T) {
 	}
 }
 
+// TestV092Walk_SendMessageDoesNotErrorEnvelope closes the #217 theater
+// loophole identified by the architect post-walk-on-#208: the prior
+// real-server test only checked HTTP status code, not the JSON-RPC
+// envelope shape. A "200 with error.code=-32603" looks identical to a
+// "200 with result.task" at the HTTP layer; only parsing the body
+// reveals which one the binary returned.
+//
+// This test fails LOUDLY when:
+//   - The response body carries an `error` envelope (regardless of HTTP code)
+//   - The `result.task` shape is missing any of: id, contextId, status.state
+//   - status.state != "working"
+//
+// It exercises BOTH contextId shapes the A2A spec allows in chepherd:
+// the long-form session ID (returned by /api/v1/sessions) AND the short
+// @-name. Pre-#217 the byName-only Runtime.Get rejected the ID form
+// with -32603; post-#217 GetByContextID accepts either.
+//
+// Skips when `claude` CLI is not in PATH (the spawn path needs a real
+// agent binary; the unit test pins the GetByContextID contract without
+// requiring a binary).
+//
+// Refs #208.
+func TestV092Walk_SendMessageDoesNotErrorEnvelope(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-binary boot in -short mode")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("skipping: 'claude' CLI not in PATH — unit test in internal/runtime covers GetByContextID without a binary")
+	}
+
+	httpAddr, stateDir := bootChepherdWithShepherd(t)
+
+	// Pull session ID via the SessionRepository — same handle other
+	// callers see. Wait for Spawn → store.Sessions().Save to land.
+	sessionID := waitForFirstSessionID(t, stateDir, 5*time.Second)
+	if sessionID == "" {
+		t.Fatal("no session found in SessionRepository after spawn; #216 regression OR shepherd Spawn failed")
+	}
+
+	// ─── Case A: contextId = full session ID ────────────────────────
+	// Pre-#217 this returned -32603 because Runtime.Get used byName only.
+	// Post-#217 GetByContextID tries byID first.
+	assertSendMessageWorking(t, httpAddr, sessionID, "id-form")
+
+	// ─── Case B: contextId = short @-name ──────────────────────────
+	// Both pre- and post-#217 this works because the byName index is
+	// hit by both Get and GetByContextID.
+	assertSendMessageWorking(t, httpAddr, "shepherd", "name-form")
+}
+
+// assertSendMessageWorking sends a SendMessage with contextId=ctxID
+// and asserts the response is a JSON-RPC SUCCESS envelope with a
+// well-formed Task.status.state="working". Fails LOUDLY with the full
+// body when an `error` envelope is returned or any required Task field
+// is missing — that is the theater-proofing assertion.
+func assertSendMessageWorking(t *testing.T, httpAddr, ctxID, label string) {
+	t.Helper()
+	body := fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":"e2e-%s","method":"SendMessage","params":{"message":{"role":"user","kind":"message","contextId":%q,"parts":[{"kind":"text","text":"e2e theater-proof"}]}}}`,
+		label, ctxID,
+	)
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+httpAddr+"/jsonrpc",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("%s: build request: %v", label, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s: POST /jsonrpc: %v", label, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s: HTTP %d, want 200", label, resp.StatusCode)
+	}
+
+	var envelope struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      any    `json:"id"`
+		Result  *struct {
+			Task *struct {
+				ID        string `json:"id"`
+				ContextID string `json:"contextId"`
+				Kind      string `json:"kind"`
+				Status    struct {
+					State string `json:"state"`
+				} `json:"status"`
+			} `json:"task"`
+		} `json:"result,omitempty"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+	rawBody, _ := readAllBody(resp)
+	if err := json.Unmarshal(rawBody, &envelope); err != nil {
+		t.Fatalf("%s: decode body: %v\nbody: %s", label, err, rawBody)
+	}
+
+	// ─── Theater-proof Assertion 1: NO error envelope ───────────────
+	if envelope.Error != nil {
+		t.Fatalf("%s: SendMessage returned JSON-RPC error envelope, want Task result. code=%d message=%q\nfull body: %s",
+			label, envelope.Error.Code, envelope.Error.Message, rawBody)
+	}
+
+	// ─── Theater-proof Assertion 2: result.task present + shape ──
+	if envelope.Result == nil || envelope.Result.Task == nil {
+		t.Fatalf("%s: response has no result.task — A2A-spec violation\nbody: %s", label, rawBody)
+	}
+	task := envelope.Result.Task
+	if task.ID == "" {
+		t.Errorf("%s: task.id empty, want UUIDv7\nbody: %s", label, rawBody)
+	}
+	if task.ContextID != ctxID {
+		t.Errorf("%s: task.contextId = %q, want %q (echo back the request's contextId)", label, task.ContextID, ctxID)
+	}
+	if task.Status.State != "working" {
+		t.Errorf("%s: task.status.state = %q, want \"working\"", label, task.Status.State)
+	}
+	if task.Kind != "task" {
+		t.Errorf("%s: task.kind = %q, want \"task\"", label, task.Kind)
+	}
+}
+
+// readAllBody reads the response body fully + leaves an empty reader
+// in place for the caller's defer Close.
+func readAllBody(resp *http.Response) ([]byte, error) {
+	buf := make([]byte, 0, 4096)
+	tmp := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+		}
+		if err != nil {
+			if err.Error() == "EOF" {
+				return buf, nil
+			}
+			return buf, err
+		}
+	}
+}
+
+// bootChepherdWithShepherd builds + launches the chepherd binary with
+// --no-shepherd=false on random free ports. Returns (httpAddr, stateDir).
+// Test cleanup tears the process down + dumps the log on failure.
+func bootChepherdWithShepherd(t *testing.T) (string, string) {
+	t.Helper()
+	gomodOut, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	gomod := strings.TrimSpace(string(gomodOut))
+	if gomod == "" || gomod == os.DevNull {
+		t.Fatalf("repo go.mod not found")
+	}
+	repoRoot := filepath.Dir(gomod)
+	binPath := filepath.Join(t.TempDir(), "chepherd-e2e-shep")
+	build := exec.Command("go", "build", "-o", binPath, ".")
+	build.Dir = repoRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	httpPort := freeTCPPort(t)
+	mcpPort := freeTCPPort(t)
+	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+	mcpAddr := fmt.Sprintf("127.0.0.1:%d", mcpPort)
+	stateDir := newTestStateDir(t)
+
+	cmd := exec.Command(binPath,
+		"run",
+		"--headless",
+		"--no-shepherd=false",
+		"--listen", httpAddr,
+		"--mcp-listen", mcpAddr,
+		"--state-dir", stateDir,
+	)
+	logFile, _ := os.CreateTemp("", "chepherd-shep-*.log")
+	t.Cleanup(func() { _ = logFile.Close() })
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start chepherd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+		if t.Failed() {
+			if b, err := os.ReadFile(logFile.Name()); err == nil {
+				t.Logf("chepherd binary log:\n%s", b)
+			}
+		}
+	})
+	if err := waitForHTTPOK(httpAddr, "/healthz", 10*time.Second); err != nil {
+		t.Fatalf("chepherd /healthz never came up: %v", err)
+	}
+	return httpAddr, stateDir
+}
+
+// newTestStateDir creates a fresh state-dir under TMPDIR that the test
+// can pass as `--state-dir` to chepherd run. Caller-side rather than
+// t.TempDir because the spawned podman sidecar writes files owned by
+// a different subuid (rootless podman's user-namespace remap) inside
+// agents/<name>/home/.claude/projects + secrets/. t.TempDir's
+// automatic RemoveAll then fails with "permission denied" and the
+// test verdict appears as FAIL even though the actual assertions
+// passed (the failure source identified by tech-lead 2026-05-29).
+//
+// The registered cleanup does a best-effort RemoveAll; if that fails
+// (subuid-owned files), it falls back to `podman unshare rm -rf`
+// which enters the same user namespace as the agent container. If
+// neither succeeds the temp dir leaks — non-fatal, system TMPDIR
+// cleanup eventually reaps it; the test verdict is correct.
+func newTestStateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "chepherd-e2e-state-")
+	if err != nil {
+		t.Fatalf("mkdir tmp state-dir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err == nil {
+			return
+		}
+		// Podman-spawned subuid-owned files — try podman unshare.
+		if _, lookErr := exec.LookPath("podman"); lookErr == nil {
+			_ = exec.Command("podman", "unshare", "rm", "-rf", dir).Run()
+		}
+	})
+	return dir
+}
+
+// waitForFirstSessionID polls store.Sessions().List for up to timeout
+// + returns the first session ID. Empty string on timeout. Used in
+// real-binary tests to wait out the Spawn → SessionRepository.Save flush.
+func waitForFirstSessionID(t *testing.T, stateDir string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	dbPath := filepath.Join(stateDir, "chepherd.db")
+	for time.Now().Before(deadline) {
+		store, err := sqlite.NewStore(context.Background(), dbPath)
+		if err == nil {
+			ids, err := store.Sessions().List(context.Background())
+			_ = store.Close()
+			if err == nil && len(ids) > 0 {
+				return ids[0]
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return ""
+}
+
 // TestV092Walk_RealServerPersistsSpawnedSession closes the #216 e2e
 // loophole identified by the architect post-walk-on-#208: pre-#216
 // the chepherd binary booted with shepherd enabled would spawn a
@@ -218,7 +481,7 @@ func TestV092Walk_RealServerPersistsSpawnedSession(t *testing.T) {
 	mcpPort := freeTCPPort(t)
 	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 	mcpAddr := fmt.Sprintf("127.0.0.1:%d", mcpPort)
-	stateDir := t.TempDir()
+	stateDir := newTestStateDir(t)
 
 	cmd := exec.Command(binPath,
 		"run",
