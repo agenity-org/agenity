@@ -110,9 +110,9 @@ func makeSendMessageHandler(deliverer Deliverer) methodHandler {
 			return errorResp(req.ID, ErrCodeInvalidParams,
 				"decode SendMessageParams: "+err.Error())
 		}
-		if params.Message.TaskID == "" {
+		if params.Message.ContextID == "" {
 			return errorResp(req.ID, ErrCodeInvalidParams,
-				"message.taskId is required (resolves to chepherd session ID for interactive mode)")
+				"message.contextId is required (resolves to chepherd session ID for interactive mode); taskId is optional (auto-generated if missing)")
 		}
 		task, err := deliverer.Deliver(context.Background(), params.Message)
 		if err != nil {

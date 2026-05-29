@@ -63,7 +63,7 @@ func (f *fakeDeliverer) Deliver(_ context.Context, msg Message) (*Task, error) {
 func TestWireDeliverer_DispatchesSendMessage(t *testing.T) {
 	t.Parallel()
 	r := NewRouter()
-	want := &Task{ID: "sess-1", Status: TaskStatus{State: TaskStateWorking}}
+	want := &Task{ID: "t-1", ContextID: "sess-1", Status: TaskStatus{State: TaskStateWorking}}
 	deliverer := &fakeDeliverer{want: want}
 	if err := r.WireDeliverer(deliverer); err != nil {
 		t.Fatalf("WireDeliverer: %v", err)
@@ -74,9 +74,10 @@ func TestWireDeliverer_DispatchesSendMessage(t *testing.T) {
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "SendMessage",
 		Params: jsonRaw(t, SendMessageParams{Message: Message{
-			Role:   "user",
-			TaskID: "sess-1",
-			Parts:  []Part{{Kind: "text", Text: "ping"}},
+			Role:      "user",
+			ContextID: "sess-1",
+			TaskID:    "t-1",
+			Parts:     []Part{{Kind: "text", Text: "ping"}},
 		}}),
 	})
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
@@ -91,12 +92,18 @@ func TestWireDeliverer_DispatchesSendMessage(t *testing.T) {
 	if got.Error != nil {
 		t.Fatalf("unexpected JSON-RPC error: %+v", got.Error)
 	}
-	if deliverer.captured.TaskID != "sess-1" {
-		t.Errorf("Deliverer received TaskID=%q, want sess-1", deliverer.captured.TaskID)
+	if deliverer.captured.ContextID != "sess-1" {
+		t.Errorf("Deliverer received ContextID=%q, want sess-1", deliverer.captured.ContextID)
+	}
+	if deliverer.captured.TaskID != "t-1" {
+		t.Errorf("Deliverer received TaskID=%q, want t-1", deliverer.captured.TaskID)
 	}
 }
 
-func TestWireDeliverer_RejectsEmptyTaskID(t *testing.T) {
+// TestWireDeliverer_RejectsEmptyContextID — per architect scope-lock
+// 2026-05-29, ContextID (not TaskID) is the required field for
+// interactive-mode SendMessage. TaskID auto-generates when missing.
+func TestWireDeliverer_RejectsEmptyContextID(t *testing.T) {
 	t.Parallel()
 	r := NewRouter()
 	if err := r.WireDeliverer(&fakeDeliverer{}); err != nil {
@@ -119,8 +126,35 @@ func TestWireDeliverer_RejectsEmptyTaskID(t *testing.T) {
 	if got.Error == nil || got.Error.Code != ErrCodeInvalidParams {
 		t.Errorf("error = %+v, want code -32602 invalid params", got.Error)
 	}
-	if !strings.Contains(got.Error.Message, "taskId") {
-		t.Errorf("message = %q, want mentions taskId", got.Error.Message)
+	if !strings.Contains(got.Error.Message, "contextId") {
+		t.Errorf("message = %q, want mentions contextId", got.Error.Message)
+	}
+}
+
+// TestWireDeliverer_AcceptsMissingTaskID — when caller omits TaskID,
+// SendMessage must still succeed (server auto-generates a UUIDv7).
+func TestWireDeliverer_AcceptsMissingTaskID(t *testing.T) {
+	t.Parallel()
+	r := NewRouter()
+	deliverer := &fakeDeliverer{want: &Task{ContextID: "sess-1", Status: TaskStatus{State: TaskStateWorking}}}
+	_ = r.WireDeliverer(deliverer)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "SendMessage",
+		Params: jsonRaw(t, SendMessageParams{Message: Message{
+			Role:      "user",
+			ContextID: "sess-1",
+			Parts:     []Part{{Kind: "text", Text: "ping"}},
+		}}),
+	})
+	resp, _ := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	defer resp.Body.Close()
+	var got JSONRPCResponse
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	if got.Error != nil {
+		t.Errorf("unexpected error with missing TaskID: %+v", got.Error)
 	}
 }
 
@@ -135,7 +169,7 @@ func TestWireDeliverer_PropagatesDelivererError(t *testing.T) {
 	body, _ := json.Marshal(JSONRPCRequest{
 		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "SendMessage",
 		Params: jsonRaw(t, SendMessageParams{Message: Message{
-			Role: "user", TaskID: "sess-x",
+			Role: "user", ContextID: "sess-x",
 			Parts: []Part{{Kind: "text", Text: "ping"}},
 		}}),
 	})

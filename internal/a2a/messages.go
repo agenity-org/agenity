@@ -32,16 +32,20 @@ type Message struct {
 	// recommended). Used for idempotency / retry detection.
 	MessageID string `json:"messageId,omitempty"`
 
-	// TaskID associates the Message with a Task lifecycle (Submitted →
-	// Working → InputRequired/Completed/Failed/Canceled). For
-	// chepherd interactive mode, TaskID is the target session ID;
-	// for headless-iogrid mode TaskID is the iogrid-mediated task
-	// record.
+	// TaskID identifies the discrete unit of work within this
+	// Message's ContextID-scoped conversation. Optional; if missing,
+	// the SendMessage handler auto-generates a UUIDv7 server-side and
+	// returns it in SendMessageResult.Task.ID.
+	//
+	// A single ContextID may host MANY tasks concurrently (per A2A v1.0
+	// spec) — taskId is the per-request handle for poll/subscribe/cancel.
 	TaskID string `json:"taskId,omitempty"`
 
-	// ContextID groups Messages that belong to the same multi-turn
-	// conversation. Optional for v0.9.2 scaffold; required by some
-	// spec methods in later sub-branches.
+	// ContextID is the long-running conversation grouping. REQUIRED
+	// for SendMessage in v0.9.2 interactive mode — resolves to the
+	// target chepherd session ID (the PTY-backed conversation handle).
+	// Headless-iogrid mode (later sub-branch) accepts taskId-only and
+	// treats contextId as optional grouping.
 	ContextID string `json:"contextId,omitempty"`
 
 	// Kind discriminates Message from other Result types in JSON-RPC
