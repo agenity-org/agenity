@@ -23,27 +23,33 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
+	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/runtimehttp"
 	"github.com/chepherd/chepherd/internal/runtimetui"
+	"github.com/chepherd/chepherd/internal/vault"
 )
 
 var (
-	runFlagAgent       string
-	runFlagCwd         string
-	runFlagNoShepherd  bool
-	runFlagStateDir    string
-	runFlagHeadless    bool
-	runFlagListen      string
+	runFlagAgent      string
+	runFlagCwd        string
+	runFlagNoShepherd bool
+	runFlagStateDir   string
+	runFlagHeadless   bool
+	runFlagListen     string
+	runFlagWebDir     string
+	runFlagMCPListen  string
 )
 
 var runCmd = &cobra.Command{
@@ -69,10 +75,12 @@ target this runtime instead of tmux.`,
 func init() {
 	runCmd.Flags().StringVar(&runFlagAgent, "agent", "claude-code", "default agent CLI slug (claude-code, qwen-code, aider, ...)")
 	runCmd.Flags().StringVar(&runFlagCwd, "cwd", "", "fallback working directory (default: current)")
-	runCmd.Flags().BoolVar(&runFlagNoShepherd, "no-shepherd", false, "skip the default shepherd (4-eyes off)")
+	runCmd.Flags().BoolVar(&runFlagNoShepherd, "no-shepherd", true, "skip the default shepherd (4-eyes off); use --no-shepherd=false to enable")
 	runCmd.Flags().StringVar(&runFlagStateDir, "state-dir", "", "runtime state dir (default: ~/.local/state/chepherd-v05)")
 	runCmd.Flags().BoolVar(&runFlagHeadless, "headless", false, "skip TUI; print runtime status + sleep (for testing / systemd)")
 	runCmd.Flags().StringVar(&runFlagListen, "listen", "127.0.0.1:8080", "HTTP/WS listen addr (set to '' to disable; for web/mobile clients)")
+	runCmd.Flags().StringVar(&runFlagWebDir, "web-dir", "", "serve Astro static build from this dir (production mode; empty = dev-proxy mode)")
+	runCmd.Flags().StringVar(&runFlagMCPListen, "mcp-listen", "", "MCP HTTP/WS listen addr (default: $CHEPHERD_MCP_LISTEN or 0.0.0.0:9090)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -87,11 +95,15 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		cwd, _ = os.Getwd()
 	}
 
-	fmt.Printf("chepherd run — v0.5 runtime\n")
+	prof := profile.Resolve()
+
+	fmt.Printf("chepherd run — v0.8 runtime\n")
 	fmt.Printf("  state-dir: %s\n", stateDir)
 	fmt.Printf("  agent:     %s\n", runFlagAgent)
 	fmt.Printf("  cwd:       %s\n", cwd)
-	fmt.Printf("  shepherd:  %v\n\n", !runFlagNoShepherd)
+	fmt.Printf("  shepherd:  %v\n", !runFlagNoShepherd)
+	fmt.Printf("  profile:   %s (spawner=%s auth=%s storage=%s tls=%s)\n\n",
+		profileNameOrDefault(prof.Name), prof.Spawner, prof.AuthMode, prof.StorageType, prof.TLSMode)
 
 	rt, err := runtime.New(stateDir)
 	if err != nil {
@@ -107,25 +119,82 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		}
 	})
 
-	// MCP server on Unix socket — `chepherd mcp` subprocess (used by agents)
-	// dials this socket and proxies JSON-RPC. One server per runtime.
-	mcpSrv := mcpserver.New(rt, mcpserver.DefaultSockPath(stateDir))
-	if err := mcpSrv.Start(); err != nil {
+	// MCP server on HTTP/WebSocket — `chepherd mcp` subprocess (used by
+	// agents) dials this endpoint and proxies JSON-RPC over the WS. One
+	// server per runtime. Works on local Podman, multi-cluster K8s, and
+	// the OpenOva Sovereign without any code change. Closes #124.
+	mcpListen := runFlagMCPListen
+	if mcpListen == "" {
+		mcpListen = os.Getenv("CHEPHERD_MCP_LISTEN")
+	}
+	if mcpListen == "" {
+		mcpListen = mcpserver.DefaultListenAddr
+	}
+	mcpSrv := mcpserver.New(rt)
+	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
-	fmt.Printf("✓ MCP server listening on %s\n", mcpserver.DefaultSockPath(stateDir))
+	fmt.Printf("✓ MCP server (HTTP/WS) listening on http://%s/mcp/ws\n", mcpListen)
 
 	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),
 	// and remote-TUI clients. Disabled when --listen "".
 	var httpSrv *http.Server
 	if runFlagListen != "" {
 		rs := runtimehttp.New(rt)
+		rs.WebDir = runFlagWebDir
+		rs.Profile = &prof
+		// Vault — open (or create) in the state directory
+		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: vault: %v (credential vault disabled)\n", err)
+		} else {
+			rs.Vault = vlt
+			// Wire vault into the runtime so /run/secrets/claude-credentials
+			// is sourced from the vault on every spawn (TV1 / R4).
+			rt.SetVault(newRuntimeVaultAdapter(vlt))
+		}
+		// Auth provider — sourced from resolved profile (#129). The
+		// per-knob env vars are already applied by profile.Resolve, so
+		// pass the materialized values here instead of letting auth.New
+		// re-read the environment.
+		if ap, err := auth.New(prof.AuthMode, stateDir, prof.OIDCIssuer); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: auth: %v (server is unauthenticated)\n", err)
+		} else {
+			rs.Auth = ap
+			fmt.Printf("✓ Auth provider: %s\n", ap.Mode())
+			if lp, ok := ap.(*auth.LocalProvider); ok {
+				// Bootstrap token: issue once, persist, re-use on every
+				// boot so agents spawned across restarts keep working.
+				tokenPath := filepath.Join(stateDir, "auth.printed")
+				var tok string
+				if existing, err := os.ReadFile(tokenPath); err == nil && len(existing) > 0 {
+					tok = strings.TrimSpace(string(existing))
+				} else {
+					if t, err := lp.IssueBootstrapToken(nil, "operator", 0); err == nil {
+						tok = t
+						_ = os.WriteFile(tokenPath, []byte(t), 0o600)
+						fmt.Printf("\n  Bootstrap token (operator, 30d):\n  %s\n\n", tok)
+					}
+				}
+				if tok != "" {
+					// Wire token into MCP server (#139) + runtime spawn env
+					// (#139). Agents inherit CHEPHERD_TOKEN and present it
+					// on every WS upgrade. Dashboard requires same Bearer.
+					mcpSrv.SetAuthToken(tok)
+					rt.SetAgentEnv("CHEPHERD_TOKEN", tok)
+					rs.AuthToken = tok
+				}
+			}
+		}
 		hs, err := rs.ServeOn(runFlagListen)
 		if err != nil {
 			return fmt.Errorf("http server: %w", err)
 		}
 		httpSrv = hs
-		fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
+		if runFlagWebDir != "" {
+			fmt.Printf("✓ HTTP/WS server + web UI on http://%s (web-dir: %s)\n", runFlagListen, runFlagWebDir)
+		} else {
+			fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
+		}
 	}
 
 	// Zero workers by default — the operator opens the dashboard and
@@ -201,6 +270,38 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	return err
 }
 
+func profileNameOrDefault(n string) string {
+	if n == "" {
+		return "(auto)"
+	}
+	return n
+}
+
+// runtimeVaultAdapter adapts *vault.Vault to runtime.VaultProvider — the
+// runtime package can't import vault directly without an import cycle, so
+// we adapt at the cmd layer.
+type runtimeVaultAdapter struct{ v *vault.Vault }
+
+func newRuntimeVaultAdapter(v *vault.Vault) *runtimeVaultAdapter { return &runtimeVaultAdapter{v: v} }
+
+func (a *runtimeVaultAdapter) ListByProvider(provider string) []runtime.VaultCredMeta {
+	src := a.v.ListByProvider(provider)
+	out := make([]runtime.VaultCredMeta, len(src))
+	for i, c := range src {
+		out[i] = runtime.VaultCredMeta{
+			ID: c.ID, Provider: c.Provider, ProviderLabel: c.ProviderLabel,
+			Label: c.Label, EnvVar: c.EnvVar,
+		}
+	}
+	return out
+}
+
+func (a *runtimeVaultAdapter) GetValue(id string) (string, error) { return a.v.GetValue(id) }
+
+func (a *runtimeVaultAdapter) UpdateValue(id, plaintext string) error {
+	return a.v.UpdateValue(id, plaintext)
+}
+
 // bootstrapShepherd brings a freshly-spawned shepherd session into its
 // watch cycle: accept the Claude-Code trust prompt + send a mission
 // prompt + then poke it on every spawn event AND on a regular tick so
@@ -239,11 +340,40 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 
 	// Periodic baseline tick — 60s. Catches drift between explicit spawn
 	// events (e.g. an existing agent that's been silent or stuck).
+	// Anti-rot: after maxTicks the shepherd is retired and a fresh one
+	// is spawned with anchored summary of the previous shepherd's state.
+	const maxTicksBeforeRefresh = 50
+	tickCount := 0
 	tick := time.NewTicker(60 * time.Second)
 	defer tick.Stop()
 	for range tick.C {
 		live, _ := rt.Get("shepherd")
 		if live == nil || live != sess {
+			return
+		}
+		tickCount++
+		if tickCount >= maxTicksBeforeRefresh {
+			// Anti-rot: fresh shepherd. Capture the current shepherd's
+			// pane as the anchored handoff summary, then retire it +
+			// spawn replacement. The MCP socket + dashboard see no
+			// discontinuity — same name, same membership, same role.
+			rt.RecordEvent(runtime.Event{
+				Kind: "shepherd_refresh", Actor: "runtime",
+				Body: "shepherd hit tick limit (50); refreshing for anti-rot",
+			})
+			pokeShepherd(sess, "FINAL TICK before refresh: write a 5-line summary of the current state of your watch (workers + their latest scorecard + any open coaching threads + open questions) via chepherd.record_event(kind='shepherd_handoff', body='<summary>'). I'll spawn a replacement shepherd in 10s with this summary as its boot context.")
+			time.Sleep(15 * time.Second)
+			_ = rt.Stop("shepherd")
+			time.Sleep(2 * time.Second)
+			// Respawn (skip cycle; new bootstrapShepherd starts its own loop)
+			_, newSess, err := rt.Spawn(runtime.SpawnSpec{
+				Name: "shepherd", AgentSlug: "claude-code", Team: "default",
+				Role: runtime.RoleShepherd, Cwd: "/home/openova",
+				SystemPrompt: prompts.Shepherd,
+			})
+			if err == nil {
+				go bootstrapShepherd(rt, newSess)
+			}
 			return
 		}
 		pokeShepherd(sess, "Tick: chepherd.list + read_pane each non-paused worker. Then chepherd.set_scorecard + chepherd.record_verdict for each — update scores based on what changed since last tick. Stay quiet unless alert_human is needed.")

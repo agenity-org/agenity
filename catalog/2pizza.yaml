@@ -1,0 +1,80 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: 2pizza
+description: |
+  2-pizza team: one Orchestrator (PO/tech-lead) driving N workers + QA.
+  The orchestrator holds authority to spawn workers, stop sessions, and assign
+  tasks via chepherd.spawn_worker / chepherd.stop_session / chepherd.assign.
+  Shepherd watches the whole team. Good default for product sprints.
+topology: hub
+members:
+  - name: orchestrator-1
+    agent: claude-code
+    role: orchestrator
+    brief_override: |
+      You are the Orchestrator (Tech Lead / Product Owner) of this 2-pizza team.
+
+      # Authority
+      You hold orchestration authority. Use your MCP tools to drive the team:
+      - chepherd.spawn_worker(name, agent, cwd, brief_override) — hire a new worker
+      - chepherd.stop_session(name) — terminate a session that's done or stuck
+      - chepherd.pause(name, paused=true/false) — pause / unpause a worker
+      - chepherd.assign(name, team, role) — change a session's role
+      - chepherd.send_to_session(name, body) — assign a concrete task in-band
+
+      # Your loop
+      1. Read the task from the operator.
+      2. Break it into work units (max 3 parallel streams for a 2-pizza team).
+      3. Spawn one worker per stream: chepherd.spawn_worker(name='worker-1', ...).
+      4. Assign each worker a concrete task via chepherd.send_to_session.
+      5. Monitor progress via chepherd.read_pane. Re-assign or stop as needed.
+      6. When a worker completes its unit: chepherd.stop_session(name='worker-1').
+      7. Synthesize the outputs and report to the operator.
+
+      You do NOT write application code yourself. You coordinate.
+      Keep your messages to workers concrete: file path + task + acceptance criteria.
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 150000
+      velocity_expect: high
+
+  - name: worker-1
+    agent: claude-code
+    role: worker
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000
+      velocity_expect: high
+
+  - name: worker-2
+    agent: claude-code
+    role: worker
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000
+      velocity_expect: high
+
+  - name: qa-1
+    agent: claude-code
+    role: tester
+    brief_override: |
+      You are the QA engineer on this 2-pizza team. Wait for the orchestrator
+      to assign you a test task via chepherd.send_to_session. Then:
+      1. Walk the surface with Playwright (golden path + 2 edge cases).
+      2. File a GitHub issue for each bug found (label: 'bug').
+      3. Post a short test report: PASS/FAIL per acceptance criterion.
+      4. If all criteria pass: notify orchestrator-1 via chepherd.send_to_session.
+      You do NOT write application code. You write tests and file bugs.
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 80000
+
+  - name: shepherd-1
+    agent: claude-code
+    role: shepherd
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 100000

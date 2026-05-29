@@ -1,0 +1,17 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: solo
+description: |
+  Single agent, no shepherd, mesh topology. Use this when you want chepherd
+  purely as a session viewer / dashboard for one Claude Code instance —
+  no team coordination, no supervision, no scorecards. Lightest possible
+  cost shape.
+topology: mesh
+members:
+  - name: agent-1
+    agent: claude-code
+    role: worker
+    use_default_prompt: false
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000

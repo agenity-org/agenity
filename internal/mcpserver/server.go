@@ -1,10 +1,14 @@
 // Package mcpserver implements chepherd's MCP server — the control-plane
 // tool surface every chepherd-hosted agent calls into.
 //
-// Wire: MCP over stdio JSON-RPC 2.0. The chepherd binary's `mcp` subcommand
-// is the stdio bridge — it connects to chepherd's main runtime via a Unix
-// socket at $XDG_STATE/chepherd-v05/runtime.sock, then proxies the agent's
-// stdio JSON-RPC over that socket.
+// Wire: MCP over JSON-RPC 2.0 carried by HTTP + WebSocket on TCP :9090.
+// The chepherd binary's `mcp` subcommand is the stdio→WS bridge:
+// claude-code spawns it as a stdio subprocess; the subprocess opens a
+// WebSocket back to chepherd's daemon (CHEPHERD_MCP_URL env or --url
+// flag) and shuttles frames between agent stdio and the WS connection.
+//
+// The Unix-socket transport (v0.5–v0.7) has been retired — it didn't
+// survive Kubernetes node boundaries.
 //
 // Tool set (chepherd.* namespace; reserved by agreement with openova):
 //
@@ -19,90 +23,118 @@
 package mcpserver
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
+	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/chepherd/chepherd/internal/runtime"
 )
 
-// Server hosts the JSON-RPC over a Unix socket. Constructed once per
-// chepherd-run process.
+// Server hosts the chepherd MCP JSON-RPC surface. Constructed once per
+// chepherd-run process. The HTTP/WebSocket listener is started via
+// StartHTTP() and torn down via Stop().
 type Server struct {
-	rt       *runtime.Runtime
-	sockPath string
-	listener net.Listener
+	rt           *runtime.Runtime
+	httpListener net.Listener
+	httpServer   *http.Server
+	// AuthToken (#139/#153) is the shared-secret bearer token clients
+	// must present. Set via SetAuthToken before StartHTTP. Empty string
+	// disables auth (CHEPHERD_AUTH_REQUIRE=false) — only safe on
+	// 127.0.0.1 deployments.
+	authToken string
+	// lastCaller is the most-recently-identified agent name. Set per
+	// dispatch in dispatchWithAgent — handlers read it to attribute
+	// events. NOT thread-safe across concurrent dispatches; serveConn
+	// is per-connection sequential so this works for now (one agent
+	// per conn). Future: pass through context.Context if we need
+	// concurrent calls per conn.
+	lastCaller string
 }
 
-// New constructs a Server bound to the runtime + a Unix socket at sockPath.
-func New(rt *runtime.Runtime, sockPath string) *Server {
-	return &Server{rt: rt, sockPath: sockPath}
-}
+// SetAuthToken configures the bearer token required on every WS upgrade
+// and /mcp/rpc request. Empty string disables enforcement.
+func (s *Server) SetAuthToken(tok string) { s.authToken = tok }
 
-// DefaultSockPath returns the canonical chepherd runtime socket location.
-func DefaultSockPath(stateDir string) string {
-	return filepath.Join(stateDir, "runtime.sock")
-}
-
-// Start binds the Unix socket + serves connections in goroutines.
-// Idempotent across Stop()→Start(). Returns once listen is established;
-// the accept loop runs in a goroutine.
-func (s *Server) Start() error {
-	_ = os.MkdirAll(filepath.Dir(s.sockPath), 0o700)
-	_ = os.Remove(s.sockPath) // stale socket from prior unclean exit
-	l, err := net.Listen("unix", s.sockPath)
-	if err != nil {
-		return fmt.Errorf("mcp: listen %s: %w", s.sockPath, err)
+// requireAuth returns nil if the request carries the right bearer token
+// or auth is disabled. Otherwise returns the http status + error string
+// the caller should write back. Accepts the token via:
+//
+//   - Authorization: Bearer <tok>
+//   - ?token=<tok> query param  (WS clients that can't set headers)
+//   - X-Chepherd-Token: <tok>   (older clients)
+func (s *Server) requireAuth(r *http.Request) (int, string) {
+	if s.authToken == "" {
+		return 0, ""
 	}
-	_ = os.Chmod(s.sockPath, 0o600)
-	s.listener = l
-	go s.acceptLoop()
-	return nil
+	got := ""
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		got = strings.TrimPrefix(h, "Bearer ")
+	}
+	if got == "" {
+		got = r.Header.Get("X-Chepherd-Token")
+	}
+	if got == "" {
+		got = r.URL.Query().Get("token")
+	}
+	if got == "" || !constantTimeEq(got, s.authToken) {
+		return http.StatusUnauthorized, "missing or invalid Bearer token"
+	}
+	return 0, ""
 }
 
-// Stop closes the listener; any in-flight connections see EOF.
+func constantTimeEq(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var diff byte
+	for i := 0; i < len(a); i++ {
+		diff |= a[i] ^ b[i]
+	}
+	return diff == 0
+}
+
+// CurrentCaller returns the name of the agent that made the most-recent
+// MCP call on the current serveConn goroutine. Handlers in toolCallDirect
+// use this to set actor= on emitted events.
+func (s *Server) CurrentCaller() string {
+	if s.lastCaller == "" {
+		return "shepherd"
+	}
+	return s.lastCaller
+}
+
+// New constructs a Server bound to the runtime. Call StartHTTP(addr) to
+// begin accepting connections.
+func New(rt *runtime.Runtime) *Server {
+	return &Server{rt: rt}
+}
+
+// DefaultListenAddr is the canonical MCP HTTP bind address. v0.8+ defaults
+// to 127.0.0.1 so the control plane is not exposed to the LAN by default
+// (#154). Operators running chepherd inside a container that needs to be
+// reached by sibling containers on a bridge network must override via
+// CHEPHERD_MCP_LISTEN=0.0.0.0:9090 explicitly — scripts/start.sh does
+// this since the in-pod network is already isolated by podman.
+const DefaultListenAddr = "127.0.0.1:9090"
+
+// Stop closes the HTTP listener. Idempotent.
 func (s *Server) Stop() {
-	if s.listener != nil {
-		_ = s.listener.Close()
-		_ = os.Remove(s.sockPath)
-	}
+	s.stopHTTP()
 }
 
-func (s *Server) acceptLoop() {
-	for {
-		c, err := s.listener.Accept()
-		if err != nil {
-			return // listener closed
-		}
-		go s.serveConn(c)
+// dispatchWithAgent wraps dispatch with caller identity context.
+// Tools that record actor in events (e.g. SetScorecard, RecordVerdict,
+// HumanInbox) now have a real caller name instead of hardcoded "shepherd".
+func (s *Server) dispatchWithAgent(req *rpcReq, agent string) rpcResp {
+	if agent == "" {
+		agent = "anonymous"
 	}
-}
-
-// serveConn handles one MCP client (one chepherd-mcp subprocess bridging
-// one agent). Reads newline-delimited JSON-RPC requests, dispatches to
-// tool handlers, writes responses.
-func (s *Server) serveConn(c net.Conn) {
-	defer c.Close()
-	scanner := bufio.NewScanner(c)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024) // up to 1 MiB per line
-	w := bufio.NewWriter(c)
-	for scanner.Scan() {
-		var req rpcReq
-		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			s.writeErr(w, nil, -32700, "parse error: "+err.Error())
-			continue
-		}
-		resp := s.dispatch(&req)
-		if err := writeJSON(w, resp); err != nil {
-			return
-		}
-	}
+	s.lastCaller = agent
+	return s.dispatch(req)
 }
 
 // dispatch routes one request to its handler.
@@ -216,12 +248,104 @@ func (s *Server) toolList() []map[string]any {
 				"paused": map[string]any{"type": "boolean"},
 			},
 		}},
-		{"name": "chepherd.alert_human", "description": "Surface a high-priority message in the human's dashboard inbox. Args: body, urgency ('low'|'medium'|'high', optional default 'medium').", "inputSchema": map[string]any{
+		{"name": "chepherd.alert_human", "description": "Surface a high-signal message in the human's inbox. ONLY for: accomplishment (major win), failure (something broke), stuck (agent blocked despite intervention), or question (operator decision needed). Routine observations go to chepherd.note or chepherd.record_event instead. Args: body, kind, urgency.", "inputSchema": map[string]any{
 			"type":     "object",
-			"required": []string{"body"},
+			"required": []string{"body", "kind"},
 			"properties": map[string]any{
 				"body":    map[string]any{"type": "string"},
+				"kind":    map[string]any{"type": "string", "enum": []string{"accomplishment", "failure", "stuck", "question"}},
 				"urgency": map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}},
+			},
+		}},
+		// v0.6 team / membership tools
+		{"name": "chepherd.create_team", "description": "Create a team. Args: name, canon_path (optional), topology ('hub'|'mesh'|'custom', default 'hub').", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name":       map[string]any{"type": "string"},
+				"canon_path": map[string]any{"type": "string"},
+				"topology":   map[string]any{"type": "string", "enum": []string{"hub", "mesh", "custom"}},
+			},
+		}},
+		{"name": "chepherd.join_team", "description": "Add an agent to a team with a role. Idempotent on (agent, team) — re-call to update role. Args: agent, team, role ('worker'|'shepherd'|'reviewer'|'reviewer-discipline'|'reviewer-architect'|'reviewer-economics'|'tester'|'architect'), brief_override (optional).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"agent", "team", "role"},
+			"properties": map[string]any{
+				"agent":          map[string]any{"type": "string"},
+				"team":           map[string]any{"type": "string"},
+				"role":           map[string]any{"type": "string"},
+				"brief_override": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.leave_team", "description": "Remove an agent's membership from a team. Args: agent, team.", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"agent", "team"},
+			"properties": map[string]any{
+				"agent": map[string]any{"type": "string"},
+				"team":  map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.list_teams", "description": "Enumerate all teams.", "inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}},
+		{"name": "chepherd.list_memberships", "description": "List memberships, optionally filtered by agent or team (pass empty to skip a filter). Args: agent (optional), team (optional).", "inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"agent": map[string]any{"type": "string"},
+				"team":  map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.set_review_axis", "description": "Reviewer-only: record a per-axis assessment of a target worker. Used in the council pattern (v0.6). Args: target, axis (e.g., 'G','V','F','E','D','quality'), score (0..10), note (optional).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"target", "axis", "score"},
+			"properties": map[string]any{
+				"target": map[string]any{"type": "string"},
+				"axis":   map[string]any{"type": "string"},
+				"score":  map[string]any{"type": "number"},
+				"note":   map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.note", "description": "Shepherd-only: attach a per-worker observation note (lightweight, goes to the worker's scorecard.note field — NEVER to the inbox). Use this for routine 'I saw X happen' commentary. Args: target, body.", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"target", "body"},
+			"properties": map[string]any{
+				"target": map[string]any{"type": "string"},
+				"body":   map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.record_event", "description": "Append an event to the runtime audit log (events strip). Use for any structured observation that doesn't warrant the inbox. Args: kind (free-form, e.g. 'observation'|'milestone'|'warning'), body, actor (optional, defaults to caller agent).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"kind", "body"},
+			"properties": map[string]any{
+				"kind":  map[string]any{"type": "string"},
+				"body":  map[string]any{"type": "string"},
+				"actor": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.read_canon", "description": "Read the current canon (CLAUDE.md / team-specific rules) for a team. Returns the canon text. Shepherds should call this every tick to re-ground their judgment against the live canon (which can be edited mid-run via the dashboard's canon-viewer widget). Args: team.", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"team"},
+			"properties": map[string]any{
+				"team": map[string]any{"type": "string"},
+			},
+		}},
+		// v0.8 orchestrator tools — require caller role=orchestrator or role=shepherd
+		{"name": "chepherd.spawn_worker", "description": "Orchestrator-only: spawn a new worker session in the caller's team. Simpler alias for chepherd.spawn with role=worker. Args: name (string), agent (string, optional, default claude-code), cwd (string, optional), brief_override (string, optional).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name":           map[string]any{"type": "string"},
+				"agent":          map[string]any{"type": "string"},
+				"cwd":            map[string]any{"type": "string"},
+				"brief_override": map[string]any{"type": "string"},
+			},
+		}},
+		{"name": "chepherd.stop_session", "description": "Orchestrator-only: permanently stop (terminate) a session. The session is removed from the registry. Use chepherd.pause to temporarily pause instead. Args: name (string).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
 			},
 		}},
 	}
@@ -323,7 +447,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
 			return resp
 		}
-		if err := s.rt.SetScorecard(a.Name, runtime.Scorecard{
+		if err := s.rt.SetScorecard(s.CurrentCaller(), a.Name, runtime.Scorecard{
 			Goal: a.G, Velocity: a.V, Focus: a.F, EndState: a.E, Discipline: a.D, Note: a.Note,
 		}); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
@@ -335,7 +459,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			Name, Verdict, Message string
 		}
 		_ = json.Unmarshal(args, &a)
-		if err := s.rt.RecordVerdict(a.Name, a.Verdict, a.Message); err != nil {
+		if err := s.rt.RecordVerdict(s.CurrentCaller(), a.Name, a.Verdict, a.Message); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
 		}
@@ -380,12 +504,18 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			resp.Error = &rpcErr{Code: -32000, Message: "no such session: " + a.Name}
 			return resp
 		}
-		// Write the body bytes as the first PTY chunk — this is what the
-		// remote agent reads as the typed content. Trim any trailing \n
-		// the caller provided since we'll dispatch Enter as a separate
-		// chunk for kitty / modifyOtherKeys-aware TUIs (see issue #76).
+		// Typing-skip: if the operator wrote keystrokes within the last 15s,
+		// delay the inject so it doesn't collide with an in-progress thought.
+		const founderTypingSkipSec = 15
+		if last := sess.LastOperatorWrite(); !last.IsZero() && time.Since(last) < founderTypingSkipSec*time.Second {
+			remaining := founderTypingSkipSec*time.Second - time.Since(last)
+			time.Sleep(remaining)
+		}
+
+		// Use Inject (not Write) so lastOperatorWrite is not bumped and the
+		// writeMu serializes this against any concurrent operator keystrokes.
 		body := strings.TrimRight(a.Body, "\r\n")
-		if _, err := sess.Write([]byte(body)); err != nil {
+		if _, err := sess.Inject([]byte(body)); err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
 		}
@@ -398,7 +528,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			// Brief pause lets the receiver's input editor process the
 			// body before the Enter event arrives.
 			time.Sleep(120 * time.Millisecond)
-			if _, err := sess.Write([]byte("\r")); err != nil {
+			if _, err := sess.Inject([]byte("\r")); err != nil {
 				resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 				return resp
 			}
@@ -416,18 +546,196 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		}
 		resp.Result = map[string]any{"ok": true}
 	case "alert_human":
-		var a struct{ Body, Urgency, From string }
+		var a struct{ Body, Kind, Urgency, From string }
 		_ = json.Unmarshal(args, &a)
 		from := a.From
 		if from == "" {
-			from = "shepherd"
+			from = s.CurrentCaller()
 		}
-		s.rt.HumanInbox(from, a.Body)
+		// v0.6: include kind in the inbox body so dashboard can render
+		// per-kind treatment. Default kind = "alert" for legacy callers
+		// that don't pass it.
+		body := a.Body
+		if a.Kind != "" {
+			body = "[" + a.Kind + "] " + body
+		}
+		s.rt.HumanInbox(from, body)
 		resp.Result = map[string]any{"ok": true}
+	case "create_team":
+		var a struct {
+			Name, CanonPath, Topology string
+		}
+		_ = json.Unmarshal(args, &a)
+		if a.Name == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "name required"}
+			return resp
+		}
+		t, created := s.rt.CreateTeam(a.Name, a.CanonPath, runtime.Topology(a.Topology))
+		resp.Result = map[string]any{"team": t, "created": created}
+	case "join_team":
+		var a struct {
+			Agent, Team, Role, BriefOverride string
+		}
+		_ = json.Unmarshal(args, &a)
+		m, err := s.rt.JoinTeam(a.Agent, a.Team, runtime.MembershipRole(a.Role), a.BriefOverride)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"membership": m}
+	case "leave_team":
+		var a struct{ Agent, Team string }
+		_ = json.Unmarshal(args, &a)
+		ok := s.rt.LeaveTeam(a.Agent, a.Team)
+		resp.Result = map[string]any{"ok": ok}
+	case "list_teams":
+		teams := s.rt.ListTeams()
+		resp.Result = map[string]any{"teams": teams}
+	case "list_memberships":
+		var a struct{ Agent, Team string }
+		_ = json.Unmarshal(args, &a)
+		m := s.rt.ListMemberships(a.Agent, a.Team)
+		resp.Result = map[string]any{"memberships": m}
+	case "set_review_axis":
+		var a struct {
+			Reviewer, Target, Axis, Note string
+			Score                        float64
+		}
+		_ = json.Unmarshal(args, &a)
+		// Default reviewer to the caller's name from MCP connection
+		// identity (#89). Callers can still override by passing reviewer:
+		// explicitly (e.g., orchestrator forwarding on behalf of another).
+		if a.Reviewer == "" {
+			a.Reviewer = s.CurrentCaller()
+		}
+		if err := s.rt.SetReviewAxis(a.Reviewer, a.Target, a.Axis, a.Score, a.Note); err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"ok": true}
+	case "note":
+		var a struct{ Target, Body string }
+		_ = json.Unmarshal(args, &a)
+		// Lightweight observation — append to the target's scorecard note
+		// without disturbing the scores. If no scorecard exists yet, write
+		// to events log only.
+		_, info := s.rt.Get(a.Target)
+		if info != nil && info.Scorecard != nil {
+			info.Scorecard.Note = info.Scorecard.Note + "\n" + a.Body
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind: "note", Actor: "shepherd",
+			Body: a.Target + ": " + a.Body,
+			Meta: map[string]any{"target": a.Target, "body": a.Body},
+		})
+		resp.Result = map[string]any{"ok": true}
+	case "record_event":
+		var a struct{ Kind, Body, Actor string }
+		_ = json.Unmarshal(args, &a)
+		if a.Actor == "" {
+			a.Actor = "mcp"
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind: a.Kind, Actor: a.Actor, Body: a.Body,
+		})
+		resp.Result = map[string]any{"ok": true}
+	case "read_canon":
+		var a struct{ Team string }
+		_ = json.Unmarshal(args, &a)
+		teams := s.rt.ListTeams()
+		var canon string
+		for _, t := range teams {
+			if t.Name == a.Team {
+				if b, err := os.ReadFile(t.CanonPath); err == nil {
+					canon = string(b)
+				}
+				break
+			}
+		}
+		resp.Result = map[string]any{"team": a.Team, "canon": canon}
+	case "spawn_worker":
+		// Orchestrator-only: spawn a worker in the caller's team.
+		if !s.callerHasAuthority() {
+			resp.Error = &rpcErr{Code: -32000, Message: "authority denied: caller role must be orchestrator or shepherd to spawn workers"}
+			return resp
+		}
+		var a struct {
+			Name          string `json:"name,omitempty"`
+			Agent         string `json:"agent,omitempty"`
+			Cwd           string `json:"cwd,omitempty"`
+			BriefOverride string `json:"brief_override,omitempty"`
+		}
+		_ = json.Unmarshal(args, &a)
+		if a.Name == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "name required"}
+			return resp
+		}
+		agent := a.Agent
+		if agent == "" {
+			agent = "claude-code"
+		}
+		// Inherit team from caller's first membership, or "default"
+		callerTeam := "default"
+		for _, m := range s.rt.ListMemberships(s.CurrentCaller(), "") {
+			callerTeam = m.TeamName
+			break
+		}
+		spec := runtime.SpawnSpec{
+			Name:         a.Name,
+			AgentSlug:    agent,
+			Team:         callerTeam,
+			Role:         runtime.RoleWorker,
+			Cwd:          a.Cwd,
+			SystemPrompt: a.BriefOverride,
+		}
+		_, _, err := s.rt.Spawn(spec)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "spawn_worker: " + err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"ok": true, "name": a.Name, "team": callerTeam}
+	case "stop_session":
+		// Orchestrator-only: terminate a session.
+		if !s.callerHasAuthority() {
+			resp.Error = &rpcErr{Code: -32000, Message: "authority denied: caller role must be orchestrator or shepherd to stop sessions"}
+			return resp
+		}
+		var a struct{ Name string }
+		_ = json.Unmarshal(args, &a)
+		if err := s.rt.Stop(a.Name); err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "stop_session: " + err.Error()}
+			return resp
+		}
+		s.rt.RecordEvent(runtime.Event{
+			Kind:  "session_stopped",
+			Actor: s.CurrentCaller(),
+			Body:  fmt.Sprintf("orchestrator %q stopped session %q", s.CurrentCaller(), a.Name),
+		})
+		resp.Result = map[string]any{"ok": true, "stopped": a.Name}
 	default:
 		resp.Error = &rpcErr{Code: -32601, Message: "unknown chepherd tool: " + name}
 	}
 	return resp
+}
+
+// callerHasAuthority returns true if the current MCP caller has orchestration
+// authority — i.e., their role in any team is "orchestrator" or "shepherd".
+func (s *Server) callerHasAuthority() bool {
+	caller := s.CurrentCaller()
+	if caller == "" || caller == "anonymous" {
+		return false
+	}
+	for _, m := range s.rt.ListMemberships(caller, "") {
+		if m.Role == runtime.RoleMemberOrchestrator || m.Role == runtime.RoleMemberShepherd {
+			return true
+		}
+	}
+	// Also check the session's own role field (set at spawn time)
+	_, si := s.rt.Get(caller)
+	if si != nil && (si.Role == "orchestrator" || si.Role == "shepherd") {
+		return true
+	}
+	return false
 }
 
 // ----- JSON-RPC types -----
@@ -452,24 +760,6 @@ type rpcErr struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-func (s *Server) writeErr(w *bufio.Writer, id any, code int, msg string) {
-	_ = writeJSON(w, rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{Code: code, Message: msg}})
-}
-
-func writeJSON(w *bufio.Writer, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(b); err != nil {
-		return err
-	}
-	if _, err := w.Write([]byte("\n")); err != nil {
-		return err
-	}
-	return w.Flush()
-}
-
 func splitLines(s string) []string {
 	var out []string
 	start := 0
@@ -483,19 +773,4 @@ func splitLines(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
-}
-
-// BridgeStdioToSocket is the implementation of the `chepherd mcp` subcommand:
-// it bridges agent stdio (in/out) ↔ a runtime Unix socket.
-func BridgeStdioToSocket(sockPath string) error {
-	conn, err := net.Dial("unix", sockPath)
-	if err != nil {
-		return fmt.Errorf("mcp bridge: dial %s: %w", sockPath, err)
-	}
-	defer conn.Close()
-	errCh := make(chan error, 2)
-	go func() { _, err := io.Copy(conn, os.Stdin); errCh <- err }()
-	go func() { _, err := io.Copy(os.Stdout, conn); errCh <- err }()
-	<-errCh
-	return nil
 }

@@ -1,0 +1,63 @@
+# ─── stage 1: build chepherd binary ────────────────────────────────────────
+# We bake chepherd into the agent image so claude-code can spawn the
+# MCP-bridge subprocess (`chepherd mcp --url ...`) without chepherd
+# having to bind-mount its own executable from the host (which doesn't
+# work in the sibling-container architecture — the host podman daemon
+# can't see paths inside the chepherd container).
+FROM golang:1.24-alpine AS chepherd-builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o /chepherd .
+
+# ─── stage 2: agent runtime ────────────────────────────────────────────────
+FROM ubuntu:22.04
+
+ARG CLAUDE_VERSION=latest
+ARG NODE_VERSION=20
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/home/agent
+
+RUN apt-get update && apt-get install -y \
+    curl git ca-certificates gnupg \
+    build-essential python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# chepherd binary (for the MCP-bridge subprocess claude-code launches).
+COPY --from=chepherd-builder /chepherd /usr/local/bin/chepherd
+
+# Node.js
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# claude-code
+RUN npm install -g @anthropic-ai/claude-code
+
+# qwen-code (optional — best-effort)
+RUN npm install -g qwen-code 2>/dev/null || true
+
+# opencode (optional — best-effort)
+RUN npm install -g opencode-ai 2>/dev/null || true
+
+# Non-root agent user (UID 1000) — required by chepherd's spawn contract.
+# Host UID 1000 in rootless Podman maps to container root; the actual
+# agent user inside is UID 1000 ≠ container root. All credentials and
+# state are provided through /run/secrets/ mounts owned via the U flag.
+RUN useradd -m -u 1000 -s /bin/bash agent \
+    && mkdir -p /home/agent/.claude/projects /run/secrets \
+    && chown -R agent:agent /home/agent
+
+# Entrypoint: link /run/secrets/claude-credentials to ~/.claude/.credentials.json
+# so claude-code can find it at its hardcoded path. The mount is provided by
+# chepherd at spawn time from its token vault; claude-code may refresh the
+# token in-place but the vault remains source of truth — chepherd captures
+# fresh tokens via PTY OAuth-URL detection (R5).
+COPY scripts/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
+RUN chmod +x /usr/local/bin/agent-entrypoint
+
+USER agent
+WORKDIR /home/agent
+ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]

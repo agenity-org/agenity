@@ -52,7 +52,7 @@ func init() {
 
 func runSetupCmd(_ *cobra.Command, _ []string) error {
 	in := bufio.NewReader(os.Stdin)
-	fmt.Println("\n✻ chepherd setup\n")
+	fmt.Print("\n✻ chepherd setup\n\n")
 
 	// 1. Folder
 	defaultCwd, _ := os.Getwd()

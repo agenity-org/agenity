@@ -1,0 +1,38 @@
+# bp-chepherd-operator default values
+#
+# Installs the ChepherdAgent CRD + controller Deployment + Kyverno
+# ClusterPolicy in one apply. The chepherd daemon (bp-chepherd) talks to
+# this operator by creating ChepherdAgent custom resources; the operator
+# reconciles each one into an agent Pod.
+
+image:
+  repository: ghcr.io/openova-io/bp-chepherd-operator
+  tag: ""  # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# RBAC scope — namespace by default (recommended), cluster only if
+# operator must reconcile agents across multiple namespaces.
+rbac:
+  scope: namespace        # namespace | cluster
+
+# Kyverno admission policy that gates the operator's Pod creates.
+# Disable only if Kyverno isn't installed (and you've taken other
+# precautions to enforce the image allowlist).
+kyverno:
+  enabled: true
+  allowedImagePrefix: "chepherd-agent:"
+
+# Resources — controller is light; one tight reconcile loop.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# When the operator can't yet be invoked (e.g. CRD not registered, or
+# the chepherd daemon SA hasn't been granted chepherdagents permissions),
+# the daemon falls back to "operator spawner not yet wired" — make the
+# error message link to the runbook.
+runbookURL: https://chepherd.io/docs/k8s-operator

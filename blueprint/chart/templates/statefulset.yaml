@@ -40,6 +40,36 @@ spec:
             - name: CHEPHERD_AGENTS_PATH
               value: {{ .Values.runtime.agentsCatalogPath | quote }}
             {{- end }}
+            # v0.8 deployment profile + per-knob overrides (#129)
+            {{- if .Values.profile.name }}
+            - name: CHEPHERD_PROFILE
+              value: {{ .Values.profile.name | quote }}
+            {{- end }}
+            {{- if .Values.profile.spawner }}
+            - name: CHEPHERD_SPAWNER
+              value: {{ .Values.profile.spawner | quote }}
+            {{- end }}
+            {{- if .Values.profile.auth.mode }}
+            - name: CHEPHERD_AUTH_MODE
+              value: {{ .Values.profile.auth.mode | quote }}
+            {{- end }}
+            {{- if .Values.profile.auth.oidcIssuer }}
+            - name: CHEPHERD_OIDC_ISSUER
+              value: {{ .Values.profile.auth.oidcIssuer | quote }}
+            {{- end }}
+            {{- if .Values.profile.storage }}
+            - name: CHEPHERD_STORAGE
+              value: {{ .Values.profile.storage | quote }}
+            {{- end }}
+            {{- if .Values.profile.tls }}
+            - name: CHEPHERD_TLS
+              value: {{ .Values.profile.tls | quote }}
+            {{- end }}
+            # MCP transport URL — agents inside the cluster dial the
+            # chepherd Service DNS directly; no host.containers.internal
+            # phantom-gateway needed (#124).
+            - name: CHEPHERD_MCP_URL
+              value: "ws://{{ include "chepherd.fullname" . }}.{{ .Release.Namespace }}.svc:9090/mcp/ws"
             {{- if .Values.openovaMCP.enabled }}
             - name: SANDBOX_JWT_SECRET
               valueFrom:

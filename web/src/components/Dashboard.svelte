@@ -47,6 +47,18 @@
   let folderSuppressed = $state(false); // true after pick — hide until user types
   let allFolders = $state([]);
   let confirmDialog = $state(null); // { title, body, onConfirm }
+
+  // Esc dismisses the topmost open modal. Operator request 2026-05-29.
+  $effect(() => {
+    function onKey(e) {
+      if (e.key !== 'Escape') return;
+      if (confirmDialog) { confirmDialog = null; return; }
+      if (typeof showSpawn !== 'undefined' && showSpawn) { showSpawn = false; return; }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   let claudeSessions = $state([]);
   let claudeQuery = $state('');
   let spawnError = $state('');

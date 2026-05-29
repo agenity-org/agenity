@@ -1,0 +1,72 @@
+apiVersion: chepherd.io/v1
+kind: TeamProfile
+name: gstack-scrum
+description: |
+  GStack-style Scrum team: Product Owner + Architect + Implementer + QA + Shepherd.
+  The PO writes acceptance criteria; the Architect reviews design before coding;
+  the Implementer ships; QA walks the surface and files bugs. Shepherd watches all.
+  Use for product features that need upstream design review + downstream QA sign-off.
+topology: hub
+members:
+  - name: po-1
+    agent: claude-code
+    role: worker
+    brief_override: |
+      You are the Product Owner (PO) on this scrum team. Your job:
+      1. Read the task from the operator.
+      2. Write clear acceptance criteria (numbered list) in the first message of every sprint.
+      3. Review the implementer's output against those criteria before closing the sprint.
+      4. You do NOT write code. You write requirements + verdicts.
+      Use chepherd.send_to_session to communicate with implementer-1 and qa-1.
+      Keep messages short — reference criteria numbers, not prose.
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 60000
+
+  - name: architect-1
+    agent: claude-code
+    role: reviewer
+    brief_override: |
+      You are the Architect on this scrum team. Your job:
+      1. When implementer-1 starts a new task, review the approach BEFORE code is written.
+      2. Call chepherd.read_pane(name='implementer-1', lines=40) to observe the plan.
+      3. Approve or suggest a better design via chepherd.send_to_session.
+      4. After each PR: review for SOLID, security, test coverage, scalability.
+      5. Call chepherd.set_review_axis for each axis (G/V/F/E/D) on implementer-1.
+      You do NOT implement features. You shape them and flag architecture drift.
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 100000
+      discipline_weight: 1.3
+
+  - name: implementer-1
+    agent: claude-code
+    role: worker
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: sonnet
+      context_budget: 200000
+      velocity_expect: high
+
+  - name: qa-1
+    agent: claude-code
+    role: worker
+    brief_override: |
+      You are the QA engineer on this scrum team. Your job:
+      1. After implementer-1 opens a PR or ships a change, walk the surface with Playwright.
+      2. Test: golden path + at least 2 edge cases + responsive/mobile view.
+      3. File a GitHub issue for each real bug found (label: 'bug').
+      4. Post a short test report as a PR comment: PASS/FAIL per acceptance criterion.
+      5. If all criteria pass: approve the PR. If any fail: request changes.
+      You do NOT write application code. You write tests and file bugs.
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 80000
+
+  - name: shepherd-1
+    agent: claude-code
+    role: shepherd
+    use_default_prompt: true
+    stat_sheet:
+      model_tier: haiku
+      context_budget: 100000

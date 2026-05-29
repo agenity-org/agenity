@@ -1,0 +1,49 @@
+# chepherd local stack
+#
+# Usage (rootless podman — recommended):
+#   ./scripts/start.sh          # start containerized chepherd
+#   ./scripts/stop.sh           # stop
+#   podman logs -f chepherd     # tail logs
+#
+# podman-compose is NOT used because `userns=keep-id` (required for rootless
+# bind-mounts to work without chown) conflicts with the pod infra container
+# podman-compose creates. Use scripts/start.sh which calls podman run directly.
+#
+# Docker compose works without userns — uncomment services.chepherd.user below.
+
+services:
+  chepherd:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: chepherd:latest
+    container_name: chepherd
+    restart: unless-stopped
+    ports:
+      # chepherd UI + API — host 8083 → container 8080
+      - "127.0.0.1:8083:8080"
+    volumes:
+      # Persist runtime state — bind-mount to host path so state is inspectable
+      - ${HOME}/.local/state/chepherd-v08:/home/chepherd/.local/state/chepherd:rw
+      # Mount host ~/.claude so agents share your existing Claude auth + CLAUDE.md
+      - ${HOME}/.claude:/home/chepherd/.claude:ro
+      # Mount your repos read-write so agents can checkout / commit inside
+      - ${HOME}/repos:/home/chepherd/repos:rw
+    command:
+      - run
+      - --headless
+      - --listen
+      - "0.0.0.0:8080"
+      - --web-dir
+      - /app/web/dist
+      - --state-dir
+      - /home/chepherd/.local/state/chepherd
+      - --cwd
+      - /home/chepherd/repos
+    # Rootless podman inside a container needs /dev/fuse for ContainerRuntime
+    devices:
+      - /dev/fuse
+    security_opt:
+      - label=disable          # allow podman-in-podman (ContainerRuntime)
+    # Docker users: add `user: "1000:1000"` instead of userns_mode
+    # Podman users: userns=keep-id is handled by scripts/start.sh

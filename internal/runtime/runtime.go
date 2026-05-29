@@ -8,9 +8,13 @@
 package runtime
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +22,10 @@ import (
 	"sync"
 	"time"
 
+	agententity "github.com/chepherd/chepherd/internal/agent"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/google/uuid"
 )
 
 // Role is what an agent does inside its tribe.
@@ -37,6 +43,14 @@ type SessionInfo struct {
 	ID        string    `json:"id"`        // ptyhost session ID (stable across restart attempts)
 	Name      string    `json:"name"`      // canonical @-address (e.g. "iogrid-1")
 	AgentSlug string    `json:"agent"`     // claude-code, qwen-code, etc.
+
+	// #172 — first-class Agent entity backing this session. AgentID is
+	// the stable UUID; PVCHandle is the podman-volume / k8s-PVC mounted
+	// at /workspace inside the agent container. Both stay constant
+	// across resume / handoff (#173 / #STAGE-3); the live session ID
+	// (above) rotates per attach.
+	AgentID   string `json:"agent_id,omitempty"`
+	PVCHandle string `json:"pvc_handle,omitempty"`
 	Team      string    `json:"team"`      // team membership — workers in same team @-reach freely
 	Role      Role      `json:"role"`      // worker | shepherd
 	Cwd       string    `json:"cwd"`       // working directory the agent was spawned in
@@ -76,6 +90,10 @@ type SessionInfo struct {
 	// when absent.
 	Scorecard *Scorecard `json:"scorecard,omitempty"`
 
+	// TrustBand is derived from Scorecard.D at scorecard-update time.
+	// Drives the shepherd's adaptive tick interval.
+	TrustBand TrustBand `json:"trust_band,omitempty"`
+
 	// Shepherd verdict history — count of coach/intervene verdicts AND
 	// the most recent one (with timestamp + message). Empty until first
 	// non-silent verdict.
@@ -83,6 +101,29 @@ type SessionInfo struct {
 	LastVerdict       string    `json:"last_verdict,omitempty"`       // silent|praise|coach|intervene
 	LastVerdictAt     time.Time `json:"last_verdict_at,omitempty"`
 	LastVerdictMsg    string    `json:"last_verdict_msg,omitempty"`
+
+	// v0.6: operator-configurable per-agent settings.
+	// SystemPrompt is the effective prompt the agent was spawned with
+	// (either the role default from internal/prompts/*.md, or an operator
+	// override). Surfaced read-only in WidgetAgentPrompt; refining a
+	// running agent's working instructions goes through POST .../poke-prompt
+	// which writes a fresh user message and updates this field.
+	SystemPrompt string         `json:"system_prompt,omitempty"`
+	StatSheet    AgentStatSheet `json:"stat_sheet,omitempty"`
+
+	// Live Claude-side details, refreshed in List() from the most recent
+	// JSONL the spawned agent is writing to. Cheap to compute (we only
+	// scan the last ~50 lines of one file). Zero values when not applicable
+	// (non-claude-code agents) or when no JSONL has been written yet.
+	Model         string `json:"model,omitempty"`           // e.g. "claude-opus-4-7"
+	ContextSize   int    `json:"context_size,omitempty"`    // model context window (e.g. 200_000 or 1_000_000)
+	ContextTokens int    `json:"context_tokens,omitempty"`  // tokens currently held in the window (last usage block)
+	ClaudeUUID    string `json:"claude_uuid,omitempty"`     // sessionId of the JSONL Claude is appending to
+
+	// ContainerRuntime is "podman", "docker", or "bare" — how this agent was spawned.
+	ContainerRuntime string `json:"container_runtime,omitempty"`
+	// AgentHomeDir is the per-agent persistent home directory on the host.
+	AgentHomeDir string `json:"agent_home_dir,omitempty"`
 }
 
 // Scorecard is shepherd's latest 5-axis assessment of a session.
@@ -96,6 +137,49 @@ type Scorecard struct {
 	Discipline float64   `json:"D"`
 	Note       string    `json:"note,omitempty"`
 	At         time.Time `json:"at"`
+}
+
+// TrustBand is the adaptive coaching level derived from scorecard data.
+// Maps to tick intervals: trusted=30m, standard=10m, concerned=5m, crisis=2m.
+type TrustBand string
+
+const (
+	TrustBandTrusted   TrustBand = "trusted"   // D >= 8
+	TrustBandStandard  TrustBand = "standard"  // D >= 6
+	TrustBandConcerned TrustBand = "concerned" // D >= 4
+	TrustBandCrisis    TrustBand = "crisis"    // D < 4
+)
+
+// BandFromScorecard derives the trust band from a scorecard's discipline
+// score. Returns TrustBandStandard if sc is nil (no scorecard yet).
+func BandFromScorecard(sc *Scorecard) TrustBand {
+	if sc == nil {
+		return TrustBandStandard
+	}
+	switch {
+	case sc.Discipline >= 8:
+		return TrustBandTrusted
+	case sc.Discipline >= 6:
+		return TrustBandStandard
+	case sc.Discipline >= 4:
+		return TrustBandConcerned
+	default:
+		return TrustBandCrisis
+	}
+}
+
+// BandTickInterval returns the shepherd tick interval for a given trust band.
+func BandTickInterval(b TrustBand) time.Duration {
+	switch b {
+	case TrustBandTrusted:
+		return 30 * time.Minute
+	case TrustBandConcerned:
+		return 5 * time.Minute
+	case TrustBandCrisis:
+		return 2 * time.Minute
+	default: // standard
+		return 10 * time.Minute
+	}
 }
 
 // sessionActivity holds the running tally for one session — used by the
@@ -158,7 +242,31 @@ type Runtime struct {
 	grants []Grant
 
 	// configuration
-	stateDir string // ~/.local/state/chepherd
+	stateDir         string           // ~/.local/state/chepherd
+	containerRuntime ContainerRuntime // podman | docker | bare
+	spawner          AgentSpawner     // podman-sidecar | operator | direct (#127)
+
+	// vault is the token vault used to materialize /run/secrets/
+	// for agent containers. Nil → fall back to host ~/.claude/.credentials.json.
+	// Set via SetVault after vault.Open succeeds in main.
+	vault VaultProvider
+
+	// extraAgentEnv is appended to every agent's spawn env. Used to
+	// inject the operator's MCP bearer token (CHEPHERD_TOKEN) so the
+	// agent's bridge subprocess can authenticate (#139).
+	extraAgentEnv map[string]string
+
+	// agentRegistry is the first-class Agent entity store (#172). Every
+	// successful Spawn mints / re-binds an Agent record here, keyed by
+	// stable UUID. Session bookkeeping (attach / detach) flows through
+	// the registry so resume + handoff (#173) have a durable identity to
+	// reference.
+	agentRegistry *agententity.Store
+
+	// sessionToAgent maps live session ID → Agent UUID so DetachSession
+	// can find the right record without a registry scan.
+	sessionToAgent map[string]uuid.UUID
+	extraEnvMu    sync.RWMutex
 
 	// human-inbox sink
 	humanInbox []HumanInboxEntry
@@ -176,6 +284,140 @@ type Runtime struct {
 	// goroutines attached at Spawn time; read on every List/Get to fill
 	// SessionInfo.{TotalBytes,Bytes5m,IdleSeconds}.
 	activity map[string]*sessionActivity
+
+	// v0.6 unified data model — Agent + Team + Membership as first-class objects.
+	// Coexists with v0.5 SessionInfo during the transition; new MCP tools
+	// (create_team / join_team / leave_team / list_teams) operate on these.
+	teams        map[string]*Team        // by name
+	memberships  map[string]*Membership  // by composite key "agent_name|team_name"
+
+	// Per-axis review records (v0.6-C council pattern). Keyed by target
+	// agent name; inner map keyed by axis (G|V|F|E|D|custom).
+	axisReviews map[string]map[string]*AxisReview
+
+	// Event log — runtime-wide chronological audit (v0.6-F).
+	events *eventBuffer
+}
+
+// RecordEvent appends an event to the runtime's audit log. Called by
+// runtime internals on spawn/exit/scorecard/etc. and by agents via the
+// chepherd.record_event MCP tool.
+func (r *Runtime) RecordEvent(e Event) {
+	if r.events == nil {
+		return
+	}
+	r.events.push(e)
+}
+
+// Events returns the most recent N events (or all if limit == 0).
+func (r *Runtime) Events(limit int) []Event {
+	if r.events == nil {
+		return nil
+	}
+	return r.events.snapshot(limit)
+}
+
+// SubscribeEvents returns a channel that receives future events + an
+// unsubscribe function. Used by SSE/WS endpoints.
+func (r *Runtime) SubscribeEvents() (<-chan Event, func()) {
+	if r.events == nil {
+		ch := make(chan Event)
+		close(ch)
+		return ch, func() {}
+	}
+	return r.events.subscribe()
+}
+
+// AxisReview is one reviewer's score on one axis of one target worker.
+// Multiple reviewers can write to the same target; shepherd composes
+// the final scorecard by reading the union.
+type AxisReview struct {
+	Reviewer string    `json:"reviewer"`
+	Axis     string    `json:"axis"`
+	Score    float64   `json:"score"`
+	Note     string    `json:"note,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// VaultProvider is the interface the runtime needs from a token vault to
+// materialize /run/secrets/ for agent containers. Implementation lives in
+// internal/vault; broken out as an interface here to avoid an import cycle
+// (vault may want to call back into runtime in the future).
+type VaultProvider interface {
+	ListByProvider(provider string) []VaultCredMeta
+	GetValue(id string) (string, error)
+	// UpdateValue re-encrypts the stored value for an existing id
+	// (preserves provider/label/envVar). Used by the refresh-on-spawn
+	// path to persist the rotated OAuth pair back to the vault.
+	UpdateValue(id, plaintext string) error
+}
+
+// VaultCredMeta is the safe (value-less) view of one credential the vault
+// exposes. Mirrors internal/vault.CredMeta to break the import cycle.
+type VaultCredMeta struct {
+	ID            string
+	Provider      string
+	ProviderLabel string
+	Label         string
+	EnvVar        string
+}
+
+// SetVault wires the token vault into the runtime so AgentSecretsDir
+// pulls Claude OAuth credentials from the vault instead of the host
+// filesystem. Safe to call before or after Spawn. Pass nil to detach.
+func (r *Runtime) SetVault(v VaultProvider) {
+	r.vault = v
+}
+
+// SetAgentEnv registers a key=value pair that will be appended to
+// every subsequent agent spawn's environment. Used to propagate the
+// MCP bearer token from cmd/run.go into the runtime spawn path (#139).
+func (r *Runtime) SetAgentEnv(key, value string) {
+	r.extraEnvMu.Lock()
+	defer r.extraEnvMu.Unlock()
+	if r.extraAgentEnv == nil {
+		r.extraAgentEnv = map[string]string{}
+	}
+	r.extraAgentEnv[key] = value
+}
+
+// agentEnvOverlay returns the registered key=value strings ready to
+// concat onto a spawn's env slice. Snapshot — safe across mutations.
+func (r *Runtime) agentEnvOverlay() []string {
+	r.extraEnvMu.RLock()
+	defer r.extraEnvMu.RUnlock()
+	out := make([]string, 0, len(r.extraAgentEnv))
+	for k, v := range r.extraAgentEnv {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+// StateDir returns the root state directory for this runtime
+// (~/.local/state/chepherd-v0X). Used by HTTP server for workspace
+// persistence paths.
+func (r *Runtime) StateDir() string {
+	return r.stateDir
+}
+
+// AgentRegistry exposes the first-class Agent store (#172) so the HTTP
+// layer + #173 handoff can query / mutate it without poking the runtime's
+// internals.
+func (r *Runtime) AgentRegistry() *agententity.Store {
+	return r.agentRegistry
+}
+
+// AgentForSession returns the registered Agent that the given live
+// session is currently attached to, or nil if the session predates
+// the v0.9 registry (legacy v0.8 spawn without UUID).
+func (r *Runtime) AgentForSession(sessionID string) (*agententity.Agent, error) {
+	r.mu.Lock()
+	id, ok := r.sessionToAgent[sessionID]
+	r.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	return r.agentRegistry.Get(id)
 }
 
 // AddSpawnHook registers a callback invoked after every successful Spawn.
@@ -203,12 +445,37 @@ func New(stateDir string) (*Runtime, error) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "inbox"), 0o700); err != nil {
 		return nil, err
 	}
+	cr := DetectRuntime()
+	if err := os.MkdirAll(filepath.Join(stateDir, "agents"), 0o700); err != nil {
+		return nil, err
+	}
+	// AgentSpawner is the pluggable strategy that decides how the agent
+	// container/Pod is brought up (#127). Today's default is the local
+	// container runtime; setting CHEPHERD_SPAWNER=operator switches to
+	// the K8s CRD path when bp-chepherd-operator is installed.
+	spawner, err := NewAgentSpawner(DefaultSpawnerMode(), cr)
+	if err != nil {
+		return nil, fmt.Errorf("spawner init: %w", err)
+	}
+	// #172 — open the Agent registry (file-backed JSON-per-UUID).
+	agentStore, err := agententity.NewStore(stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("agent registry init: %w", err)
+	}
 	r := &Runtime{
-		sessions: make(map[string]*session.Session),
-		byName:   make(map[string]string),
-		info:     make(map[string]*SessionInfo),
-		stateDir: stateDir,
-		activity: make(map[string]*sessionActivity),
+		sessions:         make(map[string]*session.Session),
+		byName:           make(map[string]string),
+		info:             make(map[string]*SessionInfo),
+		stateDir:         stateDir,
+		activity:         make(map[string]*sessionActivity),
+		teams:            make(map[string]*Team),
+		memberships:      make(map[string]*Membership),
+		axisReviews:      make(map[string]map[string]*AxisReview),
+		events:           newEventBuffer(1000),
+		containerRuntime: cr,
+		spawner:          spawner,
+		agentRegistry:    agentStore,
+		sessionToAgent:   make(map[string]uuid.UUID),
 	}
 	r.cond = sync.NewCond(&r.mu)
 	return r, nil
@@ -222,6 +489,7 @@ type SpawnSpec struct {
 	Role      Role   // default worker
 	Cwd       string // optional working dir
 	SystemPrompt string // optional override for the agent's system prompt
+	StatSheet   AgentStatSheet // optional override for the default per-role stat sheet
 
 	// AgentArgs is appended to the agent CLI's default args. Useful for
 	// passing --resume <uuid> or similar.
@@ -232,6 +500,13 @@ type SpawnSpec struct {
 
 	// RingBytes overrides ptyhost.Session default (1 MiB).
 	RingBytes int
+
+	// ClaudeTokenID picks which Claude OAuth credential from the vault
+	// gets mounted at /run/secrets/claude-credentials. "" = pick the most
+	// recently updated claude-oauth credential, or fall back to host
+	// ~/.claude/.credentials.json when none exists in the vault. Lets
+	// operators run agents under different Claude accounts. (R5, R4.)
+	ClaudeTokenID string
 }
 
 // Spawn creates a new session, registers it, persists metadata, and starts
@@ -277,6 +552,16 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 			extraArgs = append(extraArgs, "--system-prompt", spec.SystemPrompt)
 		}
 	}
+	// Pass model_tier through to the CLI so the operator's pick in
+	// AgentSettings → Skills actually changes which model the agent runs on.
+	if spec.StatSheet.ModelTier != "" {
+		switch spec.AgentSlug {
+		case "claude-code":
+			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+		case "qwen-code":
+			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+		}
+	}
 
 	// Write per-session MCP config so the agent discovers chepherd's MCP
 	// server. Writes a project-scoped .mcp.json next to the agent's cwd
@@ -286,6 +571,15 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		fmt.Fprintf(os.Stderr, "runtime: warning: mcp config write failed for %s: %v\n", spec.Name, err)
 	}
 	envWithMCP := append(append([]string(nil), spec.Env...), mcpEnv...)
+	// Append the operator's registered agent-env overlay (CHEPHERD_TOKEN
+	// for MCP auth, #139). Inserted before AGENT_NAME so per-spawn
+	// overrides win.
+	envWithMCP = append(envWithMCP, r.agentEnvOverlay()...)
+	// Tag the child process with its agent name so the MCP bridge can
+	// forward it as actor identity on every JSON-RPC call. Without this
+	// the server can't tell which shepherd / worker made which call
+	// (#89). Read by the bridge in BridgeStdioToHTTP via os.Getenv.
+	envWithMCP = append(envWithMCP, "CHEPHERD_AGENT_NAME="+spec.Name)
 
 	// For Claude Code, pass the absolute mcp-config path explicitly.
 	// Without --mcp-config, Claude only loads .mcp.json after the
@@ -306,11 +600,51 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// operator's confusion in the dashboard.
 	env = stripEnv(env, "TMUX", "TMUX_PANE", "TMUX_PLUGIN_MANAGER_PATH")
 
+	// Resolve per-agent home dir + secrets dir, then wrap argv in container.
+	// The secrets dir is bind-mounted at /run/secrets inside the container
+	// and the agent image's entrypoint links claude-credentials into place.
+	agentHomeDir, err := r.containerRuntime.AgentHomeDir(spec.Name, r.stateDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime.Spawn: agent home dir: %w", err)
+	}
+	agentSecretsDir, err := r.materializeAgentSecrets(spec)
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime.Spawn: agent secrets: %w", err)
+	}
+	// #172 — mint the Agent UUID BEFORE the spawner runs so its PVC
+	// handle can be threaded into the container env. The container
+	// runtime sees CHEPHERD_PVC_HANDLE and provisions /workspace from
+	// a per-agent named volume. Record persistence happens here too;
+	// SessionRef gets appended after we know the session ID below.
+	ag := agententity.New(spec.AgentSlug, spec.Name, "")
+	if err := r.agentRegistry.Save(ag); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: agent registry save %s: %v\n", spec.Name, err)
+	}
+	env = append(env, "CHEPHERD_PVC_HANDLE="+ag.PVCHandle)
+	// Delegate to the configured AgentSpawner (#127). The local path
+	// returns argv ready for ptyhost to exec; future K8s paths return a
+	// PodName instead and the ptyhost streams from there.
+	artifact, err := r.spawner.Spawn(context.Background(), SpawnRequest{
+		Name:         spec.Name,
+		AgentHomeDir: agentHomeDir,
+		SecretsDir:   agentSecretsDir,
+		Cwd:          spec.Cwd,
+		Argv:         argv,
+		Env:          env,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime.Spawn: %w", err)
+	}
+	if artifact.PodName != "" {
+		return nil, nil, fmt.Errorf("runtime.Spawn: PodName attach path not yet implemented (set CHEPHERD_SPAWNER=podman-sidecar)")
+	}
+	spawnArgv, spawnEnv := artifact.LocalArgv, artifact.LocalEnv
+
 	// Spawn the PTY child via ptyhost
 	id := newSessionID(spec.Name)
 	s, err := session.New(id, session.Spec{
-		Command:   argv,
-		Env:       env,
+		Command:   spawnArgv,
+		Env:       spawnEnv,
 		Cwd:       spec.Cwd,
 		RingBytes: spec.RingBytes,
 	})
@@ -318,15 +652,41 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		return nil, nil, fmt.Errorf("runtime.Spawn: ptyhost: %w", err)
 	}
 
+	// Resolve the effective stat sheet — operator override falls back to
+	// the per-role default when fields are zero-valued.
+	statSheet := DefaultStatSheet(string(spec.Role))
+	if spec.StatSheet.ContextBudget != 0 {
+		statSheet.ContextBudget = spec.StatSheet.ContextBudget
+	}
+	if spec.StatSheet.ModelTier != "" {
+		statSheet.ModelTier = spec.StatSheet.ModelTier
+	}
+	if spec.StatSheet.DisciplineWeight != 0 {
+		statSheet.DisciplineWeight = spec.StatSheet.DisciplineWeight
+	}
+	if spec.StatSheet.VelocityExpect != "" {
+		statSheet.VelocityExpect = spec.StatSheet.VelocityExpect
+	}
+	if spec.StatSheet.TokenBudgetUSD != 0 {
+		statSheet.TokenBudgetUSD = spec.StatSheet.TokenBudgetUSD
+	}
+	if len(spec.StatSheet.ToolAllowlist) > 0 {
+		statSheet.ToolAllowlist = spec.StatSheet.ToolAllowlist
+	}
+
 	info := &SessionInfo{
-		ID:        id,
-		Name:      spec.Name,
-		AgentSlug: spec.AgentSlug,
-		Team:      spec.Team,
-		Role:      spec.Role,
-		Cwd:       spec.Cwd,
-		CreatedAt: time.Now().UTC(),
-		PID:       s.PID(),
+		ID:               id,
+		Name:             spec.Name,
+		AgentSlug:        spec.AgentSlug,
+		Team:             spec.Team,
+		Role:             spec.Role,
+		Cwd:              spec.Cwd,
+		CreatedAt:        time.Now().UTC(),
+		PID:              s.PID(),
+		SystemPrompt:     spec.SystemPrompt,
+		StatSheet:        statSheet,
+		ContainerRuntime: r.containerRuntime.Name(),
+		AgentHomeDir:     agentHomeDir,
 	}
 	// Extract GitHub URL once at spawn — cheap (single git config read),
 	// makes the right-pane "GitHub" link populate immediately. Branch is
@@ -337,11 +697,21 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	}
 
 	act := &sessionActivity{created: time.Now()}
+
+	// #172 — link this session to the Agent record created above
+	// (before spawner.Spawn so PVC handle could thread through env).
+	if err := r.agentRegistry.AttachSession(ag.ID, id); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: agent attach %s: %v\n", spec.Name, err)
+	}
+	info.AgentID = ag.ID.String()
+	info.PVCHandle = ag.PVCHandle
+
 	r.mu.Lock()
 	r.sessions[id] = s
 	r.byName[spec.Name] = id
 	r.info[id] = info
 	r.activity[id] = act
+	r.sessionToAgent[id] = ag.ID
 	hooks := append([]func(*session.Session, string){}, r.spawnHooks...)
 	r.mu.Unlock()
 
@@ -356,6 +726,12 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	for _, h := range hooks {
 		h(s, spec.Name)
 	}
+	// Event: agent spawned
+	r.RecordEvent(Event{
+		Kind: "spawn", Actor: "runtime",
+		Body: fmt.Sprintf("agent %q spawned (%s, team=%s, role=%s)", spec.Name, spec.AgentSlug, spec.Team, spec.Role),
+		Meta: map[string]any{"name": spec.Name, "agent_slug": spec.AgentSlug, "team": spec.Team, "role": string(spec.Role), "cwd": spec.Cwd},
+	})
 	r.broadcast()
 	return info, s, nil
 }
@@ -415,8 +791,25 @@ func (r *Runtime) markExited(id string) {
 	}
 	name := info.Name
 	code := info.ExitCode
+	agentID, hasAgent := r.sessionToAgent[id]
 	r.mu.Unlock()
-	r.HumanInbox("runtime", fmt.Sprintf("session '%s' exited (code %d)", name, code))
+
+	// #172 — close out the SessionRef on the Agent record so resume
+	// can see the previous attach as ended.
+	if hasAgent {
+		_ = r.agentRegistry.DetachSession(agentID, id)
+	}
+	// Event: agent exited
+	r.RecordEvent(Event{
+		Kind: "exit", Actor: "runtime",
+		Body: fmt.Sprintf("agent %q exited (code %d)", name, code),
+		Meta: map[string]any{"name": name, "exit_code": code},
+	})
+	// Inbox: only for failed exits (clean exits = routine, lives in events
+	// only per v0.6-F refinement)
+	if code != 0 {
+		r.HumanInbox("runtime", fmt.Sprintf("[failure] agent %q exited (code %d)", name, code))
+	}
 
 	// Clean exits (code 0) disappear from the list immediately — the
 	// inbox message preserves the historical record and the operator's
@@ -594,34 +987,141 @@ func (r *Runtime) List() []*SessionInfo {
 		if c.Cwd != "" {
 			c.Branch = readGitBranch(c.Cwd)
 		}
+		// Refresh Claude extras (model + context tokens + sessionId UUID)
+		// from the JSONL transcript. Cheap: tail-reads last ~200 lines.
+		extras := r.claudeRuntimeExtras(c.AgentSlug, c.Cwd, c.CreatedAt)
+		if extras.Model != "" {
+			c.Model = extras.Model
+		}
+		if extras.ContextSize != 0 {
+			c.ContextSize = extras.ContextSize
+		}
+		if extras.ContextTokens != 0 {
+			c.ContextTokens = extras.ContextTokens
+		}
+		if extras.ClaudeUUID != "" {
+			c.ClaudeUUID = extras.ClaudeUUID
+			// Persist into the team's apply.json so resurrect can pick
+			// up where this session left off after a runtime restart.
+			r.maybeUpdateTeamApply(c.Team, c.Name, extras.ClaudeUUID)
+		}
 		out = append(out, &c)
 	}
 	return out
 }
 
-// SetScorecard stores shepherd's latest assessment of a worker. Idempotent:
-// each call overwrites the previous scorecard for that name.
-func (r *Runtime) SetScorecard(name string, sc Scorecard) error {
+// maybeUpdateTeamApply patches the saved team apply record with the
+// latest observed claude_uuid for a member. Best-effort: silently
+// no-ops if the apply.json doesn't exist (solo spawns, manual joins).
+func (r *Runtime) maybeUpdateTeamApply(team, member, uuid string) {
+	if team == "" || team == "default" || member == "" || uuid == "" {
+		return
+	}
+	p := filepath.Join(r.stateDir, "teams", team, "apply.json")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var rec map[string]interface{}
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return
+	}
+	members, _ := rec["members"].([]interface{})
+	changed := false
+	for i, m := range members {
+		mm, ok := m.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if mm["name"] == member {
+			if mm["claude_uuid"] != uuid {
+				mm["claude_uuid"] = uuid
+				members[i] = mm
+				changed = true
+			}
+			break
+		}
+	}
+	if !changed {
+		return
+	}
+	rec["members"] = members
+	rec["last_active"] = time.Now().UTC().Format(time.RFC3339)
+	if nb, err := json.MarshalIndent(rec, "", "  "); err == nil {
+		_ = os.WriteFile(p, nb, 0o600)
+	}
+}
+
+// TeamWorstBand returns the most urgent TrustBand among all non-exited workers
+// in the given team(s). If teams is empty, considers all workers in the runtime.
+// Used by the shepherd tick loop to set its next interval.
+func (r *Runtime) TeamWorstBand(teams []string) TrustBand {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	teamSet := make(map[string]bool, len(teams))
+	for _, t := range teams {
+		teamSet[t] = true
+	}
+	worst := TrustBandTrusted
+	urgency := map[TrustBand]int{
+		TrustBandTrusted:   0,
+		TrustBandStandard:  1,
+		TrustBandConcerned: 2,
+		TrustBandCrisis:    3,
+	}
+	for _, info := range r.info {
+		if info.Role == RoleShepherd || info.Exited {
+			continue
+		}
+		if len(teamSet) > 0 && !teamSet[info.Team] {
+			continue
+		}
+		band := info.TrustBand
+		if band == "" {
+			band = TrustBandStandard
+		}
+		if urgency[band] > urgency[worst] {
+			worst = band
+		}
+	}
+	return worst
+}
+
+// SetScorecard stores shepherd's latest assessment of a worker. Idempotent:
+// each call overwrites the previous scorecard for that name.
+// `caller` is the agent name that produced the scorecard (recorded as the
+// event actor for audit attribution — see #89).
+func (r *Runtime) SetScorecard(caller, name string, sc Scorecard) error {
+	r.mu.Lock()
 	id, ok := r.byName[name]
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("runtime.SetScorecard: unknown session %q", name)
 	}
 	sc.At = time.Now().UTC()
 	r.info[id].Scorecard = &sc
+	r.info[id].TrustBand = BandFromScorecard(&sc)
 	r.cond.Broadcast()
+	r.mu.Unlock()
+	if caller == "" {
+		caller = "shepherd"
+	}
+	r.RecordEvent(Event{
+		Kind: "scorecard", Actor: caller,
+		Body: fmt.Sprintf("scorecard for %q: G=%.1f V=%.1f F=%.1f E=%.1f D=%.1f", name, sc.Goal, sc.Velocity, sc.Focus, sc.EndState, sc.Discipline),
+		Meta: map[string]any{"target": name, "G": sc.Goal, "V": sc.Velocity, "F": sc.Focus, "E": sc.EndState, "D": sc.Discipline, "note": sc.Note},
+	})
 	return nil
 }
 
 // RecordVerdict appends to a session's intervention history. Only
 // coach/intervene verdicts increment the count; silent/praise are
 // surfaced for "last_verdict" but don't bump InterventionCount.
-func (r *Runtime) RecordVerdict(name, verdict, msg string) error {
+func (r *Runtime) RecordVerdict(caller, name, verdict, msg string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	id, ok := r.byName[name]
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("runtime.RecordVerdict: unknown session %q", name)
 	}
 	info := r.info[id]
@@ -632,6 +1132,15 @@ func (r *Runtime) RecordVerdict(name, verdict, msg string) error {
 		info.InterventionCount++
 	}
 	r.cond.Broadcast()
+	r.mu.Unlock()
+	if caller == "" {
+		caller = "shepherd"
+	}
+	r.RecordEvent(Event{
+		Kind: "verdict", Actor: caller,
+		Body: fmt.Sprintf("verdict for %q: %s — %s", name, verdict, msg),
+		Meta: map[string]any{"target": name, "verdict": verdict, "message": msg},
+	})
 	return nil
 }
 
@@ -653,6 +1162,72 @@ func (r *Runtime) Get(name string) (*session.Session, *SessionInfo) {
 		return nil, nil
 	}
 	return r.sessions[id], r.info[id]
+}
+
+// UpdateStatSheet replaces the operator-configurable stat sheet on a
+// running agent. Zero-valued fields in the patch are interpreted as
+// "leave alone" (per-field merge, not whole-sheet replace).
+func (r *Runtime) UpdateStatSheet(name string, patch AgentStatSheet) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byName[name]
+	if !ok {
+		return fmt.Errorf("runtime.UpdateStatSheet: unknown session %q", name)
+	}
+	cur := r.info[id].StatSheet
+	if patch.ContextBudget != 0 {
+		cur.ContextBudget = patch.ContextBudget
+	}
+	if patch.ModelTier != "" {
+		cur.ModelTier = patch.ModelTier
+	}
+	if patch.DisciplineWeight != 0 {
+		cur.DisciplineWeight = patch.DisciplineWeight
+	}
+	if patch.VelocityExpect != "" {
+		cur.VelocityExpect = patch.VelocityExpect
+	}
+	if patch.TokenBudgetUSD != 0 {
+		cur.TokenBudgetUSD = patch.TokenBudgetUSD
+	}
+	if patch.ToolAllowlist != nil {
+		cur.ToolAllowlist = patch.ToolAllowlist
+	}
+	r.info[id].StatSheet = cur
+	_ = r.persistInfoLocked(r.info[id])
+	return nil
+}
+
+// PokePrompt writes a refined working-instructions message to a running
+// agent's PTY and records the new effective prompt on the SessionInfo.
+// Equivalent to typing "Your updated working instructions from the
+// operator: <body>" into the agent's REPL. Uses the same kitty-kbd-safe
+// two-write pattern as the shepherd bootstrap.
+func (r *Runtime) PokePrompt(name string, body string) error {
+	r.mu.Lock()
+	id, ok := r.byName[name]
+	if !ok {
+		r.mu.Unlock()
+		return fmt.Errorf("runtime.PokePrompt: unknown session %q", name)
+	}
+	sess := r.sessions[id]
+	r.info[id].SystemPrompt = body
+	_ = r.persistInfoLocked(r.info[id])
+	r.mu.Unlock()
+	if sess == nil {
+		return fmt.Errorf("runtime.PokePrompt: session %q has no live PTY", name)
+	}
+	wrapped := "Your updated working instructions from the operator (please incorporate going forward): " + body
+	_, _ = sess.Inject([]byte(wrapped))
+	time.Sleep(120 * time.Millisecond)
+	_, _ = sess.Inject([]byte("\r"))
+	r.RecordEvent(Event{
+		Kind:  "prompt_poke",
+		Actor: "operator",
+		Body:  fmt.Sprintf("operator updated prompt for %q (%d chars)", name, len(body)),
+		Meta:  map[string]any{"target": name},
+	})
+	return nil
 }
 
 // Pause sets the .Paused bit on the named session. The relay watcher
@@ -689,6 +1264,336 @@ func (r *Runtime) Stop(name string) error {
 	_ = os.Remove(filepath.Join(r.stateDir, "sessions", id+".json"))
 	r.broadcast()
 	return nil
+}
+
+// claudeRuntimeExtras reads the most recent Claude JSONL written under
+// ~/.claude/projects/<encoded-cwd>/*.jsonl for this session's cwd, and
+// extracts model + last-usage context tokens + sessionId. Cheap: only
+// the last ~80 lines of a single file are parsed. Returns zero values
+// for non-claude agents or sessions whose JSONL doesn't exist yet.
+//
+// Why we read JSONL rather than ask Claude over IPC: Claude Code doesn't
+// expose a control socket, but it does persist its full transcript with
+// per-message usage blocks. Reading is harmless + reflects reality.
+type claudeExtras struct {
+	Model         string
+	ContextTokens int
+	ContextSize   int
+	ClaudeUUID    string
+}
+
+func (r *Runtime) claudeRuntimeExtras(agentSlug, cwd string, spawnedAfter time.Time) claudeExtras {
+	if agentSlug != "claude-code" {
+		return claudeExtras{}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return claudeExtras{}
+	}
+	projects := filepath.Join(home, ".claude", "projects")
+	entries, err := os.ReadDir(projects)
+	if err != nil {
+		return claudeExtras{}
+	}
+	// Find the project dir whose decoded path matches cwd
+	var projDir string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if decodeClaudeProjectDirSimple(e.Name()) == cwd {
+			projDir = filepath.Join(projects, e.Name())
+			break
+		}
+	}
+	if projDir == "" {
+		return claudeExtras{}
+	}
+	files, err := os.ReadDir(projDir)
+	if err != nil {
+		return claudeExtras{}
+	}
+	// Pick the most recent .jsonl modified after spawnedAfter (so we
+	// attach to THIS spawn's transcript, not a leftover from earlier).
+	var bestPath string
+	var bestMod time.Time
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+			continue
+		}
+		info, err := f.Info()
+		if err != nil {
+			continue
+		}
+		if !spawnedAfter.IsZero() && info.ModTime().Before(spawnedAfter) {
+			continue
+		}
+		if info.ModTime().After(bestMod) {
+			bestMod = info.ModTime()
+			bestPath = filepath.Join(projDir, f.Name())
+		}
+	}
+	if bestPath == "" {
+		return claudeExtras{}
+	}
+	uuid := strings.TrimSuffix(filepath.Base(bestPath), ".jsonl")
+	// Tail-read the file: only need the last assistant usage block.
+	data, err := os.ReadFile(bestPath)
+	if err != nil {
+		return claudeExtras{ClaudeUUID: uuid}
+	}
+	// Walk lines back-to-front looking for the last record with message.model + usage
+	lines := strings.Split(string(data), "\n")
+	var model string
+	var ctxTokens int
+	for i := len(lines) - 1; i >= 0 && i >= len(lines)-200; i-- {
+		ln := strings.TrimSpace(lines[i])
+		if ln == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(ln), &rec); err != nil {
+			continue
+		}
+		msg, _ := rec["message"].(map[string]any)
+		if msg == nil {
+			continue
+		}
+		if m, ok := msg["model"].(string); ok && m != "" && m != "<synthetic>" {
+			if model == "" {
+				model = m
+			}
+		}
+		usage, _ := msg["usage"].(map[string]any)
+		if usage != nil && ctxTokens == 0 {
+			ctxTokens = sumIntField(usage, "input_tokens") +
+				sumIntField(usage, "cache_creation_input_tokens") +
+				sumIntField(usage, "cache_read_input_tokens")
+		}
+		if model != "" && ctxTokens > 0 {
+			break
+		}
+	}
+	ctxSize := contextSizeFor(model)
+	// If observed usage exceeds the default 200k cap, the session is
+	// running the 1M extended-context beta. Upgrade the size so the
+	// UI's "used %" stays meaningful (otherwise it would render > 100%).
+	if ctxTokens > 200_000 && ctxSize <= 200_000 {
+		ctxSize = 1_000_000
+		// Tag the model so the UI's modelLabel() shows [1m] suffix.
+		if model != "" && !strings.Contains(model, "[1m]") {
+			model = model + "[1m]"
+		}
+	}
+	return claudeExtras{
+		Model:         model,
+		ContextTokens: ctxTokens,
+		ContextSize:   ctxSize,
+		ClaudeUUID:    uuid,
+	}
+}
+
+func decodeClaudeProjectDirSimple(name string) string {
+	// Claude encodes /home/openova/repos/chepherd as -home-openova-repos-chepherd
+	// (replaces / with -). To decode, simply replace - back to /. This is the
+	// "simple" form — it can confuse hyphenated repo names, but is sufficient
+	// for matching since we're checking equality against an absolute path.
+	if !strings.HasPrefix(name, "-") {
+		return name
+	}
+	return "/" + strings.ReplaceAll(name[1:], "-", "/")
+}
+
+func sumIntField(m map[string]any, k string) int {
+	v, ok := m[k]
+	if !ok {
+		return 0
+	}
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	}
+	return 0
+}
+
+func contextSizeFor(model string) int {
+	// Conservative defaults — Anthropic doesn't publish a single source
+	// of truth machine-readable. Override the 1M variant by checking
+	// for an explicit [1m] tag (our convention).
+	m := strings.ToLower(model)
+	if strings.Contains(m, "[1m]") {
+		return 1_000_000
+	}
+	if strings.Contains(m, "opus-4") {
+		return 200_000
+	}
+	if strings.Contains(m, "sonnet") {
+		return 200_000
+	}
+	if strings.Contains(m, "haiku") {
+		return 200_000
+	}
+	if strings.Contains(m, "claude-3") {
+		return 200_000
+	}
+	return 0
+}
+
+// Rename changes the @-address of a live session. Cascades through
+// byName index, memberships, and any in-flight scorecards / verdicts.
+// The underlying PTY process is unaffected.
+func (r *Runtime) Rename(oldName, newName string) error {
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("runtime.Rename: oldName and newName required")
+	}
+	if oldName == newName {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byName[oldName]
+	if !ok {
+		return fmt.Errorf("runtime.Rename: unknown session %q", oldName)
+	}
+	if _, taken := r.byName[newName]; taken {
+		return fmt.Errorf("runtime.Rename: name %q already in use", newName)
+	}
+	r.info[id].Name = newName
+	delete(r.byName, oldName)
+	r.byName[newName] = id
+	// Cascade through memberships keyed by agent name
+	for key, m := range r.memberships {
+		if m.AgentName == oldName {
+			m.AgentName = newName
+			delete(r.memberships, key)
+			r.memberships[newName+"|"+m.TeamName] = m
+		}
+	}
+	r.cond.Broadcast()
+	r.RecordEvent(Event{
+		Kind: "agent_renamed", Actor: "operator",
+		Body: fmt.Sprintf("agent %q renamed → %q", oldName, newName),
+	})
+	return nil
+}
+
+// Restart stops the named session + spawns a replacement with the same
+// AgentSlug, Cwd, Role, Team, SystemPrompt, and StatSheet. Used for
+// re-priming an agent after editing its prompt/skills (when poke-prompt
+// isn't strong enough). Returns the new SessionInfo on success.
+func (r *Runtime) Restart(name string) (*SessionInfo, error) {
+	r.mu.Lock()
+	id, ok := r.byName[name]
+	if !ok {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("runtime.Restart: unknown session %q", name)
+	}
+	info := r.info[id]
+	spec := SpawnSpec{
+		Name:         info.Name,
+		AgentSlug:    info.AgentSlug,
+		Team:         info.Team,
+		Role:         info.Role,
+		Cwd:          info.Cwd,
+		SystemPrompt: info.SystemPrompt,
+		StatSheet:    info.StatSheet,
+	}
+	r.mu.Unlock()
+	if err := r.Stop(name); err != nil {
+		return nil, err
+	}
+	time.Sleep(500 * time.Millisecond)
+	newInfo, _, err := r.Spawn(spec)
+	if err != nil {
+		return nil, err
+	}
+	r.RecordEvent(Event{
+		Kind:  "agent_restart",
+		Actor: "operator",
+		Body:  fmt.Sprintf("agent %q restarted (new id=%s)", name, newInfo.ID),
+		Meta:  map[string]any{"target": name},
+	})
+	return newInfo, nil
+}
+
+// Handoff copies the source agent's active Claude JSONL session to the target
+// agent's home directory and spawns the target with --resume <uuid> so it
+// picks up the conversation where the source left off.
+//
+// The source agent is stopped after the copy completes.
+// Returns the new target SessionInfo on success.
+func (r *Runtime) Handoff(source, target string) (*SessionInfo, error) {
+	r.mu.Lock()
+	srcID, ok := r.byName[source]
+	if !ok {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("runtime.Handoff: unknown source session %q", source)
+	}
+	srcInfo := r.info[srcID]
+	uuid := srcInfo.ClaudeUUID
+	srcHome := srcInfo.AgentHomeDir
+
+	dstID, ok2 := r.byName[target]
+	if !ok2 {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("runtime.Handoff: unknown target session %q", target)
+	}
+	dstInfo := r.info[dstID]
+	dstHome := dstInfo.AgentHomeDir
+	dstSpec := SpawnSpec{
+		Name:         dstInfo.Name,
+		AgentSlug:    dstInfo.AgentSlug,
+		Team:         dstInfo.Team,
+		Role:         dstInfo.Role,
+		Cwd:          dstInfo.Cwd,
+		SystemPrompt: dstInfo.SystemPrompt,
+		StatSheet:    dstInfo.StatSheet,
+	}
+	r.mu.Unlock()
+
+	if uuid == "" {
+		return nil, fmt.Errorf("runtime.Handoff: source %q has no active Claude session UUID", source)
+	}
+	if srcHome == "" || dstHome == "" {
+		return nil, fmt.Errorf("runtime.Handoff: source or target has no agent home dir (bare exec?)")
+	}
+
+	// Copy the JSONL session file from source home to target home.
+	srcJSONL := filepath.Join(srcHome, ".claude", "projects", "-"+strings.ReplaceAll(filepath.ToSlash(dstSpec.Cwd), "/", "-"), uuid+".jsonl")
+	dstProjectDir := filepath.Join(dstHome, ".claude", "projects", "-"+strings.ReplaceAll(filepath.ToSlash(dstSpec.Cwd), "/", "-"))
+	dstJSONL := filepath.Join(dstProjectDir, uuid+".jsonl")
+
+	if err := os.MkdirAll(dstProjectDir, 0o700); err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: create target project dir: %w", err)
+	}
+	data, err := os.ReadFile(srcJSONL)
+	if err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: read source JSONL %s: %w", srcJSONL, err)
+	}
+	if err := os.WriteFile(dstJSONL, data, 0o600); err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: write target JSONL: %w", err)
+	}
+
+	// Stop source, then restart target with --resume.
+	_ = r.Stop(source)
+	time.Sleep(500 * time.Millisecond)
+	_ = r.Stop(target)
+	time.Sleep(500 * time.Millisecond)
+
+	dstSpec.AgentArgs = append(dstSpec.AgentArgs, "--resume", uuid)
+	newInfo, _, err := r.Spawn(dstSpec)
+	if err != nil {
+		return nil, fmt.Errorf("runtime.Handoff: spawn target: %w", err)
+	}
+	r.RecordEvent(Event{
+		Kind:  "agent_handoff",
+		Actor: "operator",
+		Body:  fmt.Sprintf("session handed off from %q to %q (uuid=%s)", source, target, uuid),
+		Meta:  map[string]any{"source": source, "target": target, "uuid": uuid},
+	})
+	return newInfo, nil
 }
 
 // Wait blocks until the runtime's state changes (used by long-poll style
@@ -734,23 +1639,54 @@ func (r *Runtime) persistInfoLocked(info *SessionInfo) error {
 // child process for tools that prefer env-pointing over file discovery.
 func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, error) {
 	cfgDir := filepath.Join(r.stateDir, "sessions", sessionName)
-	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		return nil, "", err
 	}
-	sockPath := filepath.Join(r.stateDir, "runtime.sock")
+	// MkdirAll does not change permissions on pre-existing dirs, and WriteFile
+	// is subject to the process umask. Chmod explicitly so the container user
+	// (different UID in the user namespace) can read both.
+	_ = os.Chmod(cfgDir, 0o755)
+	// MCP URL the agent's bridge subprocess will dial. v0.8 default:
+	// resolve the host's primary outbound IP — rootless Podman's reported
+	// bridge gateway (10.88.0.1) is a slirp4netns phantom that isn't
+	// actually routed back to host services, so we use the eth0-equivalent
+	// IP that the container's NAT reaches via the default route. Override
+	// via CHEPHERD_MCP_URL when chepherd is in-cluster (K8s Service DNS
+	// becomes ws://chepherd:9090).
+	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
+	if mcpURL == "" {
+		gw := HostAddrForAgent()
+		if gw == "" {
+			gw = "127.0.0.1" // dev fallback; only works if container shares host net
+		}
+		mcpURL = "ws://" + gw + ":9090/mcp/ws"
+	}
 	// Use the absolute path of the currently-running chepherd binary so
 	// the MCP-bridge subprocess matches the running runtime regardless
-	// of PATH or install name (chepherd vs chepherd-v05).
+	// of PATH or install name.
 	chepBin, _ := os.Executable()
 	if chepBin == "" {
 		chepBin = "chepherd"
 	}
+	// Pass CHEPHERD_TOKEN + CHEPHERD_AGENT_NAME explicitly in the env
+	// block so claude-code's MCP spawner doesn't drop them. Empty env: {}
+	// caused "1 MCP server failed" because the bridge couldn't auth.
+	mcpEnv := map[string]string{
+		"CHEPHERD_AGENT_NAME": sessionName,
+	}
+	r.extraEnvMu.RLock()
+	if r.extraAgentEnv != nil {
+		if tok, ok := r.extraAgentEnv["CHEPHERD_TOKEN"]; ok && tok != "" {
+			mcpEnv["CHEPHERD_TOKEN"] = tok
+		}
+	}
+	r.extraEnvMu.RUnlock()
 	cfg := map[string]any{
 		"mcpServers": map[string]any{
 			"chepherd": map[string]any{
 				"command": chepBin,
-				"args":    []string{"mcp", "--sock", sockPath},
-				"env":     map[string]string{},
+				"args":    []string{"mcp", "--url", mcpURL},
+				"env":     mcpEnv,
 			},
 		},
 	}
@@ -759,9 +1695,10 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		return nil, "", err
 	}
 	cfgPath := filepath.Join(cfgDir, ".mcp.json")
-	if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
 		return nil, "", err
 	}
+	_ = os.Chmod(cfgPath, 0o644)
 	// Symlink into cwd as ./.mcp.json so Claude Code's per-project lookup
 	// finds our config. If a symlink already exists, repair it if it
 	// points at a missing target (e.g. an old per-session config that
@@ -791,9 +1728,210 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// Env hint for agents that read MCP server URL directly (e.g. some
 	// experimental SDK paths). Harmless if unused.
 	return []string{
-		"CHEPHERD_MCP_SOCK=" + sockPath,
+		"CHEPHERD_MCP_URL=" + mcpURL,
 		"CHEPHERD_MCP_CONFIG=" + cfgPath,
 	}, cfgPath, nil
+}
+
+// materializeAgentSecrets prepares the per-agent secrets directory that
+// will be bind-mounted at /run/secrets inside the agent container, and
+// returns its host path. Source priority for the Claude credentials:
+//
+//  1. If spec.ClaudeTokenID is set → pull that exact credential from
+//     the token vault.
+//  2. Else if the vault has any claude-oauth credentials → pick the most
+//     recently updated one (R4: shared default token across all agents).
+//  3. Else → fall back to the host's ~/.claude/.credentials.json so a
+//     fresh chepherd install on a machine that already has claude-code
+//     logged in just works.
+//
+// The agent image's entrypoint script links the file into
+// ~/.claude/.credentials.json on container start (see scripts/agent-entrypoint.sh).
+func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
+	// Per-spawn UNIQUE secrets dir. The previous spawn's :U mount option
+	// chowns the host-side directory into the container's user namespace
+	// (~UID 100999), which means the host chepherd process can no longer
+	// write to it. Solution: each spawn gets a fresh timestamped dir.
+	// Old dirs are cleaned up by container teardown via `podman unshare`
+	// in a future commit; for now they linger harmlessly under
+	// agents/<name>/secrets-*.
+	parent, err := agentSecretsDirPath(spec.Name, r.stateDir)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(parent, fmt.Sprintf("spawn-%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, "claude-credentials")
+
+	var payload string
+	// __none__ is a sentinel set by the OAuth login-capture flow (R5):
+	// the ephemeral agent must have NO credentials so claude-code falls
+	// into its OAuth prompt and prints the URL we'll capture. Skip both
+	// vault and host fallbacks in that case.
+	if spec.ClaudeTokenID == "__none__" {
+		return dir, nil
+	}
+	if r.vault != nil {
+		if spec.ClaudeTokenID != "" {
+			if v, err := r.vault.GetValue(spec.ClaudeTokenID); err == nil {
+				payload = v
+			}
+		}
+		if payload == "" {
+			// Most recently updated claude-oauth entry (list returns
+			// creation-order; vault re-orders on Set so most-recent is last).
+			creds := r.vault.ListByProvider("claude-oauth")
+			if len(creds) > 0 {
+				latest := creds[len(creds)-1]
+				if v, err := r.vault.GetValue(latest.ID); err == nil {
+					payload = v
+				}
+			}
+		}
+	}
+	if payload == "" {
+		// Host-fallback so single-user installs without a vault entry
+		// keep working — preserves the v0.5–v0.7 behavior.
+		if src := hostClaudeCredentialsPath(); src != "" {
+			if b, err := os.ReadFile(src); err == nil {
+				payload = string(b)
+			}
+		}
+	}
+	if payload != "" {
+		// REFRESH-ON-SPAWN — empirically verified 2026-05-28 (operator
+		// walk #135). The vault stores a one-shot snapshot of the
+		// credentials.json captured at OAuth time. claude-code accessToken
+		// has short lifetime (~minutes). If it's already past expiresAt
+		// by the time we materialize, claude-code on startup shows the
+		// OAuth login screen even though a valid refreshToken sits right
+		// there in the file. (claude-code does its background refresh,
+		// but the login UI doesn't auto-dismiss once drawn.)
+		//
+		// Solution: before writing into the agent, exchange the snapshot's
+		// refreshToken for a fresh access+refresh pair via Anthropic's
+		// OAuth /token endpoint. Persist the new pair back to the vault
+		// so the next spawn doesn't re-burn the refresh.
+		if refreshed, ok := refreshClaudeOAuthIfNeeded(payload); ok {
+			payload = refreshed
+			if r.vault != nil && spec.ClaudeTokenID != "" {
+				_ = r.vault.UpdateValue(spec.ClaudeTokenID, refreshed)
+			}
+		}
+		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
+			return "", err
+		}
+		// Also write the onboarding stub claude-code v2.1.150 requires
+		// in ~/.claude.json. Without hasCompletedOnboarding: true +
+		// userID + oauthAccount, claude-code re-runs the welcome /
+		// login-method flow even with a valid credentials.json — that
+		// was the "4× Enter" bug operators kept hitting.
+		onboarding := buildClaudeOnboardingStub()
+		if onboarding != "" {
+			_ = os.WriteFile(filepath.Join(dir, "claude-onboarding"), []byte(onboarding), 0o644)
+		}
+	}
+	// Best-effort GC: nuke prior per-spawn dirs whose contents are now
+	// owned by a container-namespace UID. `podman unshare` enters the
+	// rootless user-namespace where the container-UID maps to UID 0.
+	go cleanupStaleSecretsDirs(parent, dir)
+	return dir, nil
+}
+
+// buildClaudeOnboardingStub returns the bytes that should go to
+// /run/secrets/claude-onboarding (→ ~/.claude.json inside the agent
+// container). Sourced from the operator's host ~/.claude.json, filtered
+// to just the identity + first-run-suppression keys claude-code needs:
+//
+//	hasCompletedOnboarding, userID, oauthAccount, firstStartTime,
+//	changelogLastFetched, migrationVersion, opusProMigrationComplete,
+//	sonnet1m45MigrationComplete, tipsHistory, theme
+//
+// Everything else (project-history, per-cwd state, MCP server registry
+// for the host machine, etc.) is NOT propagated — it'd leak operator
+// project state into every agent and bloat the file.
+//
+// Returns "" if no host file exists; callers skip writing the stub and
+// the agent runs through the onboarding flow as before (only useful for
+// the very-first OAuth-capture, which is acceptable).
+func buildClaudeOnboardingStub() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		return ""
+	}
+	var host map[string]any
+	if err := json.Unmarshal(raw, &host); err != nil {
+		return ""
+	}
+	allow := []string{
+		"hasCompletedOnboarding",
+		"userID",
+		"oauthAccount",
+		"firstStartTime",
+		"changelogLastFetched",
+		"migrationVersion",
+		"opusProMigrationComplete",
+		"sonnet1m45MigrationComplete",
+		"tipsHistory",
+		"theme",
+		"installMethod",
+		"isQualifiedForDataSharing",
+		"autoPermissionsNotificationCount", // suppresses Bypass-permissions warning prompt
+		"lastOnboardingVersion",
+		"numStartups",
+		"claudeCodeFirstTokenDate",
+		"opus47LaunchSeenCount",
+		"remoteControlUpsellSeenCount",
+		"remoteDialogSeen",
+		"officialMarketplaceAutoInstallAttempted",
+		"officialMarketplaceAutoInstalled",
+	}
+	stub := map[string]any{}
+	for _, k := range allow {
+		if v, ok := host[k]; ok {
+			stub[k] = v
+		}
+	}
+	// Sane defaults if host lacked anything load-bearing.
+	if _, ok := stub["hasCompletedOnboarding"]; !ok {
+		stub["hasCompletedOnboarding"] = true
+	}
+	b, err := json.Marshal(stub)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// cleanupStaleSecretsDirs removes spawn-* subdirectories of parent
+// except the one we just wrote. Uses `podman unshare rm -rf` so files
+// chowned into the container's user namespace by a previous :U mount
+// are reachable. Failures are swallowed — this is best-effort cleanup.
+func cleanupStaleSecretsDirs(parent, keep string) {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "spawn-") {
+			continue
+		}
+		full := filepath.Join(parent, e.Name())
+		if full == keep {
+			continue
+		}
+		// Try host first; if EACCES, fall back to podman unshare.
+		if err := os.RemoveAll(full); err == nil {
+			continue
+		}
+		_ = exec.Command("podman", "unshare", "rm", "-rf", full).Run()
+	}
 }
 
 // readGitContext runs `git -C <cwd>` twice to extract the remote-origin
@@ -880,6 +2018,219 @@ func stripEnv(env []string, keys ...string) []string {
 	return out
 }
 
+// =========== v0.6 unified-model methods (Agent + Team + Membership) ===========
+
+// CreateTeam adds a new Team to the runtime. Idempotent — if a team with
+// the same name already exists, returns it unchanged. Returns the team
+// + a "created" bool (true if new, false if pre-existed).
+func (r *Runtime) CreateTeam(name string, canonPath string, topology Topology) (*Team, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.teams[name]; ok {
+		return existing, false
+	}
+	if topology == "" {
+		topology = TopologyHub
+	}
+	if canonPath == "" {
+		canonPath = filepath.Join(r.stateDir, "teams", name, "CLAUDE.md")
+	}
+	t := &Team{
+		Name:      name,
+		CanonPath: canonPath,
+		Topology:  topology,
+		CreatedAt: time.Now().UTC(),
+	}
+	r.teams[name] = t
+	r.cond.Broadcast()
+	return t, true
+}
+
+// JoinTeam adds a Membership. Idempotent on (agent, team) — if already
+// joined, updates the role + brief override. Auto-creates the team if it
+// doesn't exist (with default topology=hub).
+func (r *Runtime) JoinTeam(agentName, teamName string, role MembershipRole, briefOverride string) (*Membership, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.byName[agentName]; !ok {
+		return nil, fmt.Errorf("runtime.JoinTeam: unknown agent %q", agentName)
+	}
+	if _, ok := r.teams[teamName]; !ok {
+		canonPath := filepath.Join(r.stateDir, "teams", teamName, "CLAUDE.md")
+		r.teams[teamName] = &Team{
+			Name:      teamName,
+			CanonPath: canonPath,
+			Topology:  TopologyHub,
+			CreatedAt: time.Now().UTC(),
+		}
+	}
+	key := agentName + "|" + teamName
+	m := &Membership{
+		AgentName:     agentName,
+		TeamName:      teamName,
+		Role:          role,
+		BriefOverride: briefOverride,
+		JoinedAt:      time.Now().UTC(),
+	}
+	r.memberships[key] = m
+	r.cond.Broadcast()
+	return m, nil
+}
+
+// DeleteTeam removes the team + all its memberships. Returns an error
+// if any agent is still actively rooted in this team (Team field on
+// SessionInfo). Refuses to delete the "default" team.
+func (r *Runtime) DeleteTeam(name string) error {
+	if name == "default" {
+		return fmt.Errorf("runtime.DeleteTeam: refusing to delete the default team")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.teams[name]; !ok {
+		return fmt.Errorf("runtime.DeleteTeam: unknown team %q", name)
+	}
+	for _, info := range r.info {
+		if info.Team == name && !info.Exited {
+			return fmt.Errorf("runtime.DeleteTeam: agent %q still rooted in team %q — move or stop the agent first", info.Name, name)
+		}
+	}
+	for key, m := range r.memberships {
+		if m.TeamName == name {
+			delete(r.memberships, key)
+		}
+	}
+	delete(r.teams, name)
+	r.cond.Broadcast()
+	return nil
+}
+
+// UpdateTeam renames a team and/or changes its topology. newName == ""
+// keeps the existing name; topology == "" keeps the existing topology.
+func (r *Runtime) UpdateTeam(name, newName string, topology Topology) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.teams[name]
+	if !ok {
+		return fmt.Errorf("runtime.UpdateTeam: unknown team %q", name)
+	}
+	if topology != "" {
+		t.Topology = topology
+	}
+	if newName != "" && newName != name {
+		if _, taken := r.teams[newName]; taken {
+			return fmt.Errorf("runtime.UpdateTeam: name %q already in use", newName)
+		}
+		t.Name = newName
+		delete(r.teams, name)
+		r.teams[newName] = t
+		// Cascade: rename in memberships + SessionInfo
+		for key, m := range r.memberships {
+			if m.TeamName == name {
+				m.TeamName = newName
+				delete(r.memberships, key)
+				r.memberships[m.AgentName+"|"+newName] = m
+			}
+		}
+		for _, info := range r.info {
+			if info.Team == name {
+				info.Team = newName
+			}
+			for i, sh := range info.Shepherding {
+				if sh == name {
+					info.Shepherding[i] = newName
+				}
+			}
+		}
+	}
+	r.cond.Broadcast()
+	return nil
+}
+
+// LeaveTeam removes a membership. Returns true if removed, false if not present.
+func (r *Runtime) LeaveTeam(agentName, teamName string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := agentName + "|" + teamName
+	if _, ok := r.memberships[key]; !ok {
+		return false
+	}
+	delete(r.memberships, key)
+	r.cond.Broadcast()
+	return true
+}
+
+// ListTeams returns all teams (snapshot copy).
+func (r *Runtime) ListTeams() []*Team {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*Team, 0, len(r.teams))
+	for _, t := range r.teams {
+		c := *t
+		out = append(out, &c)
+	}
+	return out
+}
+
+// ListMemberships returns memberships, optionally filtered by agentName
+// and/or teamName (pass "" to skip a filter).
+func (r *Runtime) ListMemberships(agentName, teamName string) []*Membership {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*Membership, 0, len(r.memberships))
+	for _, m := range r.memberships {
+		if agentName != "" && m.AgentName != agentName {
+			continue
+		}
+		if teamName != "" && m.TeamName != teamName {
+			continue
+		}
+		c := *m
+		out = append(out, &c)
+	}
+	return out
+}
+
+// SetReviewAxis records a per-axis review on a target agent. Used by
+// reviewer agents in the council pattern (v0.6-C). Multiple reviewers
+// can write different axes for the same target; the shepherd composes
+// the final scorecard by reading all of them.
+func (r *Runtime) SetReviewAxis(reviewer, target, axis string, score float64, note string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.byName[target]; !ok {
+		return fmt.Errorf("runtime.SetReviewAxis: unknown target agent %q", target)
+	}
+	if r.axisReviews[target] == nil {
+		r.axisReviews[target] = make(map[string]*AxisReview)
+	}
+	r.axisReviews[target][axis] = &AxisReview{
+		Reviewer: reviewer,
+		Axis:     axis,
+		Score:    score,
+		Note:     note,
+		At:       time.Now().UTC(),
+	}
+	r.cond.Broadcast()
+	return nil
+}
+
+// ListReviews returns all per-axis reviews for a target agent. Used by
+// the shepherd to compose a final scorecard.
+func (r *Runtime) ListReviews(target string) []*AxisReview {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	byAxis := r.axisReviews[target]
+	if byAxis == nil {
+		return nil
+	}
+	out := make([]*AxisReview, 0, len(byAxis))
+	for _, rev := range byAxis {
+		c := *rev
+		out = append(out, &c)
+	}
+	return out
+}
+
 // --- utilities ---
 
 func newSessionID(name string) string {
@@ -897,4 +2248,106 @@ func envSliceToMap(env []string) map[string]string {
 		}
 	}
 	return m
+}
+
+
+// claudeOAuthClientID is the public client_id claude-code uses in its
+// PKCE OAuth flow against Anthropic's IdP. Surfaced in every login URL
+// claude-code prints (operator confirmed by inspecting the OAuth URL
+// in their PTY). Stable across operators — there is no per-installation
+// secret here.
+const claudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+
+// claudeOAuthTokenEndpoint is Anthropic's OAuth /token endpoint that
+// accepts grant_type=refresh_token. Same one claude-code itself uses
+// for its background refresh. Confirmed reachable from agent containers
+// (HTTP 200 on /; HTTP 400 on POST {} = endpoint exists, validates body).
+const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
+
+// refreshClaudeOAuthIfNeeded inspects a credentials.json payload (the
+// JSON shape claude-code writes to ~/.claude/.credentials.json). If
+// the accessToken inside is already expired OR within 60s of expiring,
+// posts the refreshToken to Anthropic's OAuth endpoint, splices the
+// fresh access+refresh pair back into the same JSON shape, and returns
+// it. Returns (input, false) on any error or if the token is still
+// comfortably valid — caller falls back to the unrefreshed payload.
+//
+// This is the permanent fix for the "agent shows OAuth login screen
+// even though credentials are present" bug (operator walk 2026-05-28,
+// experimentally verified — see commit log).
+func refreshClaudeOAuthIfNeeded(payload string) (string, bool) {
+	var doc struct {
+		ClaudeAiOauth struct {
+			AccessToken      string `json:"accessToken"`
+			RefreshToken     string `json:"refreshToken"`
+			ExpiresAt        int64  `json:"expiresAt"`
+			SubscriptionType string `json:"subscriptionType,omitempty"`
+			Scopes           []string `json:"scopes,omitempty"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
+		return payload, false
+	}
+	if doc.ClaudeAiOauth.RefreshToken == "" {
+		return payload, false
+	}
+	// Skip if comfortably valid (>60s of life left).
+	const safetyMargin = 60 * 1000 // 60 seconds in ms
+	nowMs := time.Now().UnixMilli()
+	if doc.ClaudeAiOauth.ExpiresAt > nowMs+safetyMargin {
+		return payload, false
+	}
+
+	body := map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": doc.ClaudeAiOauth.RefreshToken,
+		"client_id":     claudeOAuthClientID,
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequest(http.MethodPost, claudeOAuthTokenEndpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return payload, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return payload, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return payload, false
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if err != nil {
+		return payload, false
+	}
+	var tokRes struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"` // seconds
+	}
+	if err := json.Unmarshal(raw, &tokRes); err != nil {
+		return payload, false
+	}
+	if tokRes.AccessToken == "" {
+		return payload, false
+	}
+
+	// Splice the refreshed pair back into the credentials.json shape.
+	doc.ClaudeAiOauth.AccessToken = tokRes.AccessToken
+	if tokRes.RefreshToken != "" {
+		doc.ClaudeAiOauth.RefreshToken = tokRes.RefreshToken
+	}
+	if tokRes.ExpiresIn > 0 {
+		doc.ClaudeAiOauth.ExpiresAt = time.Now().Add(time.Duration(tokRes.ExpiresIn) * time.Second).UnixMilli()
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return payload, false
+	}
+	return string(out), true
 }
