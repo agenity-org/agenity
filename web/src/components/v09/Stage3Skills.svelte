@@ -139,7 +139,7 @@
     <p class="hint">Loading matrix…</p>
   {:else}
     <div class="grid-wrap">
-      <table class="grid">
+      <table class="skills-grid">
         <thead>
           <tr>
             <th class="skill-th">skill</th>
@@ -185,11 +185,18 @@
   }
   .field input { padding: 0.4rem 0.55rem; border-radius: 4px; border: 1px solid var(--border, #2a2a2a); background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5); font: inherit; }
   .grid-wrap { overflow-x: auto; padding: 0.2rem 0; }
-  .grid { border-collapse: separate; border-spacing: 0; font-size: 0.84rem; }
-  .grid thead th { color: var(--fg-muted, #aaa); font-weight: 600; padding: 0.4rem 0.55rem; text-align: center; border-bottom: 1px solid var(--border, #2a2a2a); }
-  .grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.7rem; font-weight: 500; max-width: 14rem; white-space: nowrap; }
-  .grid .role-th { color: var(--accent-2, #87ceeb); min-width: 5rem; }
-  .grid .cnt { color: var(--fg-muted, #888); margin-left: 0.18rem; font-size: 0.72rem; }
+  /* #226 — was `.grid`; collided with the global `.grid { display: grid;
+     grid-template-columns: repeat(3,1fr) }` rule in web/src/styles/global.css.
+     The unscoped global made our <table> a 3-column grid; thead + tbody
+     landed in separate columns side-by-side (header on left, body on
+     right). Renamed to .skills-grid to keep this <table>'s default
+     `display: table` semantics. Other components also use the unscoped
+     `.grid` name — defensive sweep tracked as #228. */
+  .skills-grid { border-collapse: separate; border-spacing: 0; font-size: 0.84rem; }
+  .skills-grid thead th { color: var(--fg-muted, #aaa); font-weight: 600; padding: 0.4rem 0.55rem; text-align: center; border-bottom: 1px solid var(--border, #2a2a2a); }
+  .skills-grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.7rem; font-weight: 500; max-width: 14rem; white-space: nowrap; }
+  .skills-grid .role-th { color: var(--accent-2, #87ceeb); min-width: 5rem; }
+  .skills-grid .cnt { color: var(--fg-muted, #888); margin-left: 0.18rem; font-size: 0.72rem; }
   .cell {
     text-align: center; cursor: pointer; user-select: none;
     padding: 0.32rem 0.55rem; min-width: 5rem;
@@ -200,6 +207,6 @@
   .cell:hover { background: rgba(135, 206, 235, 0.08); color: var(--fg, #f5f5f5); }
   .cell.on { color: var(--accent-2, #87ceeb); background: rgba(135,206,235,0.10); }
   .cell.on:hover { background: rgba(135, 206, 235, 0.18); }
-  .grid tbody tr:hover { background: rgba(255,255,255,0.02); }
+  .skills-grid tbody tr:hover { background: rgba(255,255,255,0.02); }
   .hint { color: var(--fg-muted, #888); font-size: 0.85rem; }
 </style>
