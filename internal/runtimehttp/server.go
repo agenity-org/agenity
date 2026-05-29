@@ -2955,14 +2955,33 @@ func (s *Server) claudeLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "code required", http.StatusBadRequest)
 		return
 	}
+	// #227 — sanitize before inject. Strips known UI-hint suffixes that
+	// some operators copy verbatim from Claude's OAuth web page (e.g.
+	// `pastecodehereifprompted`), AND collapses any internal whitespace
+	// that selecting/copying might have introduced around the `#`
+	// separator. Preserves the `#` byte itself — it's part of the
+	// `<base64>#<verifier>` shape claude-code expects, NOT a URL fragment.
+	code := sanitizeOAuthCode(body.Code)
+	if code == "" {
+		http.Error(w, "code is empty after stripping known UI hints", http.StatusBadRequest)
+		return
+	}
 	sess, _ := s.rt.Get(name)
 	if sess == nil {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}
-	// Inject the auth code into the agent's stdin + Enter.
-	_, _ = sess.Inject([]byte(body.Code))
-	time.Sleep(150 * time.Millisecond)
+	// Inject the auth code into the agent's stdin + Enter. Wrapped in
+	// bracketed-paste markers so claude-code's TUI sees this as a single
+	// paste event rather than character-by-character keystrokes (which
+	// can race the prompt's input handler on long codes + cause partial
+	// submits). 500ms wait — was 150ms but operator-reported #227
+	// failures pattern-matched against long codes being submitted before
+	// all bytes flushed through the PTY.
+	const bracketPasteStart = "\x1b[200~"
+	const bracketPasteEnd = "\x1b[201~"
+	_, _ = sess.Inject([]byte(bracketPasteStart + code + bracketPasteEnd))
+	time.Sleep(500 * time.Millisecond)
 	_, _ = sess.Inject([]byte("\r"))
 
 	// Poll for the credentials. The agent home dir is bind-mounted with
@@ -3010,6 +3029,61 @@ func (s *Server) claudeLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	// Terminate the ephemeral agent — its job is done.
 	_ = s.rt.Stop(name)
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "label": label})
+}
+
+// sanitizeOAuthCode normalises an operator-pasted Claude OAuth code
+// before it gets injected into the capture agent's PTY (#227). The
+// claude-code CLI expects the canonical shape `<base64>#<verifier>`
+// where the `#` separator is part of the credential — NOT a URL
+// fragment. This helper:
+//
+//  1. Trims leading + trailing whitespace (newlines, tabs, spaces).
+//  2. Strips known UI-hint suffixes that Claude's OAuth web page
+//     surfaces as placeholder text some operators copy verbatim along
+//     with the code. Today's known list:
+//     - "pastecodehereifprompted" (the placeholder Claude shows in
+//     the OAuth-code input field; selecting-all copies it too).
+//     Match is case-insensitive; only stripped when it appears at the
+//     END of the code, never from the middle.
+//  3. Strips wrapping quotation marks (` " ' ` ) some terminals add
+//     when copying multiline text via right-click.
+//  4. Collapses internal whitespace runs to nothing — Claude's
+//     OAuth-code display wraps long codes and some clipboard handlers
+//     preserve the line break; the canonical code has no spaces.
+//
+// Preserves the `#` byte itself. Idempotent. Returns "" only if the
+// input was entirely whitespace / suffix; callers should treat that
+// as a 400.
+//
+// Refs #227.
+func sanitizeOAuthCode(raw string) string {
+	v := strings.TrimSpace(raw)
+	// Strip wrapping quotes — single OR double, must be balanced.
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') ||
+			(v[0] == '\'' && v[len(v)-1] == '\'') {
+			v = strings.TrimSpace(v[1 : len(v)-1])
+		}
+	}
+	// Strip known UI-hint suffix (case-insensitive, end-anchor only).
+	const hint = "pastecodehereifprompted"
+	for {
+		lv := strings.ToLower(v)
+		if !strings.HasSuffix(lv, hint) {
+			break
+		}
+		v = strings.TrimSpace(v[:len(v)-len(hint)])
+	}
+	// Collapse internal whitespace — \r\n from word-wrap, stray spaces.
+	// The canonical code is `<base64>#<verifier>` with no whitespace.
+	v = strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\n', '\r':
+			return -1 // drop
+		}
+		return r
+	}, v)
+	return v
 }
 
 // claudeLoginCancel terminates an in-progress login-capture agent
