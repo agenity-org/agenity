@@ -31,4 +31,10 @@ jobs:
         # without naming them in this workflow file (so the workflow
         # itself doesn't trip the very check it enforces).
         run: bash scripts/banned-vocab-212.sh
+      - name: Stage 4 model-ID regression guard (#244)
+        # Pins the canonical Anthropic API model IDs in
+        # Stage4AgentTypes.svelte. Drift surfaces here rather than at
+        # operator-clicks-Launch time. See scripts/check-stage4-model-ids.sh
+        # + issue #244 for context.
+        run: bash scripts/check-stage4-model-ids.sh
       - run: go test ./... -race -count=1

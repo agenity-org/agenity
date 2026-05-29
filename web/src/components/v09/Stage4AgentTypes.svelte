@@ -45,15 +45,29 @@
     { slug: 'opencode',    label: 'opencode' },
   ];
 
-  // Hardcoded model list per agent type. Aligned with #237's source of
-  // truth + matches what the per-agent CLI actually accepts via
-  // `--model <name>` (claude-code) or the equivalent flag on each
-  // flavor. opencode is chepherd-managed → no model picker; renders a
-  // single fixed entry so the dropdown isn't empty.
+  // Hardcoded model list per agent type. v0.9.2 scope: per-flavor
+  // canonical IDs that Anthropic's API + each CLI's --model flag
+  // actually accept.
+  //
+  // #244 — claude-code IDs corrected (operator-blocked when claude-opus-4
+  // returned 401-equivalent from Anthropic API). The form
+  // `claude-opus-4` is a CLI alias surfaced by --help's docstring but
+  // NOT a canonical API model ID; the API rejects it. Canonical form
+  // is versioned: `claude-{family}-{major}-{minor}` per the actual
+  // binary's model registry. String-grep on the binary at /usr/bin/claude
+  // confirms `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`
+  // as the current canonical forms; --help's own example uses
+  // `claude-sonnet-4-6`. Dated suffixes (e.g. `-20251001`) also accepted
+  // but operator wants the shortest-stable form for UI clarity.
+  //
+  // Pinned by Stage4AgentTypes.models.test.js as a regression gate so
+  // a future model rev that drops one of these IDs surfaces at CI.
+  //
+  // Refs #237 #244.
   const MODELS_BY_TYPE = {
-    'claude-code': ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
+    'claude-code': ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
     'codex-cli':   ['gpt-5-codex', 'gpt-4-codex'],
-    'aider':       ['claude-opus-4', 'claude-sonnet-4', 'gpt-5', 'gpt-4', 'gpt-4-turbo'],
+    'aider':       ['claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5', 'gpt-4', 'gpt-4-turbo'],
     'qwen-code':   ['qwen3-coder-plus', 'qwen3-coder'],
     'gemini-cli':  ['gemini-2.5-pro', 'gemini-2.5-flash'],
     'opencode':    ['chepherd-managed'],
