@@ -120,12 +120,14 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("runtime: %w", err)
 	}
+	// #270 — surface the instance UUID in the boot banner so operators
+	// can confirm two chepherd binaries have distinct fingerprints +
+	// won't cross-kill each other's agents at startup.
+	fmt.Printf("  instance:  %s (#270 — derived from state-dir abs path)\n\n", rt.InstanceUUID())
 	// #258 — reap orphan sibling agent containers BEFORE the HTTP
-	// surface comes up. Operators who crashed chepherd mid-spawn (or
-	// upgrade from a pre-#258 build that leaked every Stop click) carry
-	// zombie chepherd-agent-* containers that aren't in any live
-	// runtime's registry. We list+stop+remove them so a fresh boot
-	// starts from a clean slate.
+	// surface comes up. #270 — the listing is now instance-scoped so
+	// a parallel chepherd binary on the same host has its own pool +
+	// can't be cross-killed by this reap pass.
 	_ = rt.ReapOrphanContainers()
 	// v0.9.2 (#208): internal/messagebus/relay.go (337 LOC + 4 Runtime
 	// SessionRegistry methods) deleted in this sub-branch. A2A
