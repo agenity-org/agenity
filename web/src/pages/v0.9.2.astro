@@ -6,10 +6,10 @@
 //     surfaces server-to-server messaging on the same listen addr
 //     as the dashboard.
 //   - Persistence abstraction (#208 / PR #209-#211): SessionRepository
-//     + AgentRepository backed by SQLite or Postgres; runtime + shepherd
-//     read/write through repositories.
-//   - Spawn ↔ SessionRepository wire-up (#208 / PR #216): shepherd's
-//     tick loop discovers runtime-spawned sessions.
+//     + AgentRepository backed by SQLite or Postgres; runtime + the
+//     supervisor tier read/write through repositories.
+//   - Spawn ↔ SessionRepository wire-up (#208 / PR #216): the
+//     supervisor tier's tick loop discovers runtime-spawned sessions.
 //   - Runtime.GetByContextID (#208 / PR #217): A2A contextId accepts
 //     either the @-name or the full session ID.
 //   - Spawn auth-env propagation (#218 / PR #221): vault.claude-oauth
