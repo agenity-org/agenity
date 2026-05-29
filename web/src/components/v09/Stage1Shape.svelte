@@ -123,7 +123,7 @@
   {:else if error}
     <p class="err">Failed to load templates: {error}</p>
   {:else}
-    <div class="grid" role="radiogroup" aria-label="template">
+    <div class="template-grid" role="radiogroup" aria-label="template">
       {#each templates as t}
         <button
           type="button"
@@ -180,7 +180,7 @@
   .stage1 { padding: 1.25rem; }
   h2 { font-size: 1.15rem; margin: 0 0 0.35rem 0; }
   .lead { color: var(--fg-muted, #888); margin: 0 0 1.2rem 0; font-size: 0.9rem; }
-  .grid {
+  .template-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0.7rem;

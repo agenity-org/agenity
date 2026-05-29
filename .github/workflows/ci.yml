@@ -46,4 +46,11 @@ jobs:
         # time and the freshly-refreshed token never reaches the agent.
         # See scripts/test-agent-entrypoint.sh + issue #254.
         run: bash scripts/test-agent-entrypoint.sh
+      - name: Grid-class collision guard (#228)
+        # No Svelte component may use class="grid" — that's the
+        # unscoped marketing-page utility from global.css:25 and
+        # caused the #226 thead/tbody-as-grid-columns bug when
+        # applied to a <table>. See scripts/check-grid-class-collision.sh
+        # + issue #228 for the rename pattern.
+        run: bash scripts/check-grid-class-collision.sh
       - run: go test ./... -race -count=1

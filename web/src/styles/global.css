@@ -22,6 +22,14 @@ body {
 .cta { display: inline-block; padding: 1rem 2rem; background: var(--accent); color: #000; font-weight: 700; border-radius: 6px; text-decoration: none; }
 .cta.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); margin-left: 1rem; }
 .section { padding: 4rem 0; border-top: 1px solid var(--border); }
+/* #228 — `.grid` is the MARKETING-PAGE 3-column layout utility, used
+   by web/src/pages/{index,docs,download}.astro to lay out hero cards
+   etc. Svelte components MUST NOT opt in to this class — they should
+   declare scoped layout in their own <style> block (e.g.
+   .skills-grid, .role-grid, .template-grid). scripts/check-grid-class-collision.sh
+   enforces this at CI time: <table class="grid"> is a hard error
+   (the #226 bug shape), and `class="grid"` in any .svelte file
+   fails the check. See issue #228 for the sweep that landed this. */
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; }
 .card { background: #111; padding: 2rem; border-radius: 8px; border: 1px solid var(--border); }
 .card h3 { color: var(--accent); margin-bottom: 0.75rem; }

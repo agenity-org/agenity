@@ -37,7 +37,7 @@
   {#each [0.25, 0.5, 0.75, 1.0] as ratio (ratio)}
     <polygon
       points={polygon(axes.map((_, i) => gridPoint(i, axes.length, ratio)))}
-      class="grid"
+      class="spider-grid"
       class:outer={ratio === 1.0}
     />
   {/each}
@@ -79,8 +79,8 @@
 
 <style>
   .spider { display: block; width: 100%; height: auto; }
-  .grid { fill: none; stroke: var(--border, #1e1e1e); stroke-width: 1; }
-  .grid.outer { stroke: var(--border-strong, #2a2a2a); }
+  .spider-grid { fill: none; stroke: var(--border, #1e1e1e); stroke-width: 1; }
+  .spider-grid.outer { stroke: var(--border-strong, #2a2a2a); }
   .spoke { stroke: var(--border, #1e1e1e); stroke-width: 1; }
   .data { fill: var(--accent, #ffa500); fill-opacity: 0.18; stroke: var(--accent, #ffa500); stroke-width: 1.6; }
   .data-dot { fill: var(--accent, #ffa500); }

@@ -107,7 +107,7 @@
         {/if}
       {:else if tab === 'settings'}
         <p class="hint">Rename the team or change its topology. Deletion only works if no live agents are still rooted in this team (move or stop them first).</p>
-        <div class="grid">
+        <div class="settings-grid">
           <label>Team name<input bind:value={renameDraft} /></label>
           <label>Topology
             <select bind:value={topologyDraft}>
@@ -154,7 +154,7 @@
   td.empty { color: var(--fg-faint); text-align: center; padding: 1rem; }
   textarea { width: 100%; padding: 0.55rem 0.7rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; resize: vertical; box-sizing: border-box; }
   pre.canon { background: var(--bg-input); padding: 0.7rem; border-radius: 6px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; max-height: 50vh; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.7rem; }
+  .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.7rem; }
   label { display: block; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   input, select { width: 100%; padding: 0.4rem 0.55rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-family: ui-monospace, monospace; margin-top: 0.15rem; box-sizing: border-box; }
   .row { margin-top: 0.9rem; display: flex; gap: 0.55rem; align-items: center; }
