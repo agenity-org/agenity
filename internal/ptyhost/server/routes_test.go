@@ -30,11 +30,11 @@ import (
 
 func resetAgentCatalogCache() { agentcatalog.ResetCache() }
 
-// pointSovereignShellAtTempDir writes a JSON override that re-points
+// pointRawShellAtTempDir writes a JSON override that re-points
 // the `sovereign-shell` slug's DefaultCwd to a temp directory (the
 // builtin DefaultCwd is /workspace, which doesn't exist on the test
 // host). Returns nothing — relies on t.Setenv + t.Cleanup to flush.
-func pointSovereignShellAtTempDir(t *testing.T) {
+func pointRawShellAtTempDir(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	override := []map[string]any{{
@@ -192,7 +192,7 @@ func postSessionsJSON(t *testing.T, srvURL string, body any) (*http.Response, []
 	return resp, respBody[:n]
 }
 
-func TestCreate_Agent_HappyPath_SovereignShell(t *testing.T) {
+func TestCreate_Agent_HappyPath_RawShell(t *testing.T) {
 	mgr := session.NewManager()
 	defer mgr.Shutdown()
 	h := New(mgr)
@@ -359,7 +359,7 @@ func TestCreate_BackwardCompatCommand_StillWorks(t *testing.T) {
 // path is covered by the smoke test in the design spec §3.
 
 func TestLazySpawn_SandboxDefaultAgent_MintsSession(t *testing.T) {
-	pointSovereignShellAtTempDir(t)
+	pointRawShellAtTempDir(t)
 	t.Setenv("SANDBOX_DEFAULT_AGENT", "sovereign-shell")
 	mgr := session.NewManager()
 	defer mgr.Shutdown()
@@ -383,7 +383,7 @@ func TestLazySpawn_SandboxDefaultAgent_MintsSession(t *testing.T) {
 }
 
 func TestLazySpawn_QueryAgentOverridesEnv(t *testing.T) {
-	pointSovereignShellAtTempDir(t)
+	pointRawShellAtTempDir(t)
 	t.Setenv("SANDBOX_DEFAULT_AGENT", "claude-code") // would fail missing-env
 	t.Setenv("LLM_GATEWAY_URL", "")
 	mgr := session.NewManager()

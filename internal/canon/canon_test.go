@@ -92,7 +92,7 @@ func TestPersistAcrossReopen(t *testing.T) {
 }
 
 // Banned-vocab guard — canon package source files must never contain
-// "shepherd" / "Stack Trio" / "RACI" / ~/.claude/CLAUDE.md mount.
+// the historical banned-vocab list / ~/.claude/CLAUDE.md mount.
 // We test by re-reading the package source dir at test time.
 func TestNoBannedVocabInCanon(t *testing.T) {
 	// This test is intentionally trivial — the actual scan runs in

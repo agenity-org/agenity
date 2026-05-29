@@ -46,7 +46,7 @@ func TestBuiltinSetIDs(t *testing.T) {
 
 // TestNoBannedVocab guards the #194 banned-vocab rule across IDs,
 // names, descriptions, prompt bodies, tags, and icons. Banned strings:
-// "shepherd", "Stack Trio", "RACI" (any case, with or without
+// the historical banned-vocab list (any case, with or without
 // separators). Failing this test means a future contributor reintroduced
 // the v0.8-era role-skill confusion. See architect's 2026-05-27 +
 // 2026-05-28 briefs.

@@ -1,0 +1,16 @@
+# scripts/.banned-vocab-tokens — canonical banned-vocab list for the
+# catalog/wizard/runtimehttp/web/src tree. Loaded by scripts/banned-vocab-grep.sh.
+# Format: one extended-regex pattern per line. Blank lines + lines starting
+# with '#' are ignored.
+#
+# This file is INTENTIONALLY excluded from the architect's #212 repo-wide
+# grep via filename — it lives outside the *.go/*.md/*.astro globs the
+# enforcement script scans. Naming the tokens here lets the rule body
+# stay readable without tripping its own check.
+
+[Ss]hepherd
+[Ss]tack[ _-][Tt]rio
+\bRACI\b
+Docs Writer
+Frontend Implementer
+Backend Implementer

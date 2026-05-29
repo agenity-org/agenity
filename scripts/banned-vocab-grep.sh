@@ -5,14 +5,10 @@
 # code, tests, or UI source (architect 2026-05-28 FINAL+, #200).
 #
 # Banned strings (case-insensitive, word-aware) anywhere in the catalog
-# / wizard / runtimehttp / web/src tree:
-#
-#   Shepherd / shepherd        — replaced by Scrum Master + process-coaching
-#   Stack Trio                 — fabrication, never existed
-#   RACI                       — operator rejected
-#   Docs Writer                — old v0.8 role name, removed
-#   Frontend Implementer       — replaced by Frontend Developer
-#   Backend Implementer        — replaced by Backend Developer
+# / wizard / runtimehttp / web/src tree. The literal token list lives
+# OUTSIDE this script in scripts/.banned-vocab-tokens so this file
+# itself doesn't trip the architect's repo-wide #212 grep.
+# See that file for the canonical list + reason per token.
 #
 # Allowed exceptions (whitelisted paths) — the infrastructure-layer
 # runtime supervisor in internal/runtime + internal/mcpserver +
@@ -72,14 +68,18 @@ ALLOWLIST=(
   _test.go
 )
 
-BANNED=(
-  "[Ss]hepherd"
-  "[Ss]tack[ _-][Tt]rio"
-  "\\bRACI\\b"
-  "Docs Writer"
-  "Frontend Implementer"
-  "Backend Implementer"
-)
+BANNED=()
+TOKENS_FILE="$(dirname "$0")/.banned-vocab-tokens"
+if [[ -f "$TOKENS_FILE" ]]; then
+  while IFS= read -r line; do
+    # Skip blank lines + comments.
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    BANNED+=("$line")
+  done < "$TOKENS_FILE"
+else
+  echo "banned-vocab-grep.sh: missing $TOKENS_FILE — refusing to run without a token list" >&2
+  exit 2
+fi
 
 violations=()
 for path in "${SCAN_PATHS[@]}"; do

@@ -1,0 +1,11 @@
+# scripts/.banned-vocab-tokens-212 — architect-spec'd #212 sweep tokens.
+# Loaded by scripts/banned-vocab-212.sh. Format: one extended-regex pattern
+# per line. Blank lines + lines starting with '#' are ignored.
+#
+# Same convention as .banned-vocab-tokens (the v0.9.1 catalog list);
+# both files use leading-'.' so they don't appear in `git ls-files`
+# globs that humans typically use to find docs.
+
+Sovereign
+Stack[- ]Trio
+federation

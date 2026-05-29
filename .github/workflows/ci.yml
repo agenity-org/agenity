@@ -25,4 +25,10 @@ jobs:
       - run: go mod download
       - run: go vet ./...
       - run: go build ./...
+      - name: Banned-vocab sweep guard (#212)
+        # Architect-spec'd guard from #212. Tokens live in
+        # scripts/.banned-vocab-tokens-212; the runner script reads them
+        # without naming them in this workflow file (so the workflow
+        # itself doesn't trip the very check it enforces).
+        run: bash scripts/banned-vocab-212.sh
       - run: go test ./... -race -count=1

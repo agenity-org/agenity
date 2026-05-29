@@ -1,6 +1,6 @@
 # bp-chepherd default values
 #
-# This chart deploys chepherd as an OpenOva Blueprint into a Sovereign.
+# This chart deploys chepherd as an OpenOva Blueprint into an OpenOva instance.
 # All knobs are env-vars per the InviolablePrinciple #4 (no hardcoded
 # defaults in code; configuration flows through env into the binary).
 #
@@ -23,9 +23,9 @@ runtime:
 #
 #   minimal     - hobby Podman             (spawner=podman-sidecar, auth=local)
 #   standard    - generic K8s              (spawner=operator,       auth=local)
-#   enterprise  - OpenOva Sovereign         (spawner=operator,       auth=oidc)
+#   enterprise  - OpenOvan OpenOva instance         (spawner=operator,       auth=oidc)
 #
-# When deployed via this chart onto a Sovereign, "standard" is the
+# When deployed via this chart onto an OpenOva instance, "standard" is the
 # correct default; "enterprise" turns on Keycloak OIDC.
 profile:
   name: standard
@@ -45,7 +45,7 @@ service:
 # HTTPRoute (Cilium Gateway) — operator-visible at console.<fqdn>/apps/bp-chepherd
 httpRoute:
   enabled: true
-  hostnames: []         # default: discovered from Sovereign FQDN
+  hostnames: []         # default: discovered from OpenOva instance FQDN
   parentRef:
     name: catalyst-gateway
     namespace: catalyst-system
@@ -79,7 +79,7 @@ openovaMCP:
     name: newapi-bp-newapi-token-signing-key
     namespace: catalyst-system
 
-# Auth: Sovereign session cookie → Cilium Gateway validates → X-Catalyst-User
+# Auth: OpenOva instance session cookie → Cilium Gateway validates → X-Catalyst-User
 # header injected → chepherd's WS upgrade reads header.
 auth:
   enabled: true

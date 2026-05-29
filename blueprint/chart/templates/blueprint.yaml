@@ -1,5 +1,5 @@
 {{- if .Values.consoleUI.enabled }}
-# Blueprint CR — registers chepherd in the Sovereign console.
+# Blueprint CR — registers chepherd in the OpenOva instance console.
 # Depends on openova Wave 5.69 (consoleUI.sidebarEntry field on
 # Blueprint CRD). When that field lands, the console sidebar auto-adds
 # the "Chepherd" entry pointing at /apps/bp-chepherd/dashboard.

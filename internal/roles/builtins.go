@@ -14,7 +14,7 @@ import "time"
 //   quality: qa-engineer / security-engineer / code-reviewer
 //
 // Banned vocabulary check: this file ABSOLUTELY MUST NOT contain
-// "shepherd" / "Stack Trio" / "RACI" — enforced by
+// the historical banned-vocab list — enforced by
 // TestNoBannedVocabAnywhere in roles_test.go.
 func builtinSet() []Role {
 	now := time.Now().UTC()

@@ -20,7 +20,7 @@
 // Hidden builtins (catalog only; admin can flip via /admin/templates):
 //   solo-supervised · council · multi-team
 //
-// Banned vocabulary: NO "shepherd" / "Stack Trio" / "RACI" — enforced
+// Banned vocabulary: NO the historical banned-vocab list — enforced
 // by TestNoBannedVocab in registry_test.go.
 package templateregistry
 
