@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/daemon"
+	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/chepherd/chepherd/internal/daemon/rc"
 	"github.com/chepherd/chepherd/internal/daemon/rc/envelope"
 	stylepkg "github.com/chepherd/chepherd/internal/style"
@@ -47,11 +47,11 @@ func init() {
 }
 
 func runShadow(cmd *cobra.Command, args []string) error {
-	cfg := daemon.DefaultJudgeConfig()
+	cfg := shepherd.DefaultJudgeConfig()
 	if cfg.SystemPromptPath == "" {
 		return fmt.Errorf("could not locate judge.md — set ~/.config/chepherd/judge.md")
 	}
-	stateDir := daemon.DefaultStateDir()
+	stateDir := shepherd.DefaultStateDir()
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
@@ -105,8 +105,8 @@ func startRCListener(ctx context.Context) *rc.Listener {
 	return l
 }
 
-func tickOnce(cfg daemon.JudgeConfig, stateDir, only string, listener *rc.Listener) error {
-	sessions, err := daemon.DiscoverSessions()
+func tickOnce(cfg shepherd.JudgeConfig, stateDir, only string, listener *rc.Listener) error {
+	sessions, err := shepherd.DiscoverSessions()
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
 	}
@@ -123,7 +123,7 @@ func tickOnce(cfg daemon.JudgeConfig, stateDir, only string, listener *rc.Listen
 
 	now := time.Now().UTC()
 	for _, s := range sessions {
-		state, err := daemon.LoadState(stateDir, s.UUID)
+		state, err := shepherd.LoadState(stateDir, s.UUID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "load state %s: %v\n", s.UUID, err)
 			continue
@@ -135,7 +135,7 @@ func tickOnce(cfg daemon.JudgeConfig, stateDir, only string, listener *rc.Listen
 				continue
 			}
 		}
-		sig, err := daemon.BuildSignals(s, state)
+		sig, err := shepherd.BuildSignals(s, state)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  %s signals: %v\n", s.TmuxName, err)
 			continue
@@ -145,18 +145,18 @@ func tickOnce(cfg daemon.JudgeConfig, stateDir, only string, listener *rc.Listen
 			continue
 		}
 
-		userPrompt := daemon.FormatSignalsForPrompt(s, sig)
-		v, err := daemon.CallJudge(cfg, userPrompt)
+		userPrompt := shepherd.FormatSignalsForPrompt(s, sig)
+		v, err := shepherd.CallJudge(cfg, userPrompt)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  %s judge: %v\n", s.TmuxName, err)
 			continue
 		}
 
-		band, intervalMin := daemon.ComputeBand(state, sig, v)
+		band, intervalMin := shepherd.ComputeBand(state, sig, v)
 		state["trust_band"] = string(band)
 		state["next_tick_at"] = now.Add(time.Duration(intervalMin) * time.Minute).Format(time.RFC3339)
-		daemon.RecordVerdictToState(state, sig, v)
-		if err := daemon.SaveState(stateDir, s.UUID, state); err != nil {
+		shepherd.RecordVerdictToState(state, sig, v)
+		if err := shepherd.SaveState(stateDir, s.UUID, state); err != nil {
 			fmt.Fprintf(os.Stderr, "  %s save: %v\n", s.TmuxName, err)
 		}
 
@@ -196,7 +196,7 @@ func tickOnce(cfg daemon.JudgeConfig, stateDir, only string, listener *rc.Listen
 	return nil
 }
 
-func appendShadowLog(tmux string, v *daemon.Verdict, band daemon.TrustBand, intervalMin int) {
+func appendShadowLog(tmux string, v *shepherd.Verdict, band shepherd.TrustBand, intervalMin int) {
 	home, _ := os.UserHomeDir()
 	path := filepath.Join(home, ".local", "state", "chepherd-shadow", "chepherd.log")
 	_ = os.MkdirAll(filepath.Dir(path), 0o700)

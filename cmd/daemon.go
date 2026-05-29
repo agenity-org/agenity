@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/daemon"
+	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/chepherd/chepherd/internal/daemon/rc"
 	"github.com/chepherd/chepherd/internal/daemon/rc/envelope"
 	stylepkg "github.com/chepherd/chepherd/internal/style"
@@ -60,7 +60,7 @@ func init() {
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
-	cfg := daemon.DefaultJudgeConfig()
+	cfg := shepherd.DefaultJudgeConfig()
 	if cfg.SystemPromptPath == "" {
 		return fmt.Errorf("could not locate judge.md — set ~/.config/chepherd/judge.md")
 	}
@@ -92,7 +92,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 }
 
 // daemonStateDir is the canonical state directory for the LIVE Go
-// daemon. Writes to the SAME path the TUI dashboard reads from
+// shepherd. Writes to the SAME path the TUI dashboard reads from
 // (~/.local/state/chepherd/sessions/) so the dashboard sees fresh
 // state without per-deployment configuration. Was chepherd-go/ during
 // the dual-daemon cutover window; consolidated post-cutover.
@@ -103,8 +103,8 @@ func daemonStateDir() string {
 
 // daemonTickOnce is the same shape as shadow.tickOnce but ACTUALLY
 // injects coach/intervene messages into the target tmux pane.
-func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listener) error {
-	sessions, err := daemon.DiscoverSessions()
+func daemonTickOnce(cfg shepherd.JudgeConfig, stateDir string, listener *rc.Listener) error {
+	sessions, err := shepherd.DiscoverSessions()
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
 	}
@@ -122,7 +122,7 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 			fmt.Printf("  %s paused (sentinel %s.paused); skipping\n", s.TmuxName, s.UUID)
 			continue
 		}
-		state, err := daemon.LoadState(stateDir, s.UUID)
+		state, err := shepherd.LoadState(stateDir, s.UUID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "load state %s: %v\n", s.UUID, err)
 			continue
@@ -133,7 +133,7 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 				continue
 			}
 		}
-		sig, err := daemon.BuildSignals(s, state)
+		sig, err := shepherd.BuildSignals(s, state)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  %s signals: %v\n", s.TmuxName, err)
 			continue
@@ -143,20 +143,20 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 			continue
 		}
 
-		userPrompt := daemon.FormatSignalsForPrompt(s, sig)
-		v, err := daemon.CallJudge(cfg, userPrompt)
+		userPrompt := shepherd.FormatSignalsForPrompt(s, sig)
+		v, err := shepherd.CallJudge(cfg, userPrompt)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  %s judge: %v\n", s.TmuxName, err)
 			continue
 		}
 
-		band, intervalMin := daemon.ComputeBand(state, sig, v)
+		band, intervalMin := shepherd.ComputeBand(state, sig, v)
 		state["trust_band"] = string(band)
 		state["next_tick_at"] = now.Add(time.Duration(intervalMin) * time.Minute).Format(time.RFC3339)
 		state["tmux_name"] = s.TmuxName
 		state["repo"] = s.Repo
-		state["auth_lapsed"] = daemon.CheckAuthLapsed(s.TmuxName)
-		daemon.RecordVerdictToState(state, sig, v)
+		state["auth_lapsed"] = shepherd.CheckAuthLapsed(s.TmuxName)
+		shepherd.RecordVerdictToState(state, sig, v)
 
 		injected := false
 		if v.Verdict == "coach" || v.Verdict == "intervene" {
@@ -165,7 +165,7 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 			cooledDown := true
 			if lastIA, ok := state["last_intervention_at"].(string); ok {
 				if dt, err := time.Parse(time.RFC3339, lastIA); err == nil {
-					if time.Since(dt) < daemon.MinInjectInterval {
+					if time.Since(dt) < shepherd.MinInjectInterval {
 						cooledDown = false
 					}
 				}
@@ -176,16 +176,16 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 					s.TmuxName, v.Verdict)
 			case !cooledDown:
 				fmt.Printf("  %s deferred — min-interval cooldown (last inject < %v ago)\n",
-					s.TmuxName, daemon.MinInjectInterval)
-			case daemon.HasRecentInterruptionEvidence(s.JSONLPath):
+					s.TmuxName, shepherd.MinInjectInterval)
+			case shepherd.HasRecentInterruptionEvidence(s.JSONLPath):
 				// Past inject got merged into user input — evidence we're
 				// causing harm. Back off hard.
 				fmt.Printf("  %s deferred — prior injection contaminated user input; backing off\n",
 					s.TmuxName)
-			case daemon.IsHumanEngaged(s.JSONLPath):
+			case shepherd.IsHumanEngaged(s.JSONLPath):
 				fmt.Printf("  %s deferred — human engaged in conversation (last user msg < %v ago)\n",
-					s.TmuxName, daemon.EngagementWindow)
-			case daemon.IsUserTyping(s.TmuxName):
+					s.TmuxName, shepherd.EngagementWindow)
+			case shepherd.IsUserTyping(s.TmuxName):
 				fmt.Printf("  %s deferred — user is typing\n", s.TmuxName)
 			default:
 				if err := tmuxPaste(s.TmuxName, v.Message); err != nil {
@@ -199,7 +199,7 @@ func daemonTickOnce(cfg daemon.JudgeConfig, stateDir string, listener *rc.Listen
 			}
 		}
 
-		if err := daemon.SaveState(stateDir, s.UUID, state); err != nil {
+		if err := shepherd.SaveState(stateDir, s.UUID, state); err != nil {
 			fmt.Fprintf(os.Stderr, "  %s save: %v\n", s.TmuxName, err)
 		}
 
@@ -267,7 +267,7 @@ func tmuxPaste(tmuxName, message string) error {
 	return nil
 }
 
-func appendLiveLog(tmux string, v *daemon.Verdict, band daemon.TrustBand, intervalMin int, injected bool) {
+func appendLiveLog(tmux string, v *shepherd.Verdict, band shepherd.TrustBand, intervalMin int, injected bool) {
 	path := filepath.Join(daemonStateDir(), "chepherd.log")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

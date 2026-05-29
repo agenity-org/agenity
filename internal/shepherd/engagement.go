@@ -14,7 +14,7 @@
 //     JSONL is unavailable. Sleeps 800ms.
 //
 // Returns true = "human engaged, don't intervene now".
-package daemon
+package shepherd
 
 import (
 	"bufio"
