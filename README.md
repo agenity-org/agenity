@@ -109,6 +109,34 @@ Steps 2 (spawn), 5 (≥60s shepherd-tick wait), 7 (Playwright dashboard
 screenshot), 8 (epic comment), and 9 (4-eyes sub-agent review) are operator-driven.
 See `scripts/v092-e2e-walk.sh` for the exact contract.
 
+### Anthropic credential resolution for spawned agents (#218)
+
+chepherd spawns each agent (worker, shepherd) as a `claude-code` PTY child
+inside a podman sidecar container. The claude binary inside the container
+reads its credentials in this priority order at spawn time:
+
+1. **Per-session vault entry** — when `SpawnSpec.ClaudeTokenID` references a
+   specific `claude-oauth` credential in chepherd's vault.
+2. **Most-recently-updated vault `claude-oauth`** — single shared credential
+   used across all agent spawns (R4 default).
+3. **Host fallback** — `~/.claude/.credentials.json` on the chepherd-run
+   host. Preserves the v0.5-v0.7 "you already ran `claude login`, it just
+   works" behavior.
+
+The credential gets materialized into a per-spawn `/run/secrets/claude-credentials`
+bind-mount; the chepherd-agent image entrypoint links it to
+`~/.claude/.credentials.json` inside the container. A short-lived access
+token is auto-refreshed via Anthropic's OAuth `/token` endpoint at spawn
+time and the new pair is written back to the vault. If NONE of the three
+resolve, the spawned claude-code hits the OAuth login screen, idles, and
+its PTY eventually closes — `scripts/v092-e2e-walk.sh` fails fast at the
+preflight stage with a clear remediation in that case.
+
+The `TestV092Walk_ShepherdPTYAliveAtT30s` integration test in
+`internal/e2e/` is the regression gate: spawn a shepherd, wait 30s,
+SendMessage — assert a real Task result (NOT `error.code=-32603 "session:
+closed"`).
+
 ## Roadmap
 
 - **v0.1** (this repo, current) — Go rewrite of the working Python supervisor + `chepherd status` text output that reads live state
