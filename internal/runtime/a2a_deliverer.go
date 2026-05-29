@@ -14,11 +14,15 @@ import (
 // A2ADeliverer implements a2a.Deliverer by routing A2A SendMessage
 // payloads into a target chepherd session's PTY (interactive mode).
 //
-// A2A spec binding for chepherd interactive mode (per architect
-// 2026-05-29 scope-lock):
+// A2A spec binding for chepherd interactive mode:
 //
-//   - msg.ContextID = chepherd session ID (the long-running PTY-backed
-//     conversation handle). REQUIRED — caller must provide.
+//   - msg.ContextID = the chepherd session — either the long-form
+//     session ID (e.g. "shepherd-1780057429428571338" as returned by
+//     /api/v1/sessions) OR the short @-name ("shepherd"). Resolution
+//     order is byID first, byName as fallback (cf.
+//     Runtime.GetByContextID). REQUIRED — caller must provide one.
+//     The "accepts either" shape was locked after PR #216's walk
+//     surfaced the byName-only limitation as a -32603 error envelope.
 //   - msg.TaskID = per-Message discrete unit of work. Optional; if
 //     empty, server auto-generates a UUIDv7. Multiple in-flight tasks
 //     CAN share a ContextID per A2A v1.0 spec.
@@ -56,7 +60,13 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	if msg.ContextID == "" {
 		return nil, errors.New("A2ADeliverer: msg.ContextID required (chepherd session ID)")
 	}
-	sess, info := d.rt.Get(msg.ContextID)
+	// Accept ContextID as EITHER the session ID OR the @-name (#217).
+	// Runtime.GetByContextID tries r.info[ContextID] first (full ID),
+	// then r.byName[ContextID] (short name). Pre-#217 this was a
+	// byName-only Get which made /api/v1/sessions-returned IDs error
+	// out with -32603 even though those IDs are the canonical chepherd
+	// session handle.
+	sess, info := d.rt.GetByContextID(msg.ContextID)
 	if info == nil || sess == nil {
 		return d.failedTask(msg, "target session not found"),
 			fmt.Errorf("a2a.SendMessage: target session %q not found", msg.ContextID)
