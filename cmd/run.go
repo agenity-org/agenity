@@ -18,6 +18,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
+	"github.com/chepherd/chepherd/internal/persistence/sqlite"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
@@ -105,7 +107,17 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  profile:   %s (spawner=%s auth=%s storage=%s tls=%s)\n\n",
 		profileNameOrDefault(prof.Name), prof.Spawner, prof.AuthMode, prof.StorageType, prof.TLSMode)
 
-	rt, err := runtime.New(stateDir)
+	// v0.9.2 (#208): open SQLite persistence.Store + thread into Runtime so
+	// the agent registry (and incrementally other state) is read/written
+	// through the Repository contract from PR #209 rather than file-on-disk.
+	// Store stays open for the lifetime of the chepherd process.
+	persistDB := filepath.Join(stateDir, "chepherd.db")
+	store, err := sqlite.NewStore(context.Background(), persistDB)
+	if err != nil {
+		return fmt.Errorf("runtime: open persistence store %q: %w", persistDB, err)
+	}
+	defer func() { _ = store.Close() }()
+	rt, err := runtime.NewWithStore(stateDir, store)
 	if err != nil {
 		return fmt.Errorf("runtime: %w", err)
 	}
