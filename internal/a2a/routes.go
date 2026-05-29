@@ -1,6 +1,11 @@
 package a2a
 
-import "net/http"
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+)
 
 // RegisterRoutes wires the A2A scaffold's two HTTP endpoints onto
 // the given mux:
@@ -8,11 +13,99 @@ import "net/http"
 //   - GET /.well-known/agent-card.json → ServeAgentCard
 //   - POST /jsonrpc                    → router.ServeHTTP
 //
-// Callers (runner-as-process / runner-as-pod) provide both their
-// AgentCard + Router and pass the resulting mux to http.Serve.
+// When `authValidator` is non-nil, every POST /jsonrpc request is
+// gated by Bearer-token validation: missing/invalid token returns
+// HTTP 401 + JSON-RPC error code -32001 ("authentication required").
+// Pass nil to skip enforcement (back-compat for dev mode).
 //
-// Refs #208.
-func RegisterRoutes(mux *http.ServeMux, card *AgentCard, router *Router) {
+// Refs #208 #225 row B1.
+func RegisterRoutes(mux *http.ServeMux, card *AgentCard, router *Router, authValidator TokenValidator) {
 	mux.Handle(AgentCardPath, ServeAgentCard(card))
-	mux.Handle("/jsonrpc", router)
+	if authValidator == nil {
+		mux.Handle("/jsonrpc", router)
+		return
+	}
+	mux.Handle("/jsonrpc", AuthMiddleware(router, authValidator))
+}
+
+// TokenValidator is the minimal seam between RegisterRoutes and an
+// AuthProvider. Defined here so internal/a2a doesn't import
+// internal/auth (cyclic dep — auth depends on persistence which
+// indirectly references a2a via the runtime layer). The caller wraps
+// its AuthProvider.Validate as a TokenValidator before passing in.
+type TokenValidator interface {
+	Validate(ctx context.Context, token string) (subject string, err error)
+}
+
+// AuthMiddleware enforces Bearer-token presence + validity on every
+// request before the wrapped handler runs. On failure it writes:
+//
+//	HTTP/1.1 401 Unauthorized
+//	Content-Type: application/json
+//	{"jsonrpc":"2.0","error":{"code":-32001,"message":"authentication required"}}
+//
+// per the A2A v1.0 spec's auth-failure shape.
+//
+// Refs #225 row B1.
+func AuthMiddleware(next http.Handler, validator TokenValidator) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		token := extractBearer(req)
+		if token == "" {
+			writeAuthError(w, "authentication required: missing or malformed Authorization header (expected 'Bearer <token>')")
+			return
+		}
+		subject, err := validator.Validate(req.Context(), token)
+		if err != nil || subject == "" {
+			msg := "authentication failed"
+			if err != nil {
+				msg = "authentication failed: " + err.Error()
+			}
+			writeAuthError(w, msg)
+			return
+		}
+		// Attach subject to request context so downstream handlers (the
+		// JSON-RPC method bodies, later RBAC checks) can read it without
+		// re-parsing the Authorization header.
+		ctx := context.WithValue(req.Context(), authSubjectCtxKey{}, subject)
+		next.ServeHTTP(w, req.WithContext(ctx))
+	})
+}
+
+type authSubjectCtxKey struct{}
+
+// SubjectFromContext returns the authenticated subject set by
+// AuthMiddleware, or empty string when the request was not
+// authenticated (dev mode / TokenValidator nil at registration).
+func SubjectFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(authSubjectCtxKey{}).(string)
+	return v
+}
+
+func extractBearer(req *http.Request) string {
+	h := req.Header.Get("Authorization")
+	if h == "" {
+		return ""
+	}
+	parts := strings.SplitN(h, " ", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	if !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func writeAuthError(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("WWW-Authenticate", `Bearer realm="chepherd-a2a"`)
+	w.WriteHeader(http.StatusUnauthorized)
+	resp := JSONRPCResponse{
+		JSONRPC: "2.0",
+		Error: &JSONRPCError{
+			Code:    -32001,
+			Message: msg,
+		},
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
