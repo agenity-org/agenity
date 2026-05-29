@@ -1,26 +1,35 @@
 <!--
-  SpawnWizardV9 — 5-stage v0.9 wizard (operator restructure 2026-05-29).
+  SpawnWizardV9 — 6-stage v0.9 wizard (#237 — operator-driven restructure
+  2026-05-30 inserting Agent Types & Models between Skills and Accounts).
 
-  Stages:
-    1 Shape    — Stage1Shape    template gallery
-    2 Repo     — Stage2Repo     where the code lives
-    3 Skills   — Stage3Skills   per-team role × skill matrix override
-    4 Accounts — Stage4Accounts per-agent-type vault picker + Connect-Claude
-    5 Launch   — Stage5Launch   spawn
+  Stages (filename stable; the number is metadata in this composer):
+    1 Shape         — Stage1Shape      template gallery
+    2 Repo          — Stage2Repo       where the code lives
+    3 Skills        — Stage3Skills     per-team role × skill matrix override
+    4 Agent Types   — Stage4AgentTypes per-agent agent_type + model picker (NEW #237)
+    5 Accounts      — Stage4Accounts   per-agent-type vault picker + Connect-Claude
+                                       (file name stable; stage number bumped 4 → 5)
+    6 Launch        — Stage5Launch     spawn (file name stable; stage number 5 → 6)
 
   State threaded between stages:
     templateId / template / repo / teamName  (1+2)
     agents     — the slot roster (label/role_id) carried through
     skillOverrides[roleID] → string[] of skill IDs (set in Stage 3)
                   empty for a role = use that role's global default_skills
-    typeAccounts[agentType] → vault entry id  (set in Stage 4)
-    agentAccountOverrides[agentLabel] → vault entry id  (Stage 4 advanced)
+    agentTypeOverrides[agentLabel] → agent type slug (Stage 4 — NEW)
+    agentModelOverrides[agentLabel] → model name (Stage 4 — NEW)
+    typeAccounts[agentType] → vault entry id  (set in Stage 5 Accounts)
+    agentAccountOverrides[agentLabel] → vault entry id  (Stage 5 advanced)
 
   Hard rules:
     - Per-team override semantics: Stage 3 edits NEVER mutate the global
       role catalog. Only the dashboard 🎮 roles widget does that.
-    - Launch is blocked until every agent has a resolvable account
-      (typeAccounts[a.agent_type] OR agentAccountOverrides[a.label]).
+    - Launch is blocked until every agent has a resolvable account.
+    - Per-agent type-changes in Stage 4 do NOT auto-clear typeAccounts
+      (architect call 2026-05-30): if the existing type-level cred matches
+      the new type's compatibility map it stays valid; if not, the
+      per-agent slot shows empty and operator gets the "Next disabled"
+      signal naturally.
 
   Props:
     onclose(): close handler from Workspace
@@ -30,6 +39,7 @@
   import Stage1Shape from './Stage1Shape.svelte';
   import Stage2Repo from './Stage2Repo.svelte';
   import Stage3Skills from './Stage3Skills.svelte';
+  import Stage4AgentTypes from './Stage4AgentTypes.svelte';
   import Stage4Accounts from './Stage4Accounts.svelte';
   import Stage5Launch from './Stage5Launch.svelte';
 
@@ -47,18 +57,32 @@
   // "use the role's global default_skills at Launch time".
   let skillOverrides = $state({});
 
-  // Stage 4 output. typeAccounts is the per-agent-type default;
-  // agentAccountOverrides is the per-individual-agent override
-  // (advanced mode in Stage 4).
+  // Stage 4 (NEW #237) output. Per-agent override of agent_type +
+  // model. Both default to template values; operator can override
+  // per-agent in Stage 4.
+  let agentTypeOverrides = $state({});
+  let agentModelOverrides = $state({});
+
+  // Stage 5 Accounts output. typeAccounts is the per-agent-type
+  // default; agentAccountOverrides is the per-individual-agent
+  // override (advanced mode in Stage 5).
   let typeAccounts = $state({});
   let agentAccountOverrides = $state({});
 
-  function next() { if (current < 5) current += 1; }
+  function next() { if (current < 6) current += 1; }
   function back() { if (current > 1) current -= 1; }
   function jumpTo(step) { if (step >= 1 && step < current) current = step; }
 
+  // #237 — `agentTypeFor` honors Stage 4's per-agent override before
+  // falling back to the template's `agent_type`. Used by Stage 5
+  // Accounts to filter vault entries by the right type, and by
+  // Stage 6 Launch to populate the spawn POST body.
+  function agentTypeFor(a) {
+    return agentTypeOverrides[a.label] || a.agent_type || 'claude-code';
+  }
+
   function accountFor(a) {
-    return agentAccountOverrides[a.label] || typeAccounts[a.agent_type || 'claude-code'] || '';
+    return agentAccountOverrides[a.label] || typeAccounts[agentTypeFor(a)] || '';
   }
 
   const allAgentsHaveAccount = $derived.by(() =>
@@ -70,8 +94,9 @@
       case 1: return !!templateId;
       case 2: return !!repo;
       case 3: return agents.length > 0 && !!teamName;
-      case 4: return allAgentsHaveAccount;  // block Launch until all accounts set
-      case 5: return true;
+      case 4: return agents.length > 0;       // Agent Types & Models — defaults satisfy
+      case 5: return allAgentsHaveAccount;    // block Launch until all accounts set
+      case 6: return true;
       default: return false;
     }
   });
@@ -90,6 +115,7 @@
     { label: 'Shape' },
     { label: 'Repo' },
     { label: 'Skills' },
+    { label: 'Agents' },
     { label: 'Accounts' },
     { label: 'Launch' },
   ];
@@ -123,14 +149,21 @@
         bind:skillOverrides
       />
     {:else if current === 4}
+      <Stage4AgentTypes
+        agents={agents}
+        bind:agentTypeOverrides
+        bind:agentModelOverrides
+      />
+    {:else if current === 5}
       <Stage4Accounts
         agents={agents}
+        agentTypeOverrides={agentTypeOverrides}
         bind:typeAccounts
         bind:agentAccountOverrides
       />
-    {:else if current === 5}
+    {:else if current === 6}
       <Stage5Launch
-        selection={{ template, repo, members: agents, teamName, skillOverrides, typeAccounts, agentAccountOverrides }}
+        selection={{ template, repo, members: agents, teamName, skillOverrides, agentTypeOverrides, agentModelOverrides, typeAccounts, agentAccountOverrides }}
         bind:saveAsRecipe
         onlaunch={launchedThenClose}
       />
@@ -140,7 +173,7 @@
   <footer class="foot">
     <button type="button" class="back" onclick={back} disabled={current === 1}>← Back</button>
     <button type="button" class="cancel" onclick={() => onclose?.()}>Cancel</button>
-    {#if current < 5}
+    {#if current < 6}
       <button type="button" class="next" onclick={next} disabled={!canAdvance}>Next →</button>
     {/if}
   </footer>
