@@ -173,8 +173,6 @@
         {/if}
       </section>
     {/if}
-
-    <a class="admin-link" href="/admin/templates">Manage templates →</a>
   {/if}
 </div>
 
@@ -248,12 +246,6 @@
     line-height: 1.15; text-align: center;
     max-width: 100%; overflow: hidden;
   }
-
-  .admin-link {
-    display: inline-block; margin-top: 1rem;
-    color: var(--accent-2, #87ceeb); text-decoration: none; font-size: 0.85rem;
-  }
-  .admin-link:hover { text-decoration: underline; }
 
   .hint { color: var(--fg-muted, #888); font-size: 0.85rem; }
   .err { color: var(--danger, #e74c3c); }
