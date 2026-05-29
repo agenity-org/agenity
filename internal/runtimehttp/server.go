@@ -38,6 +38,8 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/federation"
+	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/canon"
 	"github.com/chepherd/chepherd/internal/catalog"
@@ -69,6 +71,13 @@ type Server struct {
 	// because A2A advertises its own securitySchemes on the Agent Card.
 	A2ACard   *a2a.AgentCard
 	A2ARouter *a2a.Router
+
+	// v0.9.3 #225 row C1 — federation orchestrator + cached agent-card
+	// store. Federation is nil when --federation-registry-url is empty;
+	// AgentCardStore is always set when persistence is wired (used by
+	// the /api/v1/peers endpoint to enumerate cached peers).
+	Federation     *federation.Federation
+	AgentCardStore persistence.AgentCardRepository
 
 	// #194 — Skill Library (10 LEAN builtins + user-defined CRUD).
 	skills *skills.Store
@@ -183,6 +192,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/roles/", s.roleByID)
 	// #198 — Operator Canon (Layer 1 of 3-layer agent context)
 	mux.HandleFunc("/api/v1/canon", s.canonRoot)
+	// v0.9.3 #225 row C1 — federated peer registry view.
+	mux.HandleFunc("/api/v1/peers", s.peersList)
 	mux.HandleFunc("/api/v1/canon/history", s.canonHistory)
 	mux.HandleFunc("/api/v1/canon/rollback", s.canonRollback)
 	// #175 — Team Template Registry (Skill-composing templates)
@@ -3155,4 +3166,41 @@ func (v *authProviderValidator) Validate(ctx context.Context, token string) (str
 		return "", fmt.Errorf("auth: validator returned nil identity")
 	}
 	return id.Subject, nil
+}
+
+// peersList implements GET /api/v1/peers — returns the cached peer
+// agent-cards persisted by the federation orchestrator (#225 row C1).
+// Always returns an array (possibly empty); never 503 when federation
+// is disabled — operator sees an empty list + UI can prompt them to
+// configure --federation-registry-url.
+func (s *Server) peersList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.AgentCardStore == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"peers": []any{}})
+		return
+	}
+	cards, err := s.AgentCardStore.List(r.Context(), persistence.AgentCardListOpts{})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	type peerView struct {
+		SID      string          `json:"sid"`
+		Name     string          `json:"name"`
+		Card     json.RawMessage `json:"card"`
+		SyncedAt time.Time       `json:"syncedAt"`
+	}
+	out := make([]peerView, 0, len(cards))
+	for _, c := range cards {
+		out = append(out, peerView{
+			SID:      c.SID,
+			Name:     c.Name,
+			Card:     json.RawMessage(c.Body),
+			SyncedAt: c.SyncedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"peers": out})
 }
