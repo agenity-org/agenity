@@ -1,6 +1,6 @@
 // Package e2e holds the chepherd v0.9.2 end-to-end walk that closes
 // epic #208 — exercises the integration of A2A scaffold + Runtime PTY
-// Deliverer + Shepherd tick loop + persistence.SessionRepository in
+// Deliverer + ScrumMaster tick loop + persistence.SessionRepository in
 // one in-process test. Playwright dashboard screenshot + curl walk
 // against the real chepherd run process live in scripts/v092-e2e-walk.sh
 // (operator-runnable evidence; this in-process test is the regression
@@ -21,7 +21,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/shepherd"
+	"github.com/chepherd/chepherd/internal/scrummaster"
 )
 
 // fakeDeliverer captures the SendMessage params + returns a canned
@@ -44,7 +44,7 @@ func (f *fakeDeliverer) Deliver(_ context.Context, msg a2a.Message) (*a2a.Task, 
 //     methods, all 5 securitySchemes)
 //  2. A2A SendMessage via JSON-RPC → 200 with Task{state=working,
 //     contextId=spawned session ID, taskId=UUIDv7 auto-generated}
-//  3. Shepherd's tick loop discovers sessions via SessionRepository.List
+//  3. ScrumMaster's tick loop discovers sessions via SessionRepository.List
 //     and stamps next_tick_at on the next iteration
 //  4. SessionRepository.Get returns the tick-stamped state
 //
@@ -111,7 +111,7 @@ func TestV092Walk_EndToEnd(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	a2a.RegisterRoutes(mux, card, router)
+	a2a.RegisterRoutes(mux, card, router, nil) // dev passthrough — no auth on e2e walk
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -194,8 +194,8 @@ func TestV092Walk_EndToEnd(t *testing.T) {
 			deliverer.captured.Parts)
 	}
 
-	// ─── Step 3: Shepherd's tickOnce discovers session + stamps state ─
-	shep := shepherd.NewWithStore(store, shepherd.Config{
+	// ─── Step 3: ScrumMaster's tickOnce discovers session + stamps state ─
+	shep := scrummaster.NewWithStore(store, scrummaster.Config{
 		TickInterval: 24 * time.Hour, // long; we drive tickOnce directly
 		StateDir:     t.TempDir(),
 	})
@@ -212,10 +212,10 @@ func TestV092Walk_EndToEnd(t *testing.T) {
 	select {
 	case err := <-tickDone:
 		if err != context.Canceled {
-			t.Errorf("shepherd.Run err = %v, want context.Canceled", err)
+			t.Errorf("scrummaster.Run err = %v, want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("shepherd.Run did not return within 2s after cancel")
+		t.Fatal("scrummaster.Run did not return within 2s after cancel")
 	}
 
 	// ─── Step 4: SessionRepository.Get carries the tick-stamped state ─
@@ -242,7 +242,7 @@ func TestV092Walk_AgentCardServesCanonicalPath(t *testing.T) {
 	t.Parallel()
 	card := &a2a.AgentCard{ProtocolVersion: "1.0", Name: "x", URL: "http://x/", Version: "0.9.2"}
 	mux := http.NewServeMux()
-	a2a.RegisterRoutes(mux, card, a2a.NewRouter())
+	a2a.RegisterRoutes(mux, card, a2a.NewRouter(), nil)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 

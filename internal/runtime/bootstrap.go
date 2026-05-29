@@ -205,9 +205,9 @@ func (r *Runtime) respawnShepherd(name string, oldSess *session.Session) {
 	time.Sleep(2 * time.Second)
 
 	// Spawn replacement — same name, same team, same role.
-	// SystemPrompt is left empty so the runtime's default prompts.Shepherd
+	// SystemPrompt is left empty so the runtime's default prompts.ScrumMaster
 	// (set by HTTP / cmd path) gets re-applied. For programmatic respawn
-	// we don't have direct access to the prompts.Shepherd here, so leave
+	// we don't have direct access to the prompts.ScrumMaster here, so leave
 	// it as agent-default and let bootstrapShepherd's kickoff seed it.
 	newInfo, newSess, err := r.Spawn(SpawnSpec{
 		Name:      name,

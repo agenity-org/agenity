@@ -20,6 +20,7 @@ package runtimehttp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -194,7 +195,14 @@ func (s *Server) Handler() http.Handler {
 	// + POST /jsonrpc. Both exact paths, so ServeMux's longest-prefix rule
 	// keeps them out of the SPA wildcard registered below.
 	if s.A2ACard != nil && s.A2ARouter != nil {
-		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter)
+		// #225 row B1 — gate /jsonrpc with Bearer-token auth when an
+		// AuthProvider is wired. Falls through to unauthenticated mode
+		// when s.Auth is nil (dev / BareExec smoke-test).
+		var validator a2a.TokenValidator
+		if s.Auth != nil {
+			validator = &authProviderValidator{provider: s.Auth}
+		}
+		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter, validator)
 	}
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
@@ -743,7 +751,7 @@ func (s *Server) promptsHandler(w http.ResponseWriter, r *http.Request) {
 	var body string
 	switch role {
 	case "shepherd":
-		body = prompts.Shepherd
+		body = prompts.ScrumMaster
 	default:
 		body = prompts.Worker
 	}
@@ -1009,7 +1017,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		systemPrompt := req.SystemPrompt
 		if req.UseDefaultPrompt && systemPrompt == "" {
 			if role == runtime.RoleShepherd {
-				systemPrompt = prompts.Shepherd
+				systemPrompt = prompts.ScrumMaster
 			} else {
 				systemPrompt = prompts.Worker
 			}
@@ -1960,7 +1968,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		}
 		if sysPrompt == "" {
 			if role == runtime.RoleShepherd {
-				sysPrompt = prompts.Shepherd
+				sysPrompt = prompts.ScrumMaster
 			} else {
 				sysPrompt = prompts.Worker
 			}
@@ -2115,7 +2123,7 @@ func (s *Server) resurrectTeamHandler(w http.ResponseWriter, r *http.Request, te
 		// Try to source a default prompt
 		var sysPrompt string
 		if role0 == runtime.RoleShepherd {
-			sysPrompt = prompts.Shepherd
+			sysPrompt = prompts.ScrumMaster
 		} else {
 			sysPrompt = prompts.Worker
 		}
@@ -3127,4 +3135,24 @@ func validateProviderToken(kind runtime.GitProviderKind, repoURL, token string) 
 		bodyStr = "HTTP " + resp.Status
 	}
 	return fmt.Errorf("%s on %s — %s", resp.Status, p.url, bodyStr)
+}
+
+// authProviderValidator adapts auth.AuthProvider to a2a.TokenValidator.
+// #225 row B1 — bridges the runtimehttp Server's existing auth provider
+// (HS256 dashboard JWT today; ES256 / OAuth2 / mTLS layered later) to
+// the A2A AuthMiddleware's minimal seam without internal/a2a importing
+// internal/auth (cycle-breaker).
+type authProviderValidator struct {
+	provider auth.AuthProvider
+}
+
+func (v *authProviderValidator) Validate(ctx context.Context, token string) (string, error) {
+	id, err := v.provider.Validate(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	if id == nil {
+		return "", fmt.Errorf("auth: validator returned nil identity")
+	}
+	return id.Subject, nil
 }

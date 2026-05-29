@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/shepherd"
+	"github.com/chepherd/chepherd/internal/scrummaster"
 )
 
 // fakeShepherd captures events broadcast via Runtime.RecordEvent so the
@@ -21,11 +21,11 @@ func (f *fakeShepherd) Observe(_ context.Context, evt any) {
 	f.seen = append(f.seen, evt)
 }
 
-func (f *fakeShepherd) Judge(_ context.Context, _ string, _ []byte) (*shepherd.Verdict, error) {
+func (f *fakeShepherd) Judge(_ context.Context, _ string, _ []byte) (*scrummaster.Verdict, error) {
 	return nil, nil
 }
 
-func (f *fakeShepherd) Alert(_ context.Context, _ *shepherd.Verdict) error { return nil }
+func (f *fakeShepherd) Alert(_ context.Context, _ *scrummaster.Verdict) error { return nil }
 
 func (f *fakeShepherd) Run(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 
@@ -44,7 +44,7 @@ func TestRuntime_WithShepherd_BroadcastsRecordEvent(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.seen) != 2 {
-		t.Errorf("shepherd.Observe called %d times, want 2", len(f.seen))
+		t.Errorf("scrummaster.Observe called %d times, want 2", len(f.seen))
 	}
 }
 

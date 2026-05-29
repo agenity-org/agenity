@@ -236,7 +236,7 @@ func (s *Server) toolList() []map[string]any {
 				"team": map[string]any{"type": "string"},
 			},
 		}},
-		{"name": "chepherd.set_scorecard", "description": "Shepherd-only: record a 0..10 score for each axis of a worker. Args: name, G, V, F, E, D, note (optional). G=Goal clarity, V=Velocity, F=Focus, E=End-state proximity, D=Discipline (CLAUDE.md compliance).", "inputSchema": map[string]any{
+		{"name": "chepherd.set_scorecard", "description": "ScrumMaster-only: record a 0..10 score for each axis of a worker. Args: name, G, V, F, E, D, note (optional). G=Goal clarity, V=Velocity, F=Focus, E=End-state proximity, D=Discipline (CLAUDE.md compliance).", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"name", "G", "V", "F", "E", "D"},
 			"properties": map[string]any{
@@ -249,7 +249,7 @@ func (s *Server) toolList() []map[string]any {
 				"note": map[string]any{"type": "string"},
 			},
 		}},
-		{"name": "chepherd.record_verdict", "description": "Shepherd-only: record a per-tick verdict for a worker. Args: name, verdict ('silent'|'praise'|'coach'|'intervene'), message (optional). Increments intervention count on coach/intervene.", "inputSchema": map[string]any{
+		{"name": "chepherd.record_verdict", "description": "ScrumMaster-only: record a per-tick verdict for a worker. Args: name, verdict ('silent'|'praise'|'coach'|'intervene'), message (optional). Increments intervention count on coach/intervene.", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"name", "verdict"},
 			"properties": map[string]any{
@@ -340,7 +340,7 @@ func (s *Server) toolList() []map[string]any {
 				"note":   map[string]any{"type": "string"},
 			},
 		}},
-		{"name": "chepherd.note", "description": "Shepherd-only: attach a per-worker observation note (lightweight, goes to the worker's scorecard.note field — NEVER to the inbox). Use this for routine 'I saw X happen' commentary. Args: target, body.", "inputSchema": map[string]any{
+		{"name": "chepherd.note", "description": "ScrumMaster-only: attach a per-worker observation note (lightweight, goes to the worker's scorecard.note field — NEVER to the inbox). Use this for routine 'I saw X happen' commentary. Args: target, body.", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"target", "body"},
 			"properties": map[string]any{

@@ -14,7 +14,7 @@
 //     JSONL is unavailable. Sleeps 800ms.
 //
 // Returns true = "human engaged, don't intervene now".
-package shepherd
+package scrummaster
 
 import (
 	"bufio"

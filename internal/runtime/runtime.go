@@ -28,7 +28,7 @@ import (
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
-	"github.com/chepherd/chepherd/internal/shepherd"
+	"github.com/chepherd/chepherd/internal/scrummaster"
 	"github.com/google/uuid"
 )
 
@@ -98,7 +98,7 @@ type SessionInfo struct {
 	// Drives the shepherd's adaptive tick interval.
 	TrustBand TrustBand `json:"trust_band,omitempty"`
 
-	// Shepherd verdict history — count of coach/intervene verdicts AND
+	// ScrumMaster verdict history — count of coach/intervene verdicts AND
 	// the most recent one (with timestamp + message). Empty until first
 	// non-silent verdict.
 	InterventionCount int       `json:"intervention_count,omitempty"`
@@ -329,8 +329,8 @@ type Runtime struct {
 	// Nil-OK: when no shepherd is wired, RecordEvent + Observe paths
 	// no-op the broadcast and the Runtime behaves as a v0.9.1-only
 	// spawn-and-manage runtime. cmd/run.go in v0.9.2 mode calls
-	// rt.WithShepherd(shepherd.New(cfg)) to enable.
-	shepherd shepherd.Shepherd
+	// rt.WithShepherd(scrummaster.New(cfg)) to enable.
+	shepherd scrummaster.ScrumMaster
 
 	// sessionsRepo is the SessionRepository handle (#208 v0.9.2).
 	// Set by NewWithStore when a persistence.Store is provided; Spawn
@@ -343,13 +343,13 @@ type Runtime struct {
 	sessionsRepo persistence.SessionRepository
 }
 
-// WithShepherd attaches a shepherd.Shepherd to this Runtime so every
+// WithShepherd attaches a scrummaster.ScrumMaster to this Runtime so every
 // RecordEvent broadcast is also delivered to the shepherd's Observe
 // path. Idempotent: re-calling replaces the previously-attached
-// Shepherd. Returns the Runtime for fluent chaining.
+// ScrumMaster. Returns the Runtime for fluent chaining.
 //
 // Refs #208.
-func (r *Runtime) WithShepherd(s shepherd.Shepherd) *Runtime {
+func (r *Runtime) WithShepherd(s scrummaster.ScrumMaster) *Runtime {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.shepherd = s
@@ -361,7 +361,7 @@ func (r *Runtime) WithShepherd(s shepherd.Shepherd) *Runtime {
 // chepherd.record_event MCP tool.
 //
 // v0.9.2 (#208): when a shepherd is attached via WithShepherd, the
-// event is also broadcast to shepherd.Observe so band/judge/signals
+// event is also broadcast to scrummaster.Observe so band/judge/signals
 // can react. The shepherd broadcast happens AFTER the local audit
 // buffer push so any panic in shepherd code doesn't lose the audit
 // trail.

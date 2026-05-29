@@ -40,7 +40,7 @@ import (
 	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/runtimehttp"
 	"github.com/chepherd/chepherd/internal/runtimetui"
-	"github.com/chepherd/chepherd/internal/shepherd"
+	"github.com/chepherd/chepherd/internal/scrummaster"
 	"github.com/chepherd/chepherd/internal/vault"
 )
 
@@ -164,13 +164,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("mcp server: %w", err)
 	}
 
-	// v0.9.2 (#208): wire the shepherd tier. Constructs Shepherd from
+	// v0.9.2 (#208): wire the shepherd tier. Constructs ScrumMaster from
 	// the same persistence.Store the runtime uses; attaches via
 	// Runtime.WithShepherd so RecordEvent broadcasts reach Observe;
 	// kicks off the periodic tick loop in a goroutine bound to the
 	// process-lifetime context so ctrl-C cleanly shuts it down.
-	shepCfg := shepherd.Config{JudgeCfg: shepherd.DefaultJudgeConfig()}
-	shep := shepherd.NewWithStore(store, shepCfg)
+	shepCfg := scrummaster.Config{JudgeCfg: scrummaster.DefaultJudgeConfig()}
+	shep := scrummaster.NewWithStore(store, shepCfg)
 	rt.WithShepherd(shep)
 	shepCtx, shepCancel := context.WithCancel(context.Background())
 	defer shepCancel()
@@ -200,6 +200,24 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("a2a: wire deliverer: %w", err)
 		}
 		rs.A2ACard = newAgentCard(runFlagListen)
+		// v0.9.3 #277 — wire the remaining 10 A2A method bodies. The
+		// MethodBodies struct registers concrete handlers that read
+		// and write the TaskRepository + PushNotificationConfigRepository
+		// via the persistence.Store. RunnerSID is the chepherd-instance
+		// UUID so cross-runner ListTasks queries filter correctly when
+		// the same SQLite DB is shared across multi-host setups.
+		// SubscribeFn is nil for now — SSE streaming binding lands in a
+		// follow-up; SendStreamingMessage + ResubscribeTask return -32004
+		// until that wiring is complete.
+		methodBodies := &a2a.MethodBodies{
+			Store:       store,
+			AgentCardFn: func() a2a.AgentCard { return *newAgentCard(runFlagListen) },
+			RunnerSID:   rt.InstanceUUID(),
+			SubscribeFn: nil,
+		}
+		if err := methodBodies.Register(a2aRouter); err != nil {
+			return fmt.Errorf("a2a: register method bodies: %w", err)
+		}
 		rs.A2ARouter = a2aRouter
 		// Vault — open (or create) in the state directory
 		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
@@ -267,7 +285,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			Team:         "default",
 			Role:         runtime.RoleShepherd,
 			Cwd:          cwd,
-			SystemPrompt: prompts.Shepherd,
+			SystemPrompt: prompts.ScrumMaster,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warn: default shepherd failed (continuing): %v\n", err)
@@ -478,7 +496,7 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 			_, newSess, err := rt.Spawn(runtime.SpawnSpec{
 				Name: "shepherd", AgentSlug: "claude-code", Team: "default",
 				Role: runtime.RoleShepherd, Cwd: "/home/openova",
-				SystemPrompt: prompts.Shepherd,
+				SystemPrompt: prompts.ScrumMaster,
 			})
 			if err == nil {
 				go bootstrapShepherd(rt, newSess)

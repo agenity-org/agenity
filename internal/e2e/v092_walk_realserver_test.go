@@ -454,6 +454,9 @@ func assertSendMessageWorking(t *testing.T, httpAddr, ctxID, label string) {
 		t.Fatalf("%s: build request: %v", label, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if e2eBootstrapToken != "" {
+		req.Header.Set("Authorization", "Bearer "+e2eBootstrapToken)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s: POST /jsonrpc: %v", label, err)
@@ -591,8 +594,25 @@ func bootChepherdWithShepherd(t *testing.T) (string, string) {
 	if err := waitForHTTPOK(httpAddr, "/healthz", 10*time.Second); err != nil {
 		t.Fatalf("chepherd /healthz never came up: %v", err)
 	}
+	// #225 row B1 — chepherd binary now enforces auth at /jsonrpc. Read
+	// the bootstrap token from the log so e2e tests can authenticate.
+	if b, err := os.ReadFile(logFile.Name()); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			tr := strings.TrimSpace(line)
+			if strings.HasPrefix(tr, "eyJ") && strings.Count(tr, ".") == 2 {
+				e2eBootstrapToken = tr
+				break
+			}
+		}
+	}
 	return httpAddr, stateDir
 }
+
+// e2eBootstrapToken caches the operator JWT minted at chepherd boot so
+// the realserver test helpers (assertSendMessageWorking, etc.) can
+// authenticate against the auth-gated /jsonrpc endpoint shipped in
+// #225 row B1.
+var e2eBootstrapToken string
 
 // newTestStateDir creates a fresh state-dir under TMPDIR that the test
 // can pass as `--state-dir` to chepherd run. Caller-side rather than
