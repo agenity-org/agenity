@@ -212,36 +212,108 @@
     });
   }
 
-  // #245 — clipboard helpers. Uses the modern Clipboard API; falls
-  // back to the legacy document.execCommand('copy') path on browsers
-  // that don't expose Clipboard API in this origin's permissions.
+  // #245 reopen — operator reports copy still doesn't work despite
+  // PR #249 shipping the smart-Ctrl+C wiring. Architect-spec'd RCA
+  // candidates: V1 selection-empty / V2 navigator.clipboard rejected /
+  // V3 event-order / V4 browser-block. The bug was: every code path
+  // SILENTLY swallowed errors (try{}catch{}), so V2/V4 cases never
+  // surfaced to the operator — they just saw "nothing happened" and
+  // assumed the wiring was broken. This rewrite:
+  //
+  //   1. Diagnostic console.log at every checkpoint (operator can
+  //      open DevTools and see which path fired + where it died).
+  //   2. Toast on every failure with the actual error message —
+  //      operator gets immediate feedback instead of silence.
+  //   3. execCommand fallback: focus the textarea FIRST + check the
+  //      return value (it returns false when the browser blocks).
+  //      Pre-fix, the textarea was append→select→exec without focus,
+  //      so xterm's input proxy retained focus and the wrong textarea
+  //      was the copy source.
+  //   4. Paste failure surfaces (was silently no-op when WS not OPEN).
+  //
+  // Refs #245.
+  let toast = $state({ msg: '', kind: '', t: 0 });
+  function showToast(msg, kind) {
+    toast = { msg, kind, t: Date.now() };
+    const id = toast.t;
+    setTimeout(() => { if (toast.t === id) toast = { msg: '', kind: '', t: 0 }; }, 3000);
+  }
   async function copySelectionToClipboard(text) {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
+    console.log('[chepherd-term] copy attempt — selectionLen=' + (text ? text.length : 0));
+    if (!text) {
+      console.warn('[chepherd-term] copy aborted — empty selection (V1)');
+      return;
+    }
+    // Path A — modern Clipboard API.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
         await navigator.clipboard.writeText(text);
+        console.log('[chepherd-term] copy ✓ via navigator.clipboard.writeText');
+        showToast('Copied ' + text.length + ' chars', 'ok');
         return;
+      } catch (e) {
+        console.warn('[chepherd-term] navigator.clipboard.writeText rejected (V2):', e?.message || e);
+        // Fall through to execCommand path.
       }
-    } catch {}
-    // Fallback: hidden textarea + execCommand('copy').
+    } else {
+      console.warn('[chepherd-term] navigator.clipboard.writeText unavailable (V4) — using execCommand fallback');
+    }
+    // Path B — legacy execCommand fallback. Must focus the textarea
+    // BEFORE select() or xterm's input proxy retains focus and the
+    // copy command lands on the wrong selection.
     try {
       const ta = document.createElement('textarea');
       ta.value = text;
-      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '0';
+      ta.style.opacity = '0';
+      ta.style.pointerEvents = 'none';
+      ta.setAttribute('readonly', 'true');
+      ta.setAttribute('tabindex', '-1');
       document.body.appendChild(ta);
+      ta.focus();
       ta.select();
-      document.execCommand('copy');
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
       document.body.removeChild(ta);
-    } catch {}
+      if (ok) {
+        console.log('[chepherd-term] copy ✓ via document.execCommand');
+        showToast('Copied ' + text.length + ' chars', 'ok');
+      } else {
+        console.error('[chepherd-term] document.execCommand("copy") returned false — browser blocked (V4)');
+        showToast('Copy blocked by browser — check permissions', 'err');
+      }
+    } catch (e) {
+      console.error('[chepherd-term] execCommand fallback threw:', e?.message || e);
+      showToast('Copy failed: ' + (e?.message || 'unknown error'), 'err');
+    }
   }
   async function pasteFromClipboard() {
+    console.log('[chepherd-term] paste attempt — wsState=' + (ws ? ws.readyState : 'no-ws'));
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[chepherd-term] paste aborted — WS not open');
+      showToast('Paste failed: terminal not connected', 'err');
+      return;
+    }
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      console.warn('[chepherd-term] navigator.clipboard.readText unavailable (V4)');
+      showToast('Paste blocked: clipboard API unavailable', 'err');
+      return;
+    }
     try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        const txt = await navigator.clipboard.readText();
-        if (txt && ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(txt);
-        }
+      const txt = await navigator.clipboard.readText();
+      if (!txt) {
+        console.log('[chepherd-term] paste no-op — clipboard empty');
+        return;
       }
-    } catch {}
+      ws.send(txt);
+      console.log('[chepherd-term] paste ✓ — sent ' + txt.length + ' chars to PTY');
+      showToast('Pasted ' + txt.length + ' chars', 'ok');
+    } catch (e) {
+      console.error('[chepherd-term] navigator.clipboard.readText rejected (V2/V4):', e?.message || e);
+      showToast('Paste failed: ' + (e?.message || 'permission denied'), 'err');
+    }
   }
 
   // #245 — right-click context menu. Renders a tiny menu at the click
@@ -341,6 +413,13 @@
       </button>
     </div>
   {/if}
+  {#if toast.msg}
+    <!-- #245 — clipboard feedback toast. Auto-dismisses after 3s.
+         Operator-visible diagnostic for the silent-fail bug from PR #249. -->
+    <div class="clipboard-toast" class:ok={toast.kind === 'ok'} class:err={toast.kind === 'err'} role="status" aria-live="polite">
+      {toast.msg}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -386,6 +465,26 @@
     opacity: 0.4;
     cursor: not-allowed;
   }
+  /* #245 reopen — clipboard feedback toast. Auto-dismisses after 3s
+     and renders top-right of the terminal pane. Operator-visible
+     diagnostic for the silent-fail bug from PR #249: every clipboard
+     code path used to swallow errors silently. */
+  .clipboard-toast {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.7rem;
+    z-index: 60;
+    padding: 0.4rem 0.7rem;
+    border-radius: 5px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border: 1px solid;
+    background: var(--bg-elevated, #1a1a1a);
+    pointer-events: none;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  }
+  .clipboard-toast.ok  { color: var(--success, #4ade80); border-color: var(--success, #4ade80); }
+  .clipboard-toast.err { color: var(--danger, #e74c3c); border-color: var(--danger, #e74c3c); }
   .kbd {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.72rem;
