@@ -30,7 +30,10 @@ set -euo pipefail
 
 CHEPHERD_URL="${1:-http://127.0.0.1:8083}"
 SESSION_ID="${2:-}"
-STATE_DIR="${CHEPHERD_STATE_DIR:-$HOME/.local/state/chepherd}"
+# Matches cmd/run.go's default state dir. Operator overrides via
+# CHEPHERD_STATE_DIR env or by re-running with the same --state-dir
+# the chepherd binary was launched with.
+STATE_DIR="${CHEPHERD_STATE_DIR:-$HOME/.local/state/chepherd-v05}"
 
 if [ -z "$SESSION_ID" ]; then
     echo "ERROR: SESSION_ID is required as second arg." >&2

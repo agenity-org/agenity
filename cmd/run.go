@@ -30,16 +30,17 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/runtimehttp"
 	"github.com/chepherd/chepherd/internal/runtimetui"
+	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/chepherd/chepherd/internal/vault"
 )
 
@@ -172,6 +173,19 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		rs := runtimehttp.New(rt)
 		rs.WebDir = runFlagWebDir
 		rs.Profile = &prof
+
+		// v0.9.2 (#208 follow-up): expose A2A on the same HTTP server the
+		// dashboard uses. The Deliverer constructed above is reused — the
+		// MCP-shim path (chepherd.send_to_session) and the A2A JSON-RPC
+		// endpoint both translate onto the SAME PTY-writing Deliverer.
+		// AgentCard URL points at the canonical /jsonrpc surface so A2A
+		// clients can discover-then-call without out-of-band knowledge.
+		a2aRouter := a2a.NewRouter()
+		if err := a2aRouter.WireDeliverer(a2aDeliverer); err != nil {
+			return fmt.Errorf("a2a: wire deliverer: %w", err)
+		}
+		rs.A2ACard = newAgentCard(runFlagListen)
+		rs.A2ARouter = a2aRouter
 		// Vault — open (or create) in the state directory
 		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: vault: %v (credential vault disabled)\n", err)
@@ -303,6 +317,58 @@ func profileNameOrDefault(n string) string {
 		return "(auto)"
 	}
 	return n
+}
+
+// newAgentCard builds the v0.9.2 A2A Agent Card served at
+// /.well-known/agent-card.json. listenAddr is the chepherd run
+// HTTP/WS listen address (e.g. "127.0.0.1:8080"); it determines
+// the canonical URL advertised on the card so A2A clients hit the
+// correct /jsonrpc endpoint.
+//
+// All three capabilities are advertised; SendMessage is wired to
+// the PTY Deliverer (the other 10 methods still return scaffold
+// errors until S5-S7 sub-branches). All 5 securitySchemes from
+// V0.9.2-ARCHITECTURE.md §6 are listed; runners pick which to
+// require via per-deployment policy.
+//
+// Refs #208.
+func newAgentCard(listenAddr string) *a2a.AgentCard {
+	return &a2a.AgentCard{
+		ProtocolVersion: "1.0",
+		Name:            "chepherd",
+		Description:     "chepherd v0.9.2 control-plane Agent — PTY-host runtime + shepherd intelligence + A2A endpoint",
+		URL:             "http://" + listenAddr + "/jsonrpc",
+		Version:         "0.9.2",
+		Capabilities: a2a.AgentCapabilities{
+			Streaming:         true,
+			PushNotifications: true,
+			ExtendedCard:      true,
+		},
+		DefaultInputModes:  []string{"text"},
+		DefaultOutputModes: []string{"text"},
+		Skills: []a2a.AgentSkill{
+			{
+				ID:          "send-message",
+				Name:        "Send PTY message",
+				Description: "Deliver a text message into a chepherd PTY session keyed by contextId (= chepherd session ID).",
+			},
+		},
+		Security: []map[string][]string{
+			{"mtls": {}},
+			{"httpAuth": {}},
+			{"apiKey": {}},
+			{"oauth2": {}},
+			{"oidc": {}},
+		},
+		SecuritySchemes: map[string]a2a.SecurityScheme{
+			"mtls":     {Type: "mutualTLS"},
+			"httpAuth": {Type: "http", Scheme: "bearer", BearerFormat: "JWT"},
+			"apiKey":   {Type: "apiKey", In: "header", Name: "X-API-Key"},
+			"oauth2":   {Type: "oauth2"},
+			"oidc":     {Type: "openIdConnect"},
+		},
+		XChepherdP2P: a2a.DefaultExtension(),
+	}
 }
 
 // runtimeVaultAdapter adapts *vault.Vault to runtime.VaultProvider — the
