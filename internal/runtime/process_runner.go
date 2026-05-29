@@ -26,7 +26,7 @@ type ProcessRunner struct {
 }
 
 func newProcessRunner(cfg RunnerConfig) (*ProcessRunner, error) {
-	rt, err := New(cfg.StateDir)
+	rt, err := NewWithStore(cfg.StateDir, cfg.Store)
 	if err != nil {
 		return nil, fmt.Errorf("ProcessRunner: bootstrap Runtime: %w", err)
 	}

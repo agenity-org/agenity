@@ -23,6 +23,7 @@ import (
 	"time"
 
 	agententity "github.com/chepherd/chepherd/internal/agent"
+	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/google/uuid"
@@ -439,6 +440,18 @@ type HumanInboxEntry struct {
 
 // New constructs an empty Runtime rooted at stateDir.
 func New(stateDir string) (*Runtime, error) {
+	return NewWithStore(stateDir, nil)
+}
+
+// NewWithStore is the chepherd v0.9.2 constructor: when store is
+// non-nil, the agent registry is opened via the Repository-backed
+// wrapper from PR #209 (agent.NewStoreFromRepository) instead of the
+// file-on-disk path. When store is nil, falls back to v0.9.1 file-on-
+// disk for backward compat. cmd/run.go in v0.9.2 mode passes a
+// sqlite-backed persistence.Store; v0.9.1 callers can keep using New.
+//
+// Refs #208.
+func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "sessions"), 0o700); err != nil {
 		return nil, err
 	}
@@ -457,10 +470,16 @@ func New(stateDir string) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("spawner init: %w", err)
 	}
-	// #172 — open the Agent registry (file-backed JSON-per-UUID).
-	agentStore, err := agententity.NewStore(stateDir)
-	if err != nil {
-		return nil, fmt.Errorf("agent registry init: %w", err)
+	// #172 + #208: Agent registry is repository-backed when a
+	// persistence.Store is provided; file-on-disk otherwise.
+	var agentStore *agententity.Store
+	if store != nil {
+		agentStore = agententity.NewStoreFromRepository(store.Agents())
+	} else {
+		agentStore, err = agententity.NewStore(stateDir)
+		if err != nil {
+			return nil, fmt.Errorf("agent registry init: %w", err)
+		}
 	}
 	r := &Runtime{
 		sessions:         make(map[string]*session.Session),
