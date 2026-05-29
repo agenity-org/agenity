@@ -516,6 +516,17 @@
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('chepherd-theme', theme); } catch {}
   }
+
+  // #239 — logout dispatch. AuthGate (../v09/AuthGate.svelte) listens
+  // for this event + clears the stored token + re-renders the login
+  // screen. Keeping the dispatch here so legacy callers (v0.8 / v0.9.0
+  // / v0.9.1 routes wired directly to Workspace pre-AuthGate) still
+  // get a sane fallback: if AuthGate isn't mounted, the event is
+  // harmless + Workspace's needLogin in-place modal still fires on
+  // the next 401.
+  function dispatchLogout() {
+    try { window.dispatchEvent(new CustomEvent('chepherd-logout')); } catch {}
+  }
 </script>
 
 <div class="workspace">
@@ -586,6 +597,7 @@
       </div>
     {/if}
     <button class="icon-btn" on:click={toggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
+    <button class="icon-btn" on:click={dispatchLogout} title="Sign out — clear stored token + return to login screen" aria-label="Sign out">⎋</button>
     <button class="save-layout-btn" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M13 14H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h8l2 2v9a1 1 0 0 1-1 1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>

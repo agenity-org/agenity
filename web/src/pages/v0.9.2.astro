@@ -21,7 +21,7 @@
 //
 // This route mounts the existing Workspace shell with version="v0.9.2"
 // so the header brand badge displays the right release (#223).
-import Workspace from '../components/v08/Workspace.svelte';
+import AuthGate from '../components/v09/AuthGate.svelte';
 import '../styles/global.css';
 ---
 <!DOCTYPE html>
@@ -37,6 +37,6 @@ import '../styles/global.css';
     </style>
   </head>
   <body>
-    <Workspace client:load version="v0.9.2" />
+    <AuthGate client:load version="v0.9.2" />
   </body>
 </html>
