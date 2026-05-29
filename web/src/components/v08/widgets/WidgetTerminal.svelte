@@ -159,6 +159,118 @@
     // ignored — claude-code or a malicious tool can no longer hijack
     // the operator's clipboard via an escape sequence.
     term.parser.registerOscHandler(52, () => true);
+
+    // #245 — copy / paste keyboard bindings. xterm.js forwards every
+    // keystroke to onData by default; Ctrl+C arrives at the PTY as
+    // SIGINT regardless of selection state. Operator UX expects a
+    // smart-Ctrl+C (Windows-Terminal / VSCode pattern):
+    //
+    //   Ctrl+C        copy-if-selection-else-SIGINT (architect Option 2)
+    //   Ctrl+Shift+C  ALWAYS copy
+    //   Ctrl+Insert   ALWAYS copy (legacy Linux shortcut)
+    //   Ctrl+V        paste from clipboard
+    //   Ctrl+Shift+V  paste from clipboard (terminal-emulator convention)
+    //   Shift+Insert  paste from clipboard (legacy Linux shortcut)
+    //
+    // attachCustomKeyEventHandler returns false to swallow the event
+    // (do NOT forward to PTY); returns true to let xterm.js handle
+    // normally (so onData fires + bytes hit the PTY).
+    term.attachCustomKeyEventHandler((ev) => {
+      // Only intercept on KEY DOWN — keyup events shouldn't both copy
+      // AND fire SIGINT.
+      if (ev.type !== 'keydown') return true;
+      const k = ev.key;
+      const ctrl = ev.ctrlKey || ev.metaKey;
+      const shift = ev.shiftKey;
+      const sel = term.getSelection();
+      const hasSel = !!sel && sel.length > 0;
+
+      // Ctrl+Shift+C OR Ctrl+Insert → ALWAYS copy when there's a selection.
+      // No selection = nothing to copy, fall through so the keystroke
+      // reaches the PTY (harmless; no shell binding listens to these).
+      if (ctrl && ((shift && k === 'C') || k === 'Insert')) {
+        if (hasSel) { copySelectionToClipboard(sel); }
+        return false;
+      }
+      // Ctrl+C — copy-if-selection-else-SIGINT (Option 2).
+      if (ctrl && !shift && (k === 'c' || k === 'C')) {
+        if (hasSel) {
+          copySelectionToClipboard(sel);
+          // Clear selection so a subsequent Ctrl+C lands as SIGINT.
+          try { term.clearSelection(); } catch {}
+          return false;
+        }
+        // No selection — let xterm forward Ctrl+C to PTY as SIGINT.
+        return true;
+      }
+      // Ctrl+V OR Ctrl+Shift+V OR Shift+Insert → paste.
+      if ((ctrl && (k === 'v' || k === 'V')) || (shift && k === 'Insert')) {
+        pasteFromClipboard();
+        return false;
+      }
+      return true;
+    });
+  }
+
+  // #245 — clipboard helpers. Uses the modern Clipboard API; falls
+  // back to the legacy document.execCommand('copy') path on browsers
+  // that don't expose Clipboard API in this origin's permissions.
+  async function copySelectionToClipboard(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+    } catch {}
+    // Fallback: hidden textarea + execCommand('copy').
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch {}
+  }
+  async function pasteFromClipboard() {
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const txt = await navigator.clipboard.readText();
+        if (txt && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(txt);
+        }
+      }
+    } catch {}
+  }
+
+  // #245 — right-click context menu. Renders a tiny menu at the click
+  // position; clicking outside dismisses. Items: Copy (enabled iff
+  // term has a selection) + Paste (always enabled, will no-op when
+  // clipboard is empty).
+  let menuOpen = $state(false);
+  let menuX = $state(0);
+  let menuY = $state(0);
+  let menuHasSelection = $state(false);
+  function openCtxMenu(ev) {
+    if (!term) return;
+    ev.preventDefault();
+    menuHasSelection = !!term.getSelection() && term.getSelection().length > 0;
+    menuX = ev.clientX;
+    menuY = ev.clientY;
+    menuOpen = true;
+  }
+  function closeCtxMenu() { menuOpen = false; }
+  async function menuCopy() {
+    if (term) {
+      const sel = term.getSelection();
+      if (sel) await copySelectionToClipboard(sel);
+    }
+    menuOpen = false;
+  }
+  async function menuPaste() {
+    await pasteFromClipboard();
+    menuOpen = false;
   }
 
   $effect(() => { attachTo(myAgent); });
@@ -206,12 +318,81 @@
   This widget renders only the xterm canvas, full height.
 -->
 <div class="term-pane">
-  <div class="term-body" bind:this={termContainer}></div>
+  <div
+    class="term-body"
+    bind:this={termContainer}
+    oncontextmenu={openCtxMenu}
+  ></div>
+  {#if menuOpen}
+    <!-- #245 — full-screen invisible click-catcher dismisses the menu
+         when the operator clicks anywhere outside it. -->
+    <div class="ctx-backdrop" onclick={closeCtxMenu} role="presentation"></div>
+    <div
+      class="ctx-menu"
+      style="left:{menuX}px; top:{menuY}px"
+      role="menu"
+      aria-label="Terminal context menu"
+    >
+      <button type="button" role="menuitem" onclick={menuCopy} disabled={!menuHasSelection}>
+        Copy <span class="kbd">Ctrl+Shift+C</span>
+      </button>
+      <button type="button" role="menuitem" onclick={menuPaste}>
+        Paste <span class="kbd">Ctrl+Shift+V</span>
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
-  .term-pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
+  .term-pane { display: flex; flex-direction: column; height: 100%; background: var(--bg); position: relative; }
   .term-body { flex: 1; padding: 0.3rem 0.4rem; min-height: 0; overflow: hidden; }
   .term-body :global(.xterm) { height: 100%; }
   .term-body :global(.xterm-viewport) { height: 100% !important; }
+  /* #245 — right-click context menu. position: fixed so menuX/menuY
+     (clientX/Y from the pointer event) anchor correctly regardless of
+     where the term-pane sits in the layout. */
+  .ctx-backdrop {
+    position: fixed; inset: 0;
+    background: transparent;
+    z-index: 50;
+  }
+  .ctx-menu {
+    position: fixed;
+    z-index: 51;
+    min-width: 11rem;
+    background: var(--bg-elevated, #1a1a1a);
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 6px;
+    padding: 0.25rem;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    display: flex; flex-direction: column; gap: 0.1rem;
+  }
+  .ctx-menu button {
+    display: flex; justify-content: space-between; align-items: center; gap: 0.7rem;
+    padding: 0.45rem 0.6rem;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg, #f5f5f5);
+    font: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ctx-menu button:hover:not(:disabled) {
+    background: rgba(135, 206, 235, 0.12);
+  }
+  .ctx-menu button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    color: var(--fg-muted, #888);
+    background: var(--bg, #0a0a0a);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    border: 1px solid var(--border, #2a2a2a);
+  }
 </style>
