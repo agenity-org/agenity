@@ -42,8 +42,20 @@ if [[ -z "$PATTERN" ]]; then
 fi
 
 # Run the grep. `-I` skips binary files, `-nE` numbers + extended regex.
-# Pathspec exclusions match the architect's #212 acceptance criterion.
-if hits=$(git grep -nIE "$PATTERN" -- ':!docs/' ':!*.md' 2>/dev/null); then
+# Pathspec exclusions:
+#   :!docs/                                  — rule body lives there
+#   :!*.md                                   — PR bodies, CHANGELOGs, READMEs
+#   :!scripts/.banned-vocab-tokens-212       — THIS list (self-recursion guard)
+#   :!scripts/.banned-vocab-tokens           — sibling v0.9.1 list, same shape
+#   :!scripts/banned-vocab-212.sh            — defense-in-depth vs inline-token regression
+#   :!scripts/banned-vocab-grep.sh           — same, sibling enforcement script
+if hits=$(git grep -nIE "$PATTERN" -- \
+        ':!docs/' ':!*.md' \
+        ':!scripts/.banned-vocab-tokens-212' \
+        ':!scripts/.banned-vocab-tokens' \
+        ':!scripts/banned-vocab-212.sh' \
+        ':!scripts/banned-vocab-grep.sh' \
+        2>/dev/null); then
     echo "BANNED VOCAB DETECTED (#212):" >&2
     echo "$hits" >&2
     echo >&2
