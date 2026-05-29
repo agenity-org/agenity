@@ -22,15 +22,31 @@
 
   let { selectedRepo = $bindable(null), onselect } = $props();
 
-  // Per-provider PAT-create helper links. The scopes are the minimum
-  // chepherd needs: discover orgs + repos, clone, push branches +
-  // commits, open pull requests. Operators can tighten further per-
-  // provider if their orgs require it.
+  // Per-provider PAT-create helper links. #235 architect-locked
+  // 2026-05-30 (operator quote *"we need to ask for github go
+  // privileges, don't be shy, if users wants he can reduce"*) — the
+  // GitHub URL pre-selects a comprehensive go-bold scope set rather
+  // than the prior minimum. GitHub's PAT-creation UI pre-checks what's
+  // in `?scopes=` but lets the user UN-check anything they don't
+  // want, so asking broad is the operator-friendly default.
   //
-  //   GitHub:    repo + read:org
-  //              - repo:        clone / push / branches / PRs
-  //              - read:org:    enumerate orgs the user belongs to
-  //              (workflow not needed unless chepherd updates Actions)
+  //   GitHub (post-#235 go-bold):
+  //     repo                 — full repo content + issues + PRs + checks
+  //     workflow             — edit .github/workflows/*.yml
+  //     read:org / write:org — discover org repos + manage team membership
+  //     project              — read/write GitHub Projects v2 boards
+  //     write:packages / read:packages / delete:packages — GHCR push/pull/cleanup
+  //     user:email / read:user — commit author identity
+  //     gist                 — share code snippets
+  //     notifications        — mark workflow-failure notifs as read
+  //     admin:repo_hook      — chepherd-event webhooks on repo
+  //     write:gpg_key / read:gpg_key — GPG-signed commits
+  //
+  //   EXPLICITLY NOT included (operator must add manually):
+  //     delete_repo (destructive) · admin:org (too broad) ·
+  //     admin:org_hook (niche org-level) · admin:public_key (SSH key mgmt) ·
+  //     admin:ssh_signing_key (niche) · codespace (orthogonal).
+  //
   //   GitLab:    read_api + read_repository + write_repository
   //              - read_api:           org/project enumeration + PRs
   //              - read_repository:    clone
@@ -42,8 +58,8 @@
   //   Gitea / on-prem: instance-specific, operator's call.
   const PAT_HELPERS = {
     github: {
-      url:   'https://github.com/settings/tokens/new?scopes=repo,read:org&description=chepherd',
-      label: 'Create a GitHub PAT (scopes: repo + read:org)',
+      url:   'https://github.com/settings/tokens/new?scopes=repo,workflow,read:org,write:org,project,write:packages,read:packages,delete:packages,user:email,read:user,gist,notifications,admin:repo_hook,write:gpg_key,read:gpg_key&description=chepherd',
+      label: 'Create a GitHub PAT — broad scopes pre-selected; uncheck any you want to exclude',
     },
     gitlab: {
       url:   'https://gitlab.com/-/user_settings/personal_access_tokens?scopes=read_api,read_repository,write_repository',
