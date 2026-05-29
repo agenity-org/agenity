@@ -124,6 +124,12 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// can confirm two chepherd binaries have distinct fingerprints +
 	// won't cross-kill each other's agents at startup.
 	fmt.Printf("  instance:  %s (#270 — derived from state-dir abs path)\n\n", rt.InstanceUUID())
+	// #273 — verify the chepherd-agent:latest image's entrypoint script
+	// matches what this binary expects. Loud warning + rebuild
+	// instructions on mismatch. Best-effort — boot does NOT block on
+	// the check so dev builds without -X ldflags + bastions without
+	// podman still proceed normally.
+	runtime.VerifyAgentEntrypointSHA(rt.ContainerRuntime())
 	// #258 — reap orphan sibling agent containers BEFORE the HTTP
 	// surface comes up. #270 — the listing is now instance-scoped so
 	// a parallel chepherd binary on the same host has its own pool +
