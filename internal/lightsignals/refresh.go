@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/daemon"
+	"github.com/chepherd/chepherd/internal/shepherd"
 )
 
 // Interval is how often the light-signal goroutine refreshes each session's
@@ -46,7 +46,7 @@ type Live struct {
 
 // Refresher runs in the background for one session.
 type Refresher struct {
-	Session  *daemon.Session
+	Session  *shepherd.Session
 	StateDir string
 }
 

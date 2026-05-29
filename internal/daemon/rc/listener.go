@@ -268,7 +268,8 @@ func (l *Listener) handleCommand(ctx context.Context, sess *peerSession, env *en
 	case envelope.TypePing:
 		l.sendTo(sess, envelope.TypePong, envelope.PongPayload{InReplyTo: env.Seq})
 	case envelope.TypePong:
-		// No-op for now; future: track liveness windows.
+		// Pong is informational; liveness tracking is the relay's job
+		// (see relay/internal/wsrelay), not the listener's.
 	case envelope.TypeCommand:
 		var cmd envelope.CommandPayload
 		if err := env.DecodePayload(&cmd); err != nil {

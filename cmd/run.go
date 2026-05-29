@@ -1,13 +1,13 @@
-// cmd/run.go — `chepherd run` v0.5 entrypoint
+// cmd/run.go — `chepherd run` v0.9.2 single canonical entrypoint.
 //
-// This is the new pty-host-based runtime. The legacy `chepherd dashboard`
-// and `chepherd daemon` paths (tmux-based) are left UNTOUCHED so existing
-// users keep working while v0.5 stabilizes.
+// chepherd run wires the integrated control plane: runtime spawn-
+// lifecycle + shepherd intelligence + persistence layer + A2A
+// endpoint + MCP HTTP. The legacy `chepherd daemon` + `chepherd
+// shadow` cobra verbs (tmux-based Python-supervisor parity paths)
+// were retired in #208 — chepherd v0.9.2 has one canonical CLI
+// entry per docs/V0.9.2-ARCHITECTURE.md.
 //
-// `chepherd run` boots the runtime, spawns Adam (and Chepherd if monitored
-// mode is on), wires the @target relay, and tails to stdout. For v0.5.0
-// this is a headless harness — the TUI client refactor is tracked
-// separately as chepherd/chepherd#55.
+// `chepherd run` boots the runtime, spawns Adam, and tails to stdout.
 //
 // Usage:
 //
@@ -18,6 +18,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -29,15 +30,17 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
+	"github.com/chepherd/chepherd/internal/persistence/sqlite"
 	"github.com/chepherd/chepherd/internal/profile"
-	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/runtimehttp"
 	"github.com/chepherd/chepherd/internal/runtimetui"
+	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/chepherd/chepherd/internal/vault"
 )
 
@@ -64,11 +67,9 @@ watching the "default" tribe). Workers are spawned on demand by the operator
 via the dashboard's "+ spawn agent" button. Pass --no-shepherd to start
 completely empty (4-eyes off).
 
-This is the v0.5 development entrypoint. The legacy 'chepherd dashboard' and
-'chepherd daemon' (tmux-based) are LEFT UNTOUCHED so existing users keep working.
-
-When the TUI refactor lands (chepherd/chepherd#55), the dashboard client will
-target this runtime instead of tmux.`,
+chepherd run is the single canonical entrypoint for v0.9.2 — it integrates
+runtime, shepherd tier, persistence layer, A2A endpoint, and MCP HTTP into
+one process per docs/V0.9.2-ARCHITECTURE.md.`,
 	RunE: runRunCmd,
 }
 
@@ -105,19 +106,26 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  profile:   %s (spawner=%s auth=%s storage=%s tls=%s)\n\n",
 		profileNameOrDefault(prof.Name), prof.Spawner, prof.AuthMode, prof.StorageType, prof.TLSMode)
 
-	rt, err := runtime.New(stateDir)
+	// v0.9.2 (#208): open SQLite persistence.Store + thread into Runtime so
+	// the agent registry (and incrementally other state) is read/written
+	// through the Repository contract from PR #209 rather than file-on-disk.
+	// Store stays open for the lifetime of the chepherd process.
+	persistDB := filepath.Join(stateDir, "chepherd.db")
+	store, err := sqlite.NewStore(context.Background(), persistDB)
+	if err != nil {
+		return fmt.Errorf("runtime: open persistence store %q: %w", persistDB, err)
+	}
+	defer func() { _ = store.Close() }()
+	rt, err := runtime.NewWithStore(stateDir, store)
 	if err != nil {
 		return fmt.Errorf("runtime: %w", err)
 	}
-	relay := messagebus.New(rt)
-	// Auto-watch every session spawned by the runtime — including dynamic
-	// MCP `chepherd.spawn` invocations. Without this, only the initial
-	// Adam/Chepherd would have their output scanned for @target lines.
-	rt.AddSpawnHook(func(s *session.Session, name string) {
-		if err := relay.Watch(s, name); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: relay.Watch %s: %v\n", name, err)
-		}
-	})
+	// v0.9.2 (#208): internal/messagebus/relay.go (337 LOC + 4 Runtime
+	// SessionRegistry methods) deleted in this sub-branch. A2A
+	// SendMessage supersedes the regex @-line PTY relay entirely;
+	// cross-agent conversation now goes through the A2A JSON-RPC
+	// endpoint or the chepherd.send_to_session shim (which itself
+	// translates onto A2A SendMessage via the Deliverer wired below).
 
 	// MCP server on HTTP/WebSocket — `chepherd mcp` subprocess (used by
 	// agents) dials this endpoint and proxies JSON-RPC over the WS. One
@@ -130,10 +138,32 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if mcpListen == "" {
 		mcpListen = mcpserver.DefaultListenAddr
 	}
-	mcpSrv := mcpserver.New(rt)
+	// v0.9.2 (#208): build the A2A PTY Deliverer once + thread to the
+	// legacy MCP server (chepherd.send_to_session shim translates onto
+	// A2A SendMessage). The same Deliverer instance is also consumed
+	// by the runner-side A2A HTTPS endpoint via a2a.Router.WireDeliverer
+	// when that endpoint is stood up.
+	a2aDeliverer := runtime.NewA2ADeliverer(rt)
+	mcpSrv := mcpserver.NewWithDeliverer(rt, a2aDeliverer)
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
+
+	// v0.9.2 (#208): wire the shepherd tier. Constructs Shepherd from
+	// the same persistence.Store the runtime uses; attaches via
+	// Runtime.WithShepherd so RecordEvent broadcasts reach Observe;
+	// kicks off the periodic tick loop in a goroutine bound to the
+	// process-lifetime context so ctrl-C cleanly shuts it down.
+	shepCfg := shepherd.Config{JudgeCfg: shepherd.DefaultJudgeConfig()}
+	shep := shepherd.NewWithStore(store, shepCfg)
+	rt.WithShepherd(shep)
+	shepCtx, shepCancel := context.WithCancel(context.Background())
+	defer shepCancel()
+	go func() {
+		if err := shep.Run(shepCtx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "shepherd Run: %v\n", err)
+		}
+	}()
 	fmt.Printf("✓ MCP server (HTTP/WS) listening on http://%s/mcp/ws\n", mcpListen)
 
 	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),
@@ -143,6 +173,19 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		rs := runtimehttp.New(rt)
 		rs.WebDir = runFlagWebDir
 		rs.Profile = &prof
+
+		// v0.9.2 (#208 follow-up): expose A2A on the same HTTP server the
+		// dashboard uses. The Deliverer constructed above is reused — the
+		// MCP-shim path (chepherd.send_to_session) and the A2A JSON-RPC
+		// endpoint both translate onto the SAME PTY-writing Deliverer.
+		// AgentCard URL points at the canonical /jsonrpc surface so A2A
+		// clients can discover-then-call without out-of-band knowledge.
+		a2aRouter := a2a.NewRouter()
+		if err := a2aRouter.WireDeliverer(a2aDeliverer); err != nil {
+			return fmt.Errorf("a2a: wire deliverer: %w", err)
+		}
+		rs.A2ACard = newAgentCard(runFlagListen)
+		rs.A2ARouter = a2aRouter
 		// Vault — open (or create) in the state directory
 		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: vault: %v (credential vault disabled)\n", err)
@@ -233,7 +276,6 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			_ = httpSrv.Close()
 		}
 		mcpSrv.Stop()
-		relay.Stop()
 		for _, info := range rt.List() {
 			_ = rt.Stop(info.Name)
 		}
@@ -275,6 +317,58 @@ func profileNameOrDefault(n string) string {
 		return "(auto)"
 	}
 	return n
+}
+
+// newAgentCard builds the v0.9.2 A2A Agent Card served at
+// /.well-known/agent-card.json. listenAddr is the chepherd run
+// HTTP/WS listen address (e.g. "127.0.0.1:8080"); it determines
+// the canonical URL advertised on the card so A2A clients hit the
+// correct /jsonrpc endpoint.
+//
+// All three capabilities are advertised; SendMessage is wired to
+// the PTY Deliverer (the other 10 methods still return scaffold
+// errors until S5-S7 sub-branches). All 5 securitySchemes from
+// V0.9.2-ARCHITECTURE.md §6 are listed; runners pick which to
+// require via per-deployment policy.
+//
+// Refs #208.
+func newAgentCard(listenAddr string) *a2a.AgentCard {
+	return &a2a.AgentCard{
+		ProtocolVersion: "1.0",
+		Name:            "chepherd",
+		Description:     "chepherd v0.9.2 control-plane Agent — PTY-host runtime + shepherd intelligence + A2A endpoint",
+		URL:             "http://" + listenAddr + "/jsonrpc",
+		Version:         "0.9.2",
+		Capabilities: a2a.AgentCapabilities{
+			Streaming:         true,
+			PushNotifications: true,
+			ExtendedCard:      true,
+		},
+		DefaultInputModes:  []string{"text"},
+		DefaultOutputModes: []string{"text"},
+		Skills: []a2a.AgentSkill{
+			{
+				ID:          "send-message",
+				Name:        "Send PTY message",
+				Description: "Deliver a text message into a chepherd PTY session keyed by contextId (= chepherd session ID).",
+			},
+		},
+		Security: []map[string][]string{
+			{"mtls": {}},
+			{"httpAuth": {}},
+			{"apiKey": {}},
+			{"oauth2": {}},
+			{"oidc": {}},
+		},
+		SecuritySchemes: map[string]a2a.SecurityScheme{
+			"mtls":     {Type: "mutualTLS"},
+			"httpAuth": {Type: "http", Scheme: "bearer", BearerFormat: "JWT"},
+			"apiKey":   {Type: "apiKey", In: "header", Name: "X-API-Key"},
+			"oauth2":   {Type: "oauth2"},
+			"oidc":     {Type: "openIdConnect"},
+		},
+		XChepherdP2P: a2a.DefaultExtension(),
+	}
 }
 
 // runtimeVaultAdapter adapts *vault.Vault to runtime.VaultProvider — the

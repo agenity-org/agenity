@@ -30,7 +30,7 @@ var newCmd = &cobra.Command{
 	Use:   "new",
 	Short: "Create a watched Claude Code session in tmux",
 	Long: `Creates a tmux session running claude in a target directory and registers
-it with the chepherd daemon for supervision.
+it with chepherd run's shepherd tier for supervision.
 
 Modes:
   --repo PATH         use an existing local repository

@@ -36,30 +36,38 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/canon"
+	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/discovery"
+	"github.com/chepherd/chepherd/internal/profile"
+	"github.com/chepherd/chepherd/internal/prompts"
+	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
+	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/roles"
+	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/skills"
 	"github.com/chepherd/chepherd/internal/templateregistry"
-	"github.com/chepherd/chepherd/internal/catalog"
-	"github.com/chepherd/chepherd/internal/profile"
-	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
-	"github.com/chepherd/chepherd/internal/prompts"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
-	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/chepherd/chepherd/internal/vault"
 )
 
 // Server hosts chepherd runtime endpoints. Caller is responsible for
 // listening on a port + calling http.Serve(listener, server.Handler()).
 type Server struct {
-	rt     *runtime.Runtime
-	WebDir string        // optional: serve Astro static build from this dir
+	rt        *runtime.Runtime
+	WebDir    string            // optional: serve Astro static build from this dir
 	Vault     *vault.Vault      // optional: credential vault (nil = vault API returns 503)
 	Auth      auth.AuthProvider // optional: auth provider (nil = no token validation, dev only)
 	AuthToken string            // bearer token required on /api/v1/* (#139) — empty disables enforcement
 	Profile   *profile.Profile  // optional: deployment profile, surfaced via /healthz (#129)
+
+	// v0.9.2 (#208): A2A endpoints — GET /.well-known/agent-card.json and
+	// POST /jsonrpc. Wired by cmd/run.go before ServeOn; nil disables
+	// (legacy callers / unit tests). authMiddleware bypasses these paths
+	// because A2A advertises its own securitySchemes on the Agent Card.
+	A2ACard   *a2a.AgentCard
+	A2ARouter *a2a.Router
 
 	// #194 — Skill Library (10 LEAN builtins + user-defined CRUD).
 	skills *skills.Store
@@ -182,6 +190,13 @@ func (s *Server) Handler() http.Handler {
 	// #174 — discovery layer (auto-enumerate orgs + repos from saved tokens)
 	mux.HandleFunc("/api/v1/discovery/", s.discoveryRouter)
 
+	// v0.9.2 (#208 follow-up): A2A surface — GET /.well-known/agent-card.json
+	// + POST /jsonrpc. Both exact paths, so ServeMux's longest-prefix rule
+	// keeps them out of the SPA wildcard registered below.
+	if s.A2ACard != nil && s.A2ARouter != nil {
+		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter)
+	}
+
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)
 	mux.HandleFunc("/api/v1/claude-tokens/paste", s.claudeTokensPaste)
@@ -234,8 +249,8 @@ func (s *Server) Handler() http.Handler {
 // /api-v08/v1/* path. Paths that DON'T require auth:
 //   - /healthz       (liveness probe, must not require creds)
 //   - /v08/...       (the dashboard SPA itself — auth happens via the
-//                     token the operator pastes into the page; the bundle
-//                     itself is just static HTML/JS)
+//     token the operator pastes into the page; the bundle
+//     itself is just static HTML/JS)
 //   - /_astro/...    (static assets)
 //   - everything else served from WebDir (logo, fonts, etc.)
 //
@@ -511,7 +526,8 @@ func execCommand(name string, args ...string) *exec.Cmd {
 // Discovers git repos in ~/repos/, ~/projects/, ~/work/, ~/src/, ~/code/ and CWD.
 // Returns up to 60 repos sorted by modification time (newest first).
 // gitProvidersHandler — GET /api/v1/git-providers  (list)
-//                        POST /api/v1/git-providers  (register / update)
+//
+//	POST /api/v1/git-providers  (register / update)
 func (s *Server) gitProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -680,12 +696,12 @@ func (s *Server) claudeStatusHandler(w http.ResponseWriter, r *http.Request) {
 		loginMethod = "Claude Team account"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"logged_in":     true,
-		"login_method":  loginMethod,
-		"subscription":  creds.ClaudeAiOauth.SubscriptionType,
-		"rate_tier":     creds.ClaudeAiOauth.RateLimitTier,
-		"expires_at":    creds.ClaudeAiOauth.ExpiresAt,
-		"scopes":        creds.ClaudeAiOauth.Scopes,
+		"logged_in":    true,
+		"login_method": loginMethod,
+		"subscription": creds.ClaudeAiOauth.SubscriptionType,
+		"rate_tier":    creds.ClaudeAiOauth.RateLimitTier,
+		"expires_at":   creds.ClaudeAiOauth.ExpiresAt,
+		"scopes":       creds.ClaudeAiOauth.Scopes,
 	})
 }
 
@@ -696,15 +712,16 @@ type MemberOverrideReq struct {
 	ResumeUUID    string `json:"resume_uuid,omitempty"`
 	Cwd           string `json:"cwd,omitempty"`
 	Prompt        string `json:"prompt,omitempty"`
-	Fresh         bool   `json:"fresh,omitempty"` // explicit opt-out from resume_strategy
-	Agent         string `json:"agent,omitempty"` // override agent CLI for this member (#164)
+	Fresh         bool   `json:"fresh,omitempty"`           // explicit opt-out from resume_strategy
+	Agent         string `json:"agent,omitempty"`           // override agent CLI for this member (#164)
 	ClaudeTokenID string `json:"claude_token_id,omitempty"` // override Claude OAuth credential (#164)
 }
 
 // promptsHandler returns the default system prompt for a given role so
 // the SpawnModal can pre-fill its textarea + the operator can tweak.
-//   GET /api/v1/prompts/worker    → { role: "worker",   prompt: "..." }
-//   GET /api/v1/prompts/shepherd  → { role: "shepherd", prompt: "..." }
+//
+//	GET /api/v1/prompts/worker    → { role: "worker",   prompt: "..." }
+//	GET /api/v1/prompts/shepherd  → { role: "shepherd", prompt: "..." }
 func (s *Server) promptsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -953,12 +970,12 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var req struct {
 			Name, Agent, Team, Role, Cwd, SystemPrompt string
-			ProviderID                                  string                `json:"provider_id"`
-			AgentArgs                                   []string              `json:"agent_args"`
-			ResumeUUID                                  string                `json:"resume_uuid"`
-			UseDefaultPrompt                            bool                  `json:"use_default_prompt"`
-			StatSheet                                   runtime.AgentStatSheet `json:"stat_sheet"`
-			ClaudeTokenID                               string                `json:"claude_token_id"`
+			ProviderID                                 string                 `json:"provider_id"`
+			AgentArgs                                  []string               `json:"agent_args"`
+			ResumeUUID                                 string                 `json:"resume_uuid"`
+			UseDefaultPrompt                           bool                   `json:"use_default_prompt"`
+			StatSheet                                  runtime.AgentStatSheet `json:"stat_sheet"`
+			ClaudeTokenID                              string                 `json:"claude_token_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -1756,11 +1773,11 @@ func (s *Server) templatesHandler(w http.ResponseWriter, r *http.Request) {
 			memberSpecs := make([]map[string]any, 0, len(p.Members))
 			for _, m := range p.Members {
 				memberSpecs = append(memberSpecs, map[string]any{
-					"name":          m.Name,
-					"agent":         m.Agent,
-					"role":          string(m.Role),
+					"name":           m.Name,
+					"agent":          m.Agent,
+					"role":           string(m.Role),
 					"prompt_preview": truncatePrompt(m.Prompt + m.BriefOverride),
-					"cwd":           m.Cwd,
+					"cwd":            m.Cwd,
 				})
 			}
 			out = append(out, map[string]any{
@@ -1776,8 +1793,9 @@ func (s *Server) templatesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // templateApply — POST /api/v1/templates/{name}/apply {team, cwd}
-//                  POST /api/v1/templates/{name}/fork {new_name}        — copy YAML to operator dir
-//                  PUT  /api/v1/templates/{name}                         — overwrite YAML in operator dir
+//
+//	POST /api/v1/templates/{name}/fork {new_name}        — copy YAML to operator dir
+//	PUT  /api/v1/templates/{name}                         — overwrite YAML in operator dir
 func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/templates/")
 	parts := strings.SplitN(path, "/", 2)
@@ -1862,7 +1880,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Team            string
 		Cwd             string
-		ProviderID      string                       `json:"provider_id"`
+		ProviderID      string `json:"provider_id"`
 		Topology        string
 		ResumeStrategy  string                       `json:"resume_strategy"` // "" | "fresh" | "latest-in-cwd"
 		MemberOverrides map[string]MemberOverrideReq `json:"member_overrides"`
@@ -1955,7 +1973,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 			_ = s.rt.Stop(m.Name)
 		}
 		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{
-			Name:         m.Name,
+			Name:          m.Name,
 			AgentSlug:     firstNonEmpty(ov.Agent, m.Agent),
 			Team:          team,
 			Role:          role,
@@ -1993,22 +2011,27 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	memberRecs := make([]map[string]any, 0, len(p.Members))
 	for _, m := range p.Members {
 		memberRecs = append(memberRecs, map[string]any{
-			"name":        m.Name,
-			"agent":       m.Agent,
-			"role":        string(m.Role),
-			"cwd":         func() string { if m.Cwd != "" { return m.Cwd }; return cwd }(),
+			"name":  m.Name,
+			"agent": m.Agent,
+			"role":  string(m.Role),
+			"cwd": func() string {
+				if m.Cwd != "" {
+					return m.Cwd
+				}
+				return cwd
+			}(),
 			"claude_uuid": "",
 		})
 	}
 	teamDir := filepath.Join(s.rt.StateDir(), "teams", team)
 	_ = os.MkdirAll(teamDir, 0o700)
 	apply := map[string]any{
-		"template":     p.Name,
-		"team":         team,
-		"cwd":          cwd,
-		"topology":     string(effectiveTopology),
-		"members":      memberRecs,
-		"last_active":  time.Now().UTC().Format(time.RFC3339),
+		"template":    p.Name,
+		"team":        team,
+		"cwd":         cwd,
+		"topology":    string(effectiveTopology),
+		"members":     memberRecs,
+		"last_active": time.Now().UTC().Format(time.RFC3339),
 	}
 	if b, err := json.MarshalIndent(apply, "", "  "); err == nil {
 		_ = os.WriteFile(filepath.Join(teamDir, "apply.json"), b, 0o600)
@@ -2034,9 +2057,9 @@ func (s *Server) resurrectTeamHandler(w http.ResponseWriter, r *http.Request, te
 		return
 	}
 	var rec struct {
-		Template string         `json:"template"`
-		Cwd      string         `json:"cwd"`
-		Topology string         `json:"topology"`
+		Template string `json:"template"`
+		Cwd      string `json:"cwd"`
+		Topology string `json:"topology"`
 		Members  []struct {
 			Name, Agent, Role, Cwd, ClaudeUUID string `json:"-"`
 		} `json:"members"`
@@ -2279,8 +2302,8 @@ func (s *Server) kanbanMove(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Repo         string   `json:"repo"`
 		IssueNumber  int      `json:"issue_number"`
-		StatusLabel  string   `json:"status_label"`   // "" = backlog (no status label)
-		RemoveLabels []string `json:"remove_labels"`  // existing status labels to strip
+		StatusLabel  string   `json:"status_label"`  // "" = backlog (no status label)
+		RemoveLabels []string `json:"remove_labels"` // existing status labels to strip
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
