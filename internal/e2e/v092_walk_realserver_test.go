@@ -219,25 +219,24 @@ func TestV092Walk_SendMessageDoesNotErrorEnvelope(t *testing.T) {
 	assertSendMessageWorking(t, httpAddr, "shepherd", "name-form")
 }
 
-// TestV092Walk_SpawnPropagatesOAuthEnv pins the #218 spawn-auth-env
-// contract end-to-end: a chepherd binary whose vault carries a
-// claude-oauth entry spawns claude-code containers with
-// CLAUDE_CODE_OAUTH_TOKEN set in the container env (queried via
-// `podman inspect`). Closes the loop that the unit test in
-// internal/runtime/spawn_auth_env_test.go starts.
+// TestV092Walk_SpawnDoesNotInjectOAuthEnv pins the post-#227 invariant
+// end-to-end: a chepherd binary whose vault carries a claude-oauth
+// entry MUST spawn claude-code containers WITHOUT a
+// CLAUDE_CODE_OAUTH_TOKEN env var. Renamed (was
+// TestV092Walk_SpawnPropagatesOAuthEnv) + inverted from the PR #221
+// shape that was reverted in #227. The credential channel for
+// claude-code is the per-spawn file mount at
+// /run/secrets/claude-credentials (linked to ~/.claude/.credentials.json
+// inside the container). The env-var path pinned a static
+// access_token that 401s on expiry; the file path carries the full
+// refreshable OAuth pair.
 //
 // Skips when:
 //   - testing.Short() is set
 //   - `claude` or `podman` is not in PATH
 //
-// The test seeds a fake claude-oauth credential directly into the
-// vault.json file BEFORE booting chepherd, so the spawned shepherd
-// agent inherits it via the new agentAuthEnv path. We don't rely on
-// the operator's real ~/.claude/.credentials.json so the test is
-// hermetic + the assertion shape doesn't leak operator state.
-//
-// Refs #208.
-func TestV092Walk_SpawnPropagatesOAuthEnv(t *testing.T) {
+// Refs #208 #227.
+func TestV092Walk_SpawnDoesNotInjectOAuthEnv(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real-binary boot in -short mode")
 	}
@@ -294,15 +293,15 @@ func TestV092Walk_SpawnPropagatesOAuthEnv(t *testing.T) {
 			t.Fatalf("write seed %s: %v", pair.dst, err)
 		}
 	}
-	// Verify the seeded vault carries a claude-oauth entry; otherwise
-	// the env-propagation has nothing to inject + the assertion below
-	// would falsely fail.
+	// Verify the seeded vault carries a claude-oauth entry; the post-#227
+	// invariant ("no env injection even when vault is populated") only
+	// has teeth when the vault HAS something it could have injected.
 	vb, _ := os.ReadFile(filepath.Join(stateDir, "vault.json"))
 	// Match both compact + pretty JSON formats — Go's json.Marshal yields
 	// `"provider":"X"` while MarshalIndent yields `"provider": "X"`.
 	if !bytes.Contains(vb, []byte(`"provider":"claude-oauth"`)) &&
 		!bytes.Contains(vb, []byte(`"provider": "claude-oauth"`)) {
-		t.Skip("skipping: seeded vault.json has no claude-oauth entry; agentAuthEnv would return nil")
+		t.Skip("skipping: seeded vault.json has no claude-oauth entry — no-injection invariant is vacuously true")
 	}
 
 	// ─── Boot chepherd against the seeded state-dir ────────────────
@@ -347,15 +346,16 @@ func TestV092Walk_SpawnPropagatesOAuthEnv(t *testing.T) {
 		t.Fatal("no session in SessionRepository after spawn")
 	}
 
-	// ─── Assertion: podman inspect container env carries the token ──
+	// ─── Assertion: podman inspect container env does NOT carry the token ──
 	// The default shepherd auto-spawns as container `chepherd-agent-shepherd`.
+	// Post-#227 invariant: `agentAuthEnv` returns nil for claude-code,
+	// so the container env must NOT carry `CLAUDE_CODE_OAUTH_TOKEN=`.
 	// Retry-with-timeout because the container can exit + be removed
-	// (--rm) within seconds — independent of the env-propagation we're
-	// asserting here. If even one inspect succeeds and shows the token,
-	// the spawn-time env was correct. If the container is never
+	// (--rm) within seconds. If even one inspect succeeds + shows the
+	// token absent, the invariant holds. If the container is never
 	// inspectable in the 5s window, the test is inconclusive (Skip
-	// rather than Fail) since the unit test already pins the agentAuthEnv
-	// function-level contract.
+	// rather than Fail) since the unit test in internal/runtime pins
+	// the function-level contract.
 	deadline := time.Now().Add(5 * time.Second)
 	var envText string
 	inspected := false
@@ -370,12 +370,12 @@ func TestV092Walk_SpawnPropagatesOAuthEnv(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !inspected {
-		t.Skip("skipping assertion: container chepherd-agent-shepherd never inspectable in 5s window (exited+removed too fast); unit test in internal/runtime covers the function-level invariant")
+		t.Skip("skipping assertion: container chepherd-agent-shepherd never inspectable in 5s window; unit test pins function-level contract")
 	}
-	if !strings.Contains(envText, "CLAUDE_CODE_OAUTH_TOKEN=") {
-		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN missing from spawned container env (#218 regression)\nContainer env:\n%s", envText)
+	if strings.Contains(envText, "CLAUDE_CODE_OAUTH_TOKEN=") {
+		t.Fatalf("CLAUDE_CODE_OAUTH_TOKEN present in spawned container env — #227 regression: pins a static access_token that 401s on expiry. File-mount path is canonical.\nContainer env:\n%s", envText)
 	}
-	t.Logf("CLAUDE_CODE_OAUTH_TOKEN found in chepherd-agent-shepherd Config.Env (#218 fix wired end-to-end)")
+	t.Logf("CLAUDE_CODE_OAUTH_TOKEN absent from chepherd-agent-shepherd Config.Env (#227 invariant holds: file-mount is the canonical credential source)")
 }
 
 // TestV092Walk_ShepherdPTYAliveAtT30s pins the #218 liveness contract:

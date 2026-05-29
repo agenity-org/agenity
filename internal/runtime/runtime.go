@@ -437,61 +437,42 @@ func (r *Runtime) agentEnvOverlay() []string {
 }
 
 // agentAuthEnv returns the per-flavor Anthropic-auth env-var slice for
-// the given agent slug, sourced from the vault's claude-oauth entries
-// (most-recently-updated wins, matching the file-mount fallback chain
-// in materializeAgentSecrets). The v0.9.2 mapping per architect call
-// on #218:
+// the given agent slug. Scaffolded as an extension point for future
+// flavors (qwen-code, aider, gemini-cli, opencode) whose credentials
+// need to land in env vars; today returns nil for every slug.
 //
-//	claude-code → CLAUDE_CODE_OAUTH_TOKEN=<vault.claude-oauth.accessToken>
+// **claude-code returns nil on purpose** (#227). The claude-code CLI's
+// canonical credential source is the per-spawn file mount at
+// `/run/secrets/claude-credentials` → linked to
+// `~/.claude/.credentials.json` inside the container by the agent
+// image's entrypoint. That file carries the full OAuth pair
+// {accessToken, refreshToken, expiresAt} and claude-code rotates the
+// access_token in-process when it sees the file's expiresAt is past.
 //
-// CLAUDE_CODE_OAUTH_TOKEN is the env var claude-code reads for OAuth
-// access tokens (sk-ant-oat01-...). ANTHROPIC_API_KEY is for direct
-// API keys (sk-ant-api03-...); the chepherd vault stores OAuth tokens
-// so the OAuth env var is the right pick. Confirmed via
-// `claude --help` bare-mode docstring ("Anthropic auth is strictly
-// ANTHROPIC_API_KEY ... OAuth and keychain are never read") and the
-// claude binary's strings ("ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
-// env var is required").
+// PR #221 originally added a `CLAUDE_CODE_OAUTH_TOKEN=<vault.accessToken>`
+// env injection here, intending it as a redundant credential channel.
+// Operator-reported #227: when that env var is set, claude-code v2.1.153+
+// uses it instead of the file path. The env-var value is a STATIC
+// snapshot of the access_token at spawn time — no refresh metadata —
+// so as soon as the token expires (minutes to hours) the spawned worker
+// hits HTTP 401 from the Anthropic API. The file-mount path doesn't
+// have this problem because claude-code can read the refreshToken next
+// to the access_token and rotate in-place.
 //
-// Returns nil when:
-//   - r.vault is unset (no vault configured — v0.5/v0.7 fallback path)
-//   - no claude-oauth provider entries exist in the vault
-//   - the credential payload doesn't parse as the expected
-//     {"claudeAiOauth":{"accessToken":...}} shape
-//   - the slug is not a flavor with a defined mapping
+// Reverted in #227. The file-mount + refresh-on-spawn chain in
+// `materializeAgentSecrets` (which already calls
+// `refreshClaudeOAuthIfNeeded` to pre-refresh stale snapshots) is the
+// sole credential source for claude-code. Operator's pre-PR-#221
+// workflow (which has been running fine for hours on the same
+// credential) is preserved.
 //
-// Other flavors (qwen-code, aider, gemini-cli, opencode) are
-// scaffolded for v0.9.3+ but return nil today. Closes #218.
-//
-// Refs #208.
+// Refs #208 #218 #221 #227.
 func (r *Runtime) agentAuthEnv(slug string) []string {
-	if r.vault == nil {
-		return nil
-	}
-	switch slug {
-	case "claude-code", "claude":
-		creds := r.vault.ListByProvider("claude-oauth")
-		if len(creds) == 0 {
-			return nil
-		}
-		latest := creds[len(creds)-1]
-		payload, err := r.vault.GetValue(latest.ID)
-		if err != nil || payload == "" {
-			return nil
-		}
-		var blob struct {
-			ClaudeAiOauth struct {
-				AccessToken string `json:"accessToken"`
-			} `json:"claudeAiOauth"`
-		}
-		if err := json.Unmarshal([]byte(payload), &blob); err != nil {
-			return nil
-		}
-		if blob.ClaudeAiOauth.AccessToken == "" {
-			return nil
-		}
-		return []string{"CLAUDE_CODE_OAUTH_TOKEN=" + blob.ClaudeAiOauth.AccessToken}
-	}
+	// claude-code's credential lives in /run/secrets/claude-credentials,
+	// not in an env var. See doc comment above for the regression
+	// history. Other flavors return nil pending future provider
+	// mappings — wire them here when they land.
+	_ = slug
 	return nil
 }
 
