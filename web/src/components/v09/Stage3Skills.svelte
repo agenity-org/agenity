@@ -192,9 +192,17 @@
      right). Renamed to .skills-grid to keep this <table>'s default
      `display: table` semantics. Other components also use the unscoped
      `.grid` name — defensive sweep tracked as #228. */
-  .skills-grid { border-collapse: separate; border-spacing: 0; font-size: 0.84rem; }
+  /* #236 — `width: 100%` + `table-layout: fixed` so the role columns
+     share the available width equally. Without `table-layout: fixed`
+     browsers use the auto algorithm which sizes columns to content +
+     leaves whitespace on the right. The skill-th column gets an
+     explicit `width: 14rem`; the role-th + .cell columns use auto so
+     `table-layout: fixed` distributes `100% - 14rem` equally among
+     them. .grid-wrap's `overflow-x: auto` still kicks in when the
+     accumulated min-widths exceed the container (mobile / 5+ roles). */
+  .skills-grid { border-collapse: separate; border-spacing: 0; font-size: 0.84rem; width: 100%; table-layout: fixed; }
   .skills-grid thead th { color: var(--fg-muted, #aaa); font-weight: 600; padding: 0.4rem 0.55rem; text-align: center; border-bottom: 1px solid var(--border, #2a2a2a); }
-  .skills-grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.7rem; font-weight: 500; max-width: 14rem; white-space: nowrap; }
+  .skills-grid .skill-th { text-align: left; color: var(--fg, #f5f5f5); padding-right: 0.7rem; font-weight: 500; width: 14rem; max-width: 14rem; white-space: nowrap; }
   .skills-grid .role-th { color: var(--accent-2, #87ceeb); min-width: 5rem; }
   .skills-grid .cnt { color: var(--fg-muted, #888); margin-left: 0.18rem; font-size: 0.72rem; }
   .cell {
