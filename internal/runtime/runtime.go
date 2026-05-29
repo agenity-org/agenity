@@ -10,6 +10,8 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -247,6 +249,13 @@ type Runtime struct {
 	stateDir         string           // ~/.local/state/chepherd
 	containerRuntime ContainerRuntime // podman | docker | bare
 	spawner          AgentSpawner     // podman-sidecar | operator | direct (#127)
+
+	// #270 — instanceUUID is the 8-char SHA256 fingerprint of the
+	// absolute state-dir path. Two chepherd binaries with distinct
+	// --state-dir flags get distinct UUIDs → distinct container-name
+	// pools → cross-instance reap impossible. Computed once during
+	// NewWithStore + propagated to containerRuntime via SetInstanceUUID.
+	instanceUUID string
 
 	// vault is the token vault used to materialize /run/secrets/
 	// for agent containers. Nil → fall back to host ~/.claude/.credentials.json.
@@ -557,6 +566,13 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		return nil, err
 	}
 	cr := DetectRuntime()
+	// #270 — derive a stable 8-char UUID from the absolute state-dir
+	// path so two chepherd binaries with distinct state-dirs spawn
+	// distinct container-name pools. SHA256 of the resolved absolute
+	// path; first 8 hex chars suffice (collision probability ~1e-19
+	// across the realistic count of chepherd binaries on one host).
+	instUUID := instanceUUIDFromStateDir(stateDir)
+	cr.SetInstanceUUID(instUUID)
 	if err := os.MkdirAll(filepath.Join(stateDir, "agents"), 0o700); err != nil {
 		return nil, err
 	}
@@ -593,6 +609,7 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		spawner:          spawner,
 		agentRegistry:    agentStore,
 		sessionToAgent:   make(map[string]uuid.UUID),
+		instanceUUID:     instUUID,
 	}
 	// #216 closes the Spawn ↔ SessionRepository seam left open by
 	// PR #211 (runtime migration) + PR #213 (daemon retire). With a
@@ -1394,6 +1411,28 @@ func (r *Runtime) Stop(name string) error {
 	return nil
 }
 
+// instanceUUIDFromStateDir derives the chepherd instance UUID from the
+// absolute state-dir path: SHA256 of the resolved absolute path, first
+// 8 hex chars. Stable across reboots (same path → same UUID), unique
+// across distinct paths. Used by #270 to namespace container names so
+// two chepherd binaries on the same host can't cross-kill each other's
+// agents. If filepath.Abs fails (genuinely unusual — symlink loop on
+// /tmp etc.), falls back to the raw input string so the function never
+// returns empty (an empty UUID would silently re-introduce the pre-#270
+// unscoped behaviour).
+func instanceUUIDFromStateDir(stateDir string) string {
+	abs, err := filepath.Abs(stateDir)
+	if err != nil {
+		abs = stateDir
+	}
+	sum := sha256.Sum256([]byte(abs))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// InstanceUUID exposes this chepherd's 8-char instance fingerprint
+// for cmd/run.go's boot-banner + #270's verification logging.
+func (r *Runtime) InstanceUUID() string { return r.instanceUUID }
+
 // ReapOrphanContainers garbage-collects sibling agent containers that
 // aren't tracked by the live runtime — they survived a chepherd crash
 // or were spawned by a prior chepherd run. Called once at chepherd
@@ -1403,8 +1442,15 @@ func (r *Runtime) Stop(name string) error {
 //
 // #258 — bundled with the Runtime.Stop fix to clean up the 19 zombies
 // the operator already has. New chepherd boot enumerates all
-// `chepherd-agent-*` containers via `podman ps -a` then removes any
+// chepherd-agent-* containers via `podman ps -a` then removes any
 // whose agent name isn't in the live registry.
+//
+// #270 — the listing is now instance-scoped: ListAgentContainers's
+// filter only matches `chepherd-agent-<this-instance-uuid>-*`. A
+// second chepherd binary on the same host has a different UUID, so
+// its agents are invisible here + safe from reap. Pre-#270 containers
+// (no UUID infix) are also invisible to the new filter and age out
+// naturally via operator-side cleanup.
 func (r *Runtime) ReapOrphanContainers() int {
 	if r.containerRuntime == nil {
 		return 0
@@ -1414,10 +1460,14 @@ func (r *Runtime) ReapOrphanContainers() int {
 		fmt.Fprintf(os.Stderr, "runtime.ReapOrphanContainers: list: %v\n", err)
 		return 0
 	}
+	prefix := "chepherd-agent-"
+	if r.instanceUUID != "" {
+		prefix = "chepherd-agent-" + r.instanceUUID + "-"
+	}
 	live := map[string]struct{}{}
 	r.mu.Lock()
 	for name := range r.byName {
-		live["chepherd-agent-"+name] = struct{}{}
+		live[prefix+name] = struct{}{}
 	}
 	r.mu.Unlock()
 	reaped := 0
@@ -1425,9 +1475,10 @@ func (r *Runtime) ReapOrphanContainers() int {
 		if _, ok := live[full]; ok {
 			continue
 		}
-		// Strip the prefix so StopContainer can re-add it. Skip names
-		// that don't carry the expected prefix (defensive).
-		const prefix = "chepherd-agent-"
+		// Strip the prefix so StopContainer can re-add it. Defensive:
+		// skip any list entry that doesn't actually carry our prefix
+		// (would happen only if ListAgentContainers's --filter ever
+		// loosened — belt-and-braces).
 		if len(full) <= len(prefix) || full[:len(prefix)] != prefix {
 			continue
 		}
@@ -1439,7 +1490,7 @@ func (r *Runtime) ReapOrphanContainers() int {
 		reaped++
 	}
 	if reaped > 0 {
-		fmt.Fprintf(os.Stderr, "runtime: reaped %d orphan agent container(s) at startup (#258)\n", reaped)
+		fmt.Fprintf(os.Stderr, "runtime: reaped %d orphan agent container(s) at startup for instance %s (#258 #270)\n", reaped, r.instanceUUID)
 	}
 	return reaped
 }

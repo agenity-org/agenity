@@ -59,6 +59,8 @@ func (f *fakeContainerRuntime) AgentHomeDir(agentName, stateDir string) (string,
 func (f *fakeContainerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	return argv, env
 }
+// #270 — interface compliance; existing tests don't assert on UUID.
+func (f *fakeContainerRuntime) SetInstanceUUID(string) {}
 func (f *fakeContainerRuntime) StopContainer(name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

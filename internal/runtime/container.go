@@ -47,18 +47,30 @@ type ContainerRuntime interface {
 	// leaking on operator's `podman ps` (19 zombies counted).
 	// Implementations must be best-effort: a container that's already
 	// gone is not an error. `name` is the agent label (without the
-	// `chepherd-agent-` prefix); implementations prepend the prefix.
+	// `chepherd-agent-<uuid>-` prefix); implementations prepend the
+	// prefix using the instance UUID set via SetInstanceUUID.
 	StopContainer(name string) error
 	// ListAgentContainers returns all live OR exited containers whose
-	// name starts with `chepherd-agent-`. Used by the startup orphan
-	// cleanup helper to garbage-collect zombies whose owning chepherd
-	// runtime is no longer aware of them (e.g. survived a chepherd
-	// crash, or were spawned by a prior chepherd run).
+	// name starts with `chepherd-agent-<this-instance-uuid>-`. #270 —
+	// pre-#270 the filter was `chepherd-agent-` (matched ALL chepherd
+	// instances' agents) which made `ReapOrphanContainers` cross-kill
+	// agents owned by a second chepherd binary on the same host. The
+	// scoped filter ensures only THIS instance's agents are surfaced.
 	ListAgentContainers() ([]string, error)
+	// SetInstanceUUID configures the 8-char chepherd-instance UUID that
+	// the runtime prefixes onto container names + filters by. #270 —
+	// each chepherd binary derives a stable UUID from the absolute path
+	// of its state-dir (see runtime.instanceUUID), so two binaries with
+	// distinct state-dirs spawn distinct container-name pools and never
+	// cross-kill each other. Implementations that don't manage
+	// containers (BareExec) accept and ignore.
+	SetInstanceUUID(uuid string)
 }
 
 // DetectRuntime returns the best available ContainerRuntime.
-// Order: Podman > Docker > BareExec.
+// Order: Podman > Docker > BareExec. Caller must call SetInstanceUUID
+// on the result before any SpawnArgs / StopContainer / ListAgentContainers
+// invocation so the #270 instance-scoping holds.
 func DetectRuntime() ContainerRuntime {
 	p := &PodmanRuntime{}
 	if p.Available() == nil {
@@ -86,7 +98,24 @@ func DetectRuntime() ContainerRuntime {
 // /var/lib/chepherd-agents/storage — that broke the host visibility
 // contract and was a misread of issue #124 ("containerize chepherd
 // daemon"). Removed entirely.
-type PodmanRuntime struct{}
+type PodmanRuntime struct {
+	// instanceUUID is the 8-char chepherd-instance fingerprint set by
+	// SetInstanceUUID (#270). Empty until configured — defensive: if
+	// never set, container names fall back to the pre-#270 unscoped
+	// shape so a forgotten configure doesn't silently break spawn.
+	instanceUUID string
+}
+
+// containerNamePrefix returns the per-instance prefix used for all
+// chepherd-agent-* container names. With UUID set (#270 canonical
+// path): "chepherd-agent-<uuid>-". Without UUID (defensive fallback
+// or BareExec): "chepherd-agent-".
+func containerNamePrefix(uuid string) string {
+	if uuid == "" {
+		return "chepherd-agent-"
+	}
+	return "chepherd-agent-" + uuid + "-"
+}
 
 // hostPodmanSocketPath is the path inside the chepherd container at
 // which the host's rootless podman socket is bind-mounted. Matches
@@ -142,6 +171,8 @@ func toHostPath(p string) string {
 }
 
 func (r *PodmanRuntime) Name() string { return "podman" }
+
+func (r *PodmanRuntime) SetInstanceUUID(uuid string) { r.instanceUUID = uuid }
 
 func (r *PodmanRuntime) Available() error {
 	if _, err := exec.LookPath("podman"); err != nil {
@@ -207,7 +238,10 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// --replace covers reuse-after-prior-leak. Both are needed.
 	podArgs := append(podmanArgs(),
 		"run", "--rm", "--replace", "--interactive", "--tty",
-		"--name", "chepherd-agent-"+agentName,
+		// #270 — instance-scoped container name. The prefix carries
+		// this chepherd binary's UUID so a parallel chepherd binary
+		// on the same host can't clobber or reap these containers.
+		"--name", containerNamePrefix(r.instanceUUID)+agentName,
 		// Default bridge network — sibling to chepherd on host podman.
 		"--network", "bridge",
 		// Per-agent persistent home (claude session files, config).
@@ -283,7 +317,7 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 // `podman run --rm` cleanup didn't fire reliably (operator counted
 // 19 zombies). Explicit stop+rm here is the source of truth.
 func (r *PodmanRuntime) StopContainer(name string) error {
-	full := "chepherd-agent-" + name
+	full := containerNamePrefix(r.instanceUUID) + name
 	args := podmanArgs()
 	// #258 reopen — operator reports stuck-stops on the bastion. PR #260
 	// added the call-through but the stop/rm shell-outs were silent
@@ -325,8 +359,16 @@ func (r *PodmanRuntime) StopContainer(name string) error {
 // when no agents exist; error only on podman-call failure.
 func (r *PodmanRuntime) ListAgentContainers() ([]string, error) {
 	args := podmanArgs()
+	// #270 — filter on the instance-scoped prefix so a second
+	// chepherd binary on the same host can't see/reap our agents,
+	// and we don't see/reap theirs. Pre-#270 containers with the
+	// unscoped `chepherd-agent-<slug>` shape are intentionally NOT
+	// matched here — they age out via natural operator churn and
+	// the migration cost is operator-side `podman rm -f` of the
+	// pre-fix containers (documented in the #270 PR body).
+	prefix := containerNamePrefix(r.instanceUUID)
 	psArgs := append(append([]string{}, args[1:]...),
-		"ps", "-a", "--filter", "name=chepherd-agent-", "--format", "{{.Names}}")
+		"ps", "-a", "--filter", "name="+prefix, "--format", "{{.Names}}")
 	out, err := exec.Command(args[0], psArgs...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("podman ps: %w", err)
@@ -343,9 +385,12 @@ func (r *PodmanRuntime) ListAgentContainers() ([]string, error) {
 
 // ─── Docker ──────────────────────────────────────────────────────────────────
 
-type DockerRuntime struct{}
+type DockerRuntime struct {
+	instanceUUID string // see PodmanRuntime.instanceUUID
+}
 
-func (r *DockerRuntime) Name() string { return "docker" }
+func (r *DockerRuntime) Name() string                  { return "docker" }
+func (r *DockerRuntime) SetInstanceUUID(uuid string)   { r.instanceUUID = uuid }
 func (r *DockerRuntime) Available() error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("docker not in PATH")
@@ -359,7 +404,7 @@ func (r *DockerRuntime) AgentHomeDir(agentName, stateDir string) (string, error)
 	return (&PodmanRuntime{}).AgentHomeDir(agentName, stateDir)
 }
 func (r *DockerRuntime) StopContainer(name string) error {
-	full := "chepherd-agent-" + name
+	full := containerNamePrefix(r.instanceUUID) + name
 	// #258 reopen — same verbose-logging treatment as PodmanRuntime.
 	if stopOut, stopErr := exec.Command("docker", "stop", "--time", "5", full).CombinedOutput(); stopErr != nil {
 		s := strings.ToLower(string(stopOut))
@@ -381,7 +426,9 @@ func (r *DockerRuntime) StopContainer(name string) error {
 	return nil
 }
 func (r *DockerRuntime) ListAgentContainers() ([]string, error) {
-	out, err := exec.Command("docker", "ps", "-a", "--filter", "name=chepherd-agent-", "--format", "{{.Names}}").Output()
+	// #270 — instance-scoped prefix, same rationale as PodmanRuntime.
+	prefix := containerNamePrefix(r.instanceUUID)
+	out, err := exec.Command("docker", "ps", "-a", "--filter", "name="+prefix, "--format", "{{.Names}}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps: %w", err)
 	}
@@ -399,7 +446,7 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// (Docker handles UID remapping differently).
 	dockerArgs := []string{
 		"docker", "run", "--rm", "--interactive", "--tty",
-		"--name", "chepherd-agent-" + agentName,
+		"--name", containerNamePrefix(r.instanceUUID) + agentName,
 		"--network", "bridge",
 		"-v", agentHomeDir + ":/home/agent:rw",
 		"-v", cwd + ":" + cwd + ":rw",
@@ -451,6 +498,9 @@ func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cw
 // BareExec has no container — Runtime.Stop's PTY close is sufficient.
 func (r *BareExecRuntime) StopContainer(name string) error      { return nil }
 func (r *BareExecRuntime) ListAgentContainers() ([]string, error) { return nil, nil }
+// #270 — BareExec doesn't manage containers; the UUID is accepted and
+// silently ignored to satisfy the interface.
+func (r *BareExecRuntime) SetInstanceUUID(string) {}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
