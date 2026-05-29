@@ -537,7 +537,16 @@
      show the options in card view') or as an overlay over the body
      when the operator right-clicks a tab. Same component, two
      contexts. */
+  /* #248 — `container-type: size` on the .pane-picker.center makes the
+     wrapper a CSS-container-query context so the .pp-grid below can
+     react to both pane WIDTH and HEIGHT (default `auto-fill` only
+     reacts to width, which collapses to a 1-col pillar in tall+narrow
+     panes — operator quote 2026-05-30 "pillar, 8-10 cards vertically
+     listed"). `container-name: pickerpane` lets the @container queries
+     below target this specific wrapper, not any ancestor. */
   .pane-picker.center {
+    container-type: size;
+    container-name: pickerpane;
     height: 100%; width: 100%;
     display: flex; flex-direction: column;
     align-items: stretch; justify-content: center;
@@ -554,7 +563,11 @@
     padding-top: 2rem;
     z-index: 50;
   }
+  /* Overlay variant uses the same container-query approach so the
+     right-click pick-widget popover also distributes homogeneously. */
   .pane-picker-card {
+    container-type: size;
+    container-name: pickerpane;
     background: var(--bg-elev); border: 1px solid var(--border);
     border-radius: 8px; padding: 0.9rem 1rem;
     max-width: min(90%, 32rem);
@@ -574,13 +587,40 @@
     padding: 0 0.3rem;
   }
   .pp-close:hover { color: #e74c3c; }
+  /* #248 — `align-content: center` makes the grid SIT in the middle
+     of the available vertical space rather than glued to the top
+     (operator complaint: cards stuck at the top in tall panes). The
+     base auto-fill rule below is the WIDE-pane fallback; the
+     @container queries override for tall-narrow / very-narrow cases
+     so cards distribute homogeneously across both axes. */
   .pp-grid {
     display: grid; width: 100%;
     grid-template-columns: repeat(auto-fill, minmax(min(8rem, 100%), 1fr));
     gap: 0.5rem;
+    align-content: center;
   }
   .pp-grid.agents {
     grid-template-columns: repeat(auto-fill, minmax(min(10rem, 100%), 1fr));
+  }
+  /* Tall-narrow panes (aspect-ratio < 0.5) — auto-fill would
+     resolve to 1 column and stack into a pillar. Force 2 cols so
+     cards spread horizontally even in a 240×600 right-rail pane. */
+  @container pickerpane (aspect-ratio < 0.5) {
+    .pp-grid { grid-template-columns: repeat(2, 1fr); }
+    .pp-grid.agents { grid-template-columns: repeat(2, 1fr); }
+  }
+  /* Short-wide panes (aspect-ratio > 2) — make the cards smaller
+     so the horizontal space is fully utilised. min 6rem instead of
+     8rem packs more columns. */
+  @container pickerpane (aspect-ratio > 2) {
+    .pp-grid { grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr)); }
+    .pp-grid.agents { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); }
+  }
+  /* Genuinely tiny panes (< 200px wide) — single column is the
+     only readable option. Falls THROUGH the aspect-ratio rules
+     above because both layouts collapse meaningfully at that size. */
+  @container pickerpane (width < 200px) {
+    .pp-grid, .pp-grid.agents { grid-template-columns: 1fr; }
   }
   .pp-card {
     display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
