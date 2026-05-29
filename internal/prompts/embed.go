@@ -12,4 +12,4 @@ import _ "embed"
 var Worker string
 
 //go:embed shepherd.md
-var Shepherd string
+var ScrumMaster string

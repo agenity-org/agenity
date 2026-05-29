@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/shepherd"
+	"github.com/chepherd/chepherd/internal/scrummaster"
 	"github.com/chepherd/chepherd/internal/lightsignals"
 	stylepkg "github.com/chepherd/chepherd/internal/style"
 )
@@ -41,7 +41,7 @@ dir 'chepherd shadow' writes to.`,
 func init() {
 	rootCmd.AddCommand(liveCmd)
 	liveCmd.Flags().StringVar(&liveStateDir, "state-dir",
-		shepherd.DefaultStateDir(), "where to write live_signals JSON")
+		scrummaster.DefaultStateDir(), "where to write live_signals JSON")
 	liveCmd.Flags().BoolVar(&livePollingOnly, "polling-only", false,
 		"use 5-sec polling instead of fsnotify (fallback for systems "+
 			"where fsnotify isn't reliable)")
@@ -69,7 +69,7 @@ func runLive(cmd *cobra.Command, args []string) error {
 	defer rediscover.Stop()
 
 	refreshSessions := func() {
-		sessions, err := shepherd.DiscoverSessions()
+		sessions, err := scrummaster.DiscoverSessions()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "discovery:", err)
 			return

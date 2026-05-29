@@ -23,14 +23,14 @@
 //     shepherd-tier scoring, shepherd-as-agent spawning sub-
 //     shepherds) ripples cleanly INTO this package
 //
-// The Shepherd interface is the contract Runtime consumes (nil-OK
+// The ScrumMaster interface is the contract Runtime consumes (nil-OK
 // pattern when no shepherd is wired). Concrete implementations live
 // alongside; v0.9.2 ships one — NewWithStore backed by the existing
 // band/judge/signals code paths + persistence.SessionRepository for
 // state persistence.
 //
 // Refs #208.
-package shepherd
+package scrummaster
 
 import (
 	"context"
@@ -45,14 +45,14 @@ import (
 	"github.com/chepherd/chepherd/internal/persistence"
 )
 
-// Shepherd is the worker-observation tier contract. Runtime consumes
-// this via runtime.Runtime.WithShepherd(s) — nil-Shepherd is OK
+// ScrumMaster is the worker-observation tier contract. Runtime consumes
+// this via runtime.Runtime.WithShepherd(s) — nil-ScrumMaster is OK
 // (Runtime no-ops the broadcast when no shepherd is wired).
 //
 // All three methods accept a context for cancellation + timeouts;
 // implementations MUST respect ctx.Done() to avoid blocking the
 // caller's tick loop.
-type Shepherd interface {
+type ScrumMaster interface {
 	// Observe receives a runtime event (session-spawned,
 	// output-emitted, pause-toggled, etc.) and feeds it through the
 	// band / judge / signals pipeline. The event is passed as `any`
@@ -78,7 +78,7 @@ type Shepherd interface {
 	Run(ctx context.Context) error
 }
 
-// Config carries Shepherd construction parameters.
+// Config carries ScrumMaster construction parameters.
 type Config struct {
 	// JudgeCfg controls the judge LLM endpoint + tick interval +
 	// state-dir paths. DefaultJudgeConfig() returns sensible defaults.
@@ -93,16 +93,16 @@ type Config struct {
 	StateDir string
 }
 
-// New constructs the v0.9.2 Shepherd implementation in file-on-disk
+// New constructs the v0.9.2 ScrumMaster implementation in file-on-disk
 // mode (no persistence.SessionRepository wired). Suitable for legacy
 // callers; v0.9.2 cmd/run.go uses NewWithStore.
-func New(cfg JudgeConfig) Shepherd {
+func New(cfg JudgeConfig) ScrumMaster {
 	return &shepherdImpl{
 		cfg: Config{JudgeCfg: cfg, TickInterval: 60 * time.Second},
 	}
 }
 
-// NewWithStore constructs the v0.9.2 Shepherd implementation wired to
+// NewWithStore constructs the v0.9.2 ScrumMaster implementation wired to
 // a persistence.Store. State persistence routes through
 // store.Sessions() (SessionRepository) instead of file-on-disk; the
 // tick loop's discovery pulls session IDs from the same Repository so
@@ -113,7 +113,7 @@ func New(cfg JudgeConfig) Shepherd {
 // runtime.Runtime.WithShepherd(shep) + `go shep.Run(ctx)`.
 //
 // Refs #208.
-func NewWithStore(store persistence.Store, cfg Config) Shepherd {
+func NewWithStore(store persistence.Store, cfg Config) ScrumMaster {
 	if cfg.TickInterval <= 0 {
 		cfg.TickInterval = 60 * time.Second
 	}
@@ -124,7 +124,7 @@ func NewWithStore(store persistence.Store, cfg Config) Shepherd {
 	return &shepherdImpl{cfg: cfg, store: store}
 }
 
-// shepherdImpl is the v0.9.2 Shepherd realization.
+// shepherdImpl is the v0.9.2 ScrumMaster realization.
 type shepherdImpl struct {
 	cfg   Config
 	store persistence.Store // nil when constructed via New(); non-nil via NewWithStore()
@@ -158,7 +158,7 @@ func (s *shepherdImpl) Judge(ctx context.Context, sessionID string, recentOutput
 	// the recentOutput is the JSONL tail. BuildSignals expects a
 	// shepherd.Session; the migration commit replaces the bridging
 	// shape with a SessionRepository-fetched record. The current path
-	// returns nil to keep the Shepherd interface stable while the
+	// returns nil to keep the ScrumMaster interface stable while the
 	// state-migration commit lands.
 	_ = ctx
 	_ = sessionID
@@ -305,4 +305,4 @@ func stateMarshalCheck(state map[string]any) ([]byte, error) {
 }
 
 // Compile-time interface guard.
-var _ Shepherd = (*shepherdImpl)(nil)
+var _ ScrumMaster = (*shepherdImpl)(nil)

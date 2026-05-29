@@ -1,4 +1,4 @@
-package shepherd
+package scrummaster
 
 import (
 	"context"
@@ -21,7 +21,7 @@ func TestNewWithStore_RequiresStore(t *testing.T) {
 	t.Parallel()
 	// NewWithStore accepts a nil store but the tick loop's discovery
 	// will fall back to file-on-disk. The constructor itself does not
-	// error — confirm it returns a working Shepherd.
+	// error — confirm it returns a working ScrumMaster.
 	s := NewWithStore(nil, Config{StateDir: t.TempDir()})
 	if s == nil {
 		t.Fatal("NewWithStore returned nil")

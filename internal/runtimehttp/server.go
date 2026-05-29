@@ -751,7 +751,7 @@ func (s *Server) promptsHandler(w http.ResponseWriter, r *http.Request) {
 	var body string
 	switch role {
 	case "shepherd":
-		body = prompts.Shepherd
+		body = prompts.ScrumMaster
 	default:
 		body = prompts.Worker
 	}
@@ -1017,7 +1017,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		systemPrompt := req.SystemPrompt
 		if req.UseDefaultPrompt && systemPrompt == "" {
 			if role == runtime.RoleShepherd {
-				systemPrompt = prompts.Shepherd
+				systemPrompt = prompts.ScrumMaster
 			} else {
 				systemPrompt = prompts.Worker
 			}
@@ -1968,7 +1968,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		}
 		if sysPrompt == "" {
 			if role == runtime.RoleShepherd {
-				sysPrompt = prompts.Shepherd
+				sysPrompt = prompts.ScrumMaster
 			} else {
 				sysPrompt = prompts.Worker
 			}
@@ -2123,7 +2123,7 @@ func (s *Server) resurrectTeamHandler(w http.ResponseWriter, r *http.Request, te
 		// Try to source a default prompt
 		var sysPrompt string
 		if role0 == runtime.RoleShepherd {
-			sysPrompt = prompts.Shepherd
+			sysPrompt = prompts.ScrumMaster
 		} else {
 			sysPrompt = prompts.Worker
 		}

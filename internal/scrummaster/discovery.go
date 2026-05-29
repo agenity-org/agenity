@@ -2,7 +2,7 @@
 // proven Python supervisor.py. Same logic, same prompt, same state file
 // shape so existing Python state files can be read by the Go daemon
 // during the dual-daemon dry-run period.
-package shepherd
+package scrummaster
 
 import (
 	"fmt"

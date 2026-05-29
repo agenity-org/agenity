@@ -18,7 +18,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/chepherd/chepherd/internal/shepherd"
+	"github.com/chepherd/chepherd/internal/scrummaster"
 )
 
 // EventDrivenRefresher is the fsnotify-based replacement for Refresher.Loop.
@@ -26,7 +26,7 @@ import (
 // state JSON), but reacts to file events within milliseconds instead of
 // the 5-second polling window.
 type EventDrivenRefresher struct {
-	Session  *shepherd.Session
+	Session  *scrummaster.Session
 	StateDir string
 
 	// IdleRefresh: how often to refresh anyway, even when no fs events
@@ -47,7 +47,7 @@ const DefaultIdleRefresh = 30 * time.Second
 // NewEventDriven builds an fsnotify watcher for the session's repo + claude
 // JSONL. Returns nil + error if any watch path fails to register; the
 // caller can fall back to the polling Refresher.
-func NewEventDriven(s *shepherd.Session, stateDir string) (*EventDrivenRefresher, error) {
+func NewEventDriven(s *scrummaster.Session, stateDir string) (*EventDrivenRefresher, error) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
