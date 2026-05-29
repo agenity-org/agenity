@@ -18,7 +18,7 @@ func TestA2AMethodNames_AllElevenPascalCase(t *testing.T) {
 		"ListTasks",
 		"CancelTask",
 		"ResubscribeTask",
-		"CreateTaskPushNotificationConfig",
+		"SetTaskPushNotificationConfig",
 		"GetTaskPushNotificationConfig",
 		"ListTaskPushNotificationConfigs",
 		"DeleteTaskPushNotificationConfig",

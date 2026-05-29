@@ -140,7 +140,7 @@ func A2AMethodNames() []string {
 		"ListTasks",
 		"CancelTask",
 		"ResubscribeTask",
-		"CreateTaskPushNotificationConfig",
+		"SetTaskPushNotificationConfig",
 		"GetTaskPushNotificationConfig",
 		"ListTaskPushNotificationConfigs",
 		"DeleteTaskPushNotificationConfig",
