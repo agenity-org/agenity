@@ -16,6 +16,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -28,6 +29,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/chepherd/chepherd/internal/persistence/sqlite"
 )
 
 // TestV092Walk_RealServerExposesA2A boots the real chepherd binary +
@@ -162,6 +165,143 @@ func TestV092Walk_RealServerExposesA2A(t *testing.T) {
 	defer rpcResp.Body.Close()
 	if rpcResp.StatusCode == http.StatusNotFound {
 		t.Fatalf("POST /jsonrpc returned 404 — A2A endpoint NOT wired into cmd/run.go's HTTP server (the exact loophole this test closes)")
+	}
+}
+
+// TestV092Walk_RealServerPersistsSpawnedSession closes the #216 e2e
+// loophole identified by the architect post-walk-on-#208: pre-#216
+// the chepherd binary booted with shepherd enabled would spawn a
+// default session into the runtime's in-memory map but NEVER write
+// it through to store.Sessions() — the shepherd's discoverSessions
+// tick loop saw an empty list forever.
+//
+// This test boots the actual chepherd binary with `--no-shepherd=false`
+// (which auto-spawns the default shepherd session) AND a state-dir
+// that is also reachable from this test process. After the binary
+// boots, the test opens the chepherd.db SQLite file via the SAME
+// repository contract chepherd uses + asserts the sessions table has
+// the spawned session row. Pre-#216: FAIL (table empty). Post-#216: PASS.
+//
+// Skips when `claude` (the default agent CLI) is not in PATH — the
+// spawn path needs an actual agent binary to exec, and CI runners may
+// not have it. The same #216 invariant is also tested via the unit
+// test internal/runtime/spawn_session_persist_test.go which does NOT
+// require a binary at all.
+//
+// Refs #208.
+func TestV092Walk_RealServerPersistsSpawnedSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-binary boot in -short mode")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("skipping: 'claude' agent CLI not in PATH — Spawn path needs a real binary; unit test in internal/runtime covers the same invariant binary-free")
+	}
+
+	// ─── Build binary (same path as TestV092Walk_RealServerExposesA2A) ───
+	gomodOut, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	gomod := strings.TrimSpace(string(gomodOut))
+	if gomod == "" || gomod == os.DevNull {
+		t.Fatalf("repo go.mod not found")
+	}
+	repoRoot := filepath.Dir(gomod)
+	binPath := filepath.Join(t.TempDir(), "chepherd-e2e-persist")
+	build := exec.Command("go", "build", "-o", binPath, ".")
+	build.Dir = repoRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	httpPort := freeTCPPort(t)
+	mcpPort := freeTCPPort(t)
+	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+	mcpAddr := fmt.Sprintf("127.0.0.1:%d", mcpPort)
+	stateDir := t.TempDir()
+
+	cmd := exec.Command(binPath,
+		"run",
+		"--headless",
+		"--no-shepherd=false", // spawn default shepherd ⇒ exercises Spawn → SessionRepository
+		"--listen", httpAddr,
+		"--mcp-listen", mcpAddr,
+		"--state-dir", stateDir,
+	)
+	logFile, _ := os.CreateTemp("", "chepherd-persist-*.log")
+	defer logFile.Close()
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start chepherd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+		if t.Failed() {
+			if b, err := os.ReadFile(logFile.Name()); err == nil {
+				t.Logf("chepherd binary log:\n%s", b)
+			}
+		}
+	})
+
+	if err := waitForHTTPOK(httpAddr, "/healthz", 10*time.Second); err != nil {
+		t.Fatalf("chepherd /healthz never came up: %v", err)
+	}
+	// Spawn happens during boot; give it a moment to land + flush the
+	// SessionRepository write before opening the read-side handle.
+	time.Sleep(500 * time.Millisecond)
+
+	// ─── Open the same SQLite DB chepherd just wrote into ───────────
+	dbPath := filepath.Join(stateDir, "chepherd.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("chepherd.db missing at %s: %v", dbPath, err)
+	}
+	store, err := sqlite.NewStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open chepherd.db read-side: %v", err)
+	}
+	defer store.Close()
+
+	// ─── #216 invariant: sessions table has the spawned shepherd row ─
+	ids, err := store.Sessions().List(context.Background())
+	if err != nil {
+		t.Fatalf("Sessions.List: %v", err)
+	}
+	if len(ids) == 0 {
+		t.Fatal("Sessions.List returned 0 rows — Runtime.Spawn did NOT write through to SessionRepository (#216 regression — pre-#216 behavior)")
+	}
+
+	// State row check — at least the default shepherd session should be there
+	// with name=shepherd, role=shepherd, populated created_at, no next_tick_at.
+	found := false
+	for _, sid := range ids {
+		state, err := store.Sessions().Get(context.Background(), sid)
+		if err != nil {
+			t.Errorf("Sessions.Get(%q): %v", sid, err)
+			continue
+		}
+		if state["name"] == "shepherd" && state["role"] == "shepherd" {
+			found = true
+			if state["created_at"] == nil || state["created_at"] == "" {
+				t.Errorf("session %q: created_at empty: %+v", sid, state)
+			}
+			if _, hasTickAt := state["next_tick_at"]; hasTickAt {
+				// Acceptable if a shepherd tick already ran; flag-only diagnostic.
+				t.Logf("session %q has next_tick_at = %v (shepherd already ticked)", sid, state["next_tick_at"])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no session row with name=shepherd role=shepherd found among %v — Spawn writing skipped or missing fields", ids)
 	}
 }
 
