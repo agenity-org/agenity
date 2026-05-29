@@ -119,7 +119,10 @@ func TestWireDeliverer_RejectsEmptyContextID(t *testing.T) {
 			Parts: []Part{{Kind: "text", Text: "ping"}},
 		}}),
 	})
-	resp, _ := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer resp.Body.Close()
 	var got JSONRPCResponse
 	_ = json.NewDecoder(resp.Body).Decode(&got)
@@ -149,7 +152,10 @@ func TestWireDeliverer_AcceptsMissingTaskID(t *testing.T) {
 			Parts:     []Part{{Kind: "text", Text: "ping"}},
 		}}),
 	})
-	resp, _ := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer resp.Body.Close()
 	var got JSONRPCResponse
 	_ = json.NewDecoder(resp.Body).Decode(&got)
@@ -173,7 +179,10 @@ func TestWireDeliverer_PropagatesDelivererError(t *testing.T) {
 			Parts: []Part{{Kind: "text", Text: "ping"}},
 		}}),
 	})
-	resp, _ := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer resp.Body.Close()
 	var got JSONRPCResponse
 	_ = json.NewDecoder(resp.Body).Decode(&got)

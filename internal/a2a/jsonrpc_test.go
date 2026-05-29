@@ -78,7 +78,10 @@ func TestRouter_RejectsUnknownMethod(t *testing.T) {
 		ID:      json.RawMessage(`1`),
 		Method:  "send_message", // snake_case is wrong
 	})
-	resp, _ := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer resp.Body.Close()
 	var got JSONRPCResponse
 	_ = json.NewDecoder(resp.Body).Decode(&got)
