@@ -269,6 +269,13 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// material is written here from the vault at spawn time.
 	if agentSecretsDir != "" {
 		podArgs = append(podArgs, "-v", hostSecrets+":/run/secrets:ro,U")
+		// #273 — log the actual bind-mount so the operator's bastion log
+		// shows the host path being mapped into /run/secrets and can
+		// confirm via `podman inspect ... HostConfig.Binds` that the
+		// chosen path matches an existing claude-credentials file.
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-mount] %s: -v %s:/run/secrets:ro,U\n", agentName, hostSecrets)
+	} else {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-mount] %s: agentSecretsDir empty — /run/secrets NOT mounted (claude-code will fall into OAuth login)\n", agentName)
 	}
 
 	// Mount MCP infrastructure: the session dir (contains .mcp.json), the
@@ -319,11 +326,12 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 func (r *PodmanRuntime) StopContainer(name string) error {
 	full := containerNamePrefix(r.instanceUUID) + name
 	args := podmanArgs()
-	// #258 reopen — operator reports stuck-stops on the bastion. PR #260
-	// added the call-through but the stop/rm shell-outs were silent
-	// (errors swallowed by `_ =`). Add stderr-logging at every step so
-	// the operator's next stuck-stop has a paper trail: which container,
-	// which command, which exit + stderr.
+	// #258 reopen + #272 — operator reports stuck-stops on the bastion.
+	// PR #260 added the call-through; PR #268 added stderr logging; #272
+	// normalises the prefix to `[chepherd-stop]` so walker can grep the
+	// whole Stop chain (Runtime.Stop entry → StopContainer call → podman
+	// stop/rm shell-outs) with a single token.
+	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: PodmanRuntime.StopContainer enter (full=%s)\n", name, full)
 	stopArgs := append(append([]string{}, args[1:]...), "stop", "--time", "5", full)
 	stopOut, stopErr := exec.Command(args[0], stopArgs...).CombinedOutput()
 	if stopErr != nil {
@@ -332,8 +340,12 @@ func (r *PodmanRuntime) StopContainer(name string) error {
 		// is the operator's stuck-stop bug surfacing. Don't fail the
 		// chain (rm -f below will retry), but DO log.
 		if !strings.Contains(s, "no such container") && !strings.Contains(s, "not found") {
-			fmt.Fprintf(os.Stderr, "podman stop %s: %v (%s)\n", full, stopErr, strings.TrimSpace(string(stopOut)))
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: podman stop FAILED: %v (%s)\n", name, stopErr, strings.TrimSpace(string(stopOut)))
+		} else {
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: podman stop: already gone\n", name)
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: podman stop ok (%s)\n", name, strings.TrimSpace(string(stopOut)))
 	}
 	rmArgs := append(append([]string{}, args[1:]...), "rm", "-f", full)
 	rm := exec.Command(args[0], rmArgs...)
@@ -342,14 +354,13 @@ func (r *PodmanRuntime) StopContainer(name string) error {
 		s := strings.ToLower(string(out))
 		// "no such container" / "not found" => already gone, success.
 		if strings.Contains(s, "no such container") || strings.Contains(s, "not found") {
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: podman rm -f: already gone (clean)\n", name)
 			return nil
 		}
-		fmt.Fprintf(os.Stderr, "podman rm -f %s: %v (%s)\n", full, err, strings.TrimSpace(string(out)))
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: podman rm -f FAILED: %v (%s)\n", name, err, strings.TrimSpace(string(out)))
 		return fmt.Errorf("podman rm %s: %w (%s)", full, err, strings.TrimSpace(string(out)))
 	}
-	// Successful rm — log the disposition so operator can confirm
-	// post-Stop-click that the container actually went away.
-	fmt.Fprintf(os.Stderr, "podman rm -f %s: ok (%s)\n", full, strings.TrimSpace(string(out)))
+	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: podman rm -f ok (%s)\n", name, strings.TrimSpace(string(out)))
 	return nil
 }
 
@@ -405,24 +416,30 @@ func (r *DockerRuntime) AgentHomeDir(agentName, stateDir string) (string, error)
 }
 func (r *DockerRuntime) StopContainer(name string) error {
 	full := containerNamePrefix(r.instanceUUID) + name
-	// #258 reopen — same verbose-logging treatment as PodmanRuntime.
+	// #258 reopen + #272 — normalised `[chepherd-stop]` prefix.
+	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: DockerRuntime.StopContainer enter (full=%s)\n", name, full)
 	if stopOut, stopErr := exec.Command("docker", "stop", "--time", "5", full).CombinedOutput(); stopErr != nil {
 		s := strings.ToLower(string(stopOut))
 		if !strings.Contains(s, "no such container") && !strings.Contains(s, "not found") {
-			fmt.Fprintf(os.Stderr, "docker stop %s: %v (%s)\n", full, stopErr, strings.TrimSpace(string(stopOut)))
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: docker stop FAILED: %v (%s)\n", name, stopErr, strings.TrimSpace(string(stopOut)))
+		} else {
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: docker stop: already gone\n", name)
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: docker stop ok\n", name)
 	}
 	rm := exec.Command("docker", "rm", "-f", full)
 	out, err := rm.CombinedOutput()
 	if err != nil {
 		s := strings.ToLower(string(out))
 		if strings.Contains(s, "no such container") || strings.Contains(s, "not found") {
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: docker rm -f: already gone (clean)\n", name)
 			return nil
 		}
-		fmt.Fprintf(os.Stderr, "docker rm -f %s: %v (%s)\n", full, err, strings.TrimSpace(string(out)))
+		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: docker rm -f FAILED: %v (%s)\n", name, err, strings.TrimSpace(string(out)))
 		return fmt.Errorf("docker rm %s: %w (%s)", full, err, strings.TrimSpace(string(out)))
 	}
-	fmt.Fprintf(os.Stderr, "docker rm -f %s: ok (%s)\n", full, strings.TrimSpace(string(out)))
+	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: docker rm -f ok (%s)\n", name, strings.TrimSpace(string(out)))
 	return nil
 }
 func (r *DockerRuntime) ListAgentContainers() ([]string, error) {
