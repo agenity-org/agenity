@@ -73,7 +73,16 @@
     attached = name;
     if (ws) { ws.close(); ws = null; }
     if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
-    if (term) { term.dispose(); term = null; }
+    if (term) {
+      // #245 reopen v2 — remove the document-level escape-hatch listener
+      // we attached in this term instance's setup. Otherwise it'd leak
+      // across agent switches + duplicate-log on every keystroke.
+      if (term._chepherdDocKeyHandler) {
+        try { document.removeEventListener('keydown', term._chepherdDocKeyHandler, true); } catch {}
+      }
+      term.dispose();
+      term = null;
+    }
     if (!name) return;
 
     const { Terminal } = await import('@xterm/xterm');
@@ -176,6 +185,16 @@
     // (do NOT forward to PTY); returns true to let xterm.js handle
     // normally (so onData fires + bytes hit the PTY).
     term.attachCustomKeyEventHandler((ev) => {
+      // #245 reopen v2 — VERBOSE handler-entry diagnostic.
+      // Architect rejected walker's PASS as synthetic-event theater +
+      // operator confirmed real Ctrl+C still doesn't copy. This logs
+      // EVERY keydown that reaches the xterm handler so the operator's
+      // next probe shows whether their Ctrl+C arrives at all (V3
+      // event-order diagnosis) BEFORE we get to the copy decision.
+      if (ev.type === 'keydown' && (ev.ctrlKey || ev.metaKey || ev.key === 'Insert')) {
+        const sel = term.getSelection();
+        console.log('[chepherd-term-handler] keydown key=' + ev.key + ' ctrl=' + ev.ctrlKey + ' meta=' + ev.metaKey + ' shift=' + ev.shiftKey + ' selectionLen=' + (sel ? sel.length : 0) + ' targetTag=' + (ev.target?.tagName || 'unknown'));
+      }
       // Only intercept on KEY DOWN — keyup events shouldn't both copy
       // AND fire SIGINT.
       if (ev.type !== 'keydown') return true;
@@ -188,12 +207,14 @@
       // Ctrl+Shift+C OR Ctrl+Insert → ALWAYS copy when there's a selection.
       // No selection = nothing to copy, fall through so the keystroke
       // reaches the PTY (harmless; no shell binding listens to these).
-      if (ctrl && ((shift && k === 'C') || k === 'Insert')) {
+      if (ctrl && ((shift && (k === 'C' || k === 'c')) || k === 'Insert')) {
+        console.log('[chepherd-term-handler] matched Ctrl+Shift+C / Ctrl+Insert — hasSel=' + hasSel);
         if (hasSel) { copySelectionToClipboard(sel); }
         return false;
       }
       // Ctrl+C — copy-if-selection-else-SIGINT (Option 2).
       if (ctrl && !shift && (k === 'c' || k === 'C')) {
+        console.log('[chepherd-term-handler] matched Ctrl+C — hasSel=' + hasSel);
         if (hasSel) {
           copySelectionToClipboard(sel);
           // Clear selection so a subsequent Ctrl+C lands as SIGINT.
@@ -205,11 +226,47 @@
       }
       // Ctrl+V OR Ctrl+Shift+V OR Shift+Insert → paste.
       if ((ctrl && (k === 'v' || k === 'V')) || (shift && k === 'Insert')) {
+        console.log('[chepherd-term-handler] matched Ctrl+V / Ctrl+Shift+V / Shift+Insert');
         pasteFromClipboard();
         return false;
       }
       return true;
     });
+
+    // #245 reopen v2 — document-level KEYBOARD ESCAPE HATCH. If a
+    // keystroke reaches `document` with `ev.target` NOT inside this
+    // terminal pane but xterm STILL has a selection, the operator's
+    // real-keyboard Ctrl+C doesn't fire the handler above (focus is
+    // outside xterm). Catch it at document level and route to our
+    // copy path when xterm has a non-empty selection AND target isn't
+    // an input/textarea (where the operator is typing for real).
+    // Diagnostic-first: log every Ctrl+C at document level so the
+    // operator's probe shows whether the event chain even reaches
+    // here when xterm's handler doesn't fire.
+    const docKeyHandler = (ev) => {
+      if (ev.type !== 'keydown') return;
+      if (!ev.ctrlKey && !ev.metaKey) return;
+      if (ev.key !== 'c' && ev.key !== 'C' && ev.key !== 'v' && ev.key !== 'V' && ev.key !== 'Insert') return;
+      const tag = ev.target?.tagName || 'unknown';
+      const xtermSel = term ? term.getSelection() : '';
+      const xtermHasSel = !!xtermSel && xtermSel.length > 0;
+      const containedInTerminal = termContainer?.contains(ev.target);
+      console.log('[chepherd-term-doc] keydown key=' + ev.key + ' ctrl=' + ev.ctrlKey + ' shift=' + ev.shiftKey + ' targetTag=' + tag + ' inTerminal=' + containedInTerminal + ' xtermSelLen=' + xtermSel.length);
+      // Escape hatch: xterm has selection but focus is elsewhere AND
+      // target isn't an input/textarea — operator probably wants the
+      // xterm selection copied (clicked away after mouse-selecting).
+      if ((ev.key === 'c' || ev.key === 'C') && !ev.shiftKey && xtermHasSel && !containedInTerminal &&
+          tag !== 'INPUT' && tag !== 'TEXTAREA' && !ev.target?.isContentEditable) {
+        console.log('[chepherd-term-doc] ESCAPE-HATCH: copying xterm selection from document-level handler');
+        copySelectionToClipboard(xtermSel);
+        ev.preventDefault();
+      }
+    };
+    document.addEventListener('keydown', docKeyHandler, true);
+    // Stash the cleanup on the term instance so attachTo()'s next-call
+    // teardown can remove it (`if (term) { term.dispose(); term = null }`
+    // doesn't auto-clean document listeners).
+    term._chepherdDocKeyHandler = docKeyHandler;
   }
 
   // #245 reopen — operator reports copy still doesn't work despite
@@ -367,7 +424,12 @@
   onDestroy(() => {
     if (ws) ws.close();
     if (resizeObs) resizeObs.disconnect();
-    if (term) term.dispose();
+    if (term) {
+      if (term._chepherdDocKeyHandler) {
+        try { document.removeEventListener('keydown', term._chepherdDocKeyHandler, true); } catch {}
+      }
+      term.dispose();
+    }
     if (fontObs) fontObs.disconnect();
     if (themeObs) themeObs.disconnect();
   });
