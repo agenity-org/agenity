@@ -120,6 +120,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("runtime: %w", err)
 	}
+	// #258 — reap orphan sibling agent containers BEFORE the HTTP
+	// surface comes up. Operators who crashed chepherd mid-spawn (or
+	// upgrade from a pre-#258 build that leaked every Stop click) carry
+	// zombie chepherd-agent-* containers that aren't in any live
+	// runtime's registry. We list+stop+remove them so a fresh boot
+	// starts from a clean slate.
+	_ = rt.ReapOrphanContainers()
 	// v0.9.2 (#208): internal/messagebus/relay.go (337 LOC + 4 Runtime
 	// SessionRegistry methods) deleted in this sub-branch. A2A
 	// SendMessage supersedes the regex @-line PTY relay entirely;
