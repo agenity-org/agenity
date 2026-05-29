@@ -35,6 +35,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/chepherd/chepherd/internal/persistence"
 )
 
 // Template is the persistent unit.
@@ -82,6 +84,7 @@ type SkillSlot = Slot
 // Store is file-backed persistence + in-memory builtin seed.
 type Store struct {
 	dir      string
+	repo     persistence.TemplateRepository // v0.9.2 mode (mutually exclusive with dir)
 	mu       sync.RWMutex
 	builtins []Template
 }
@@ -103,6 +106,9 @@ type ListOpts struct {
 
 // List returns builtins (sort_order asc) then user-defined (updated_at desc).
 func (s *Store) List(opts ListOpts) ([]Template, error) {
+	if s.repo != nil {
+		return s.repoList(opts)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Template, 0, len(s.builtins))
@@ -128,6 +134,9 @@ func (s *Store) List(opts ListOpts) ([]Template, error) {
 
 // Get returns one template by ID. Returns nil, nil for not-found.
 func (s *Store) Get(id string) (*Template, error) {
+	if s.repo != nil {
+		return s.repoGet(id)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i := range s.builtins {
@@ -152,6 +161,9 @@ func (s *Store) Get(id string) (*Template, error) {
 
 // Create persists a new user-defined Template.
 func (s *Store) Create(t Template, authorRef string) (*Template, error) {
+	if s.repo != nil {
+		return s.repoCreate(t, authorRef)
+	}
 	if t.Name == "" {
 		return nil, errors.New("name required")
 	}
@@ -176,6 +188,9 @@ func (s *Store) Create(t Template, authorRef string) (*Template, error) {
 
 // Update mutates a user-defined Template. Builtins → ErrReadOnly.
 func (s *Store) Update(id string, patch Template) (*Template, error) {
+	if s.repo != nil {
+		return s.repoUpdate(id, patch)
+	}
 	existing, err := s.Get(id)
 	if err != nil {
 		return nil, err
@@ -212,6 +227,9 @@ func (s *Store) Update(id string, patch Template) (*Template, error) {
 // allowed to be hidden/shown (admin operation); the field is not
 // part of ReadOnly enforcement.
 func (s *Store) SetVisibility(id string, visible bool) error {
+	if s.repo != nil {
+		return s.repoSetVisibility(id, visible)
+	}
 	// Builtin? Mutate the in-memory copy.
 	s.mu.Lock()
 	for i := range s.builtins {
@@ -235,6 +253,9 @@ func (s *Store) SetVisibility(id string, visible bool) error {
 
 // Delete removes a user-defined Template. Builtins → ErrReadOnly.
 func (s *Store) Delete(id string) error {
+	if s.repo != nil {
+		return s.repoDelete(id)
+	}
 	existing, err := s.Get(id)
 	if err != nil {
 		return err

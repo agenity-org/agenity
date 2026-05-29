@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/chepherd/chepherd/internal/persistence"
 )
 
 // Agent is the first-class entity. UUID is the stable PK; Label is the
@@ -124,8 +126,9 @@ func New(agentType, label, creatorAccount string) *Agent {
 // Store is the persistence layer for Agents. File-backed JSON-per-record
 // in $stateDir/agents-registry/. Concurrent-safe via internal mutex.
 type Store struct {
-	dir string
-	mu  sync.RWMutex
+	dir  string
+	repo persistence.AgentRepository // v0.9.2 mode (mutually exclusive with dir)
+	mu   sync.RWMutex
 }
 
 // NewStore opens (or initialises) the registry directory under stateDir.
@@ -146,6 +149,9 @@ func (s *Store) pathFor(id uuid.UUID) string {
 // Save persists one Agent. Atomic via temp-file + rename so concurrent
 // reads never see a half-written record.
 func (s *Store) Save(a *Agent) error {
+	if s.repo != nil {
+		return s.repoSave(a)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, err := json.MarshalIndent(a, "", "  ")
@@ -166,6 +172,9 @@ func (s *Store) Save(a *Agent) error {
 // Get fetches one Agent by UUID. Returns nil, nil for not-found so
 // callers can distinguish "missing" from "error".
 func (s *Store) Get(id uuid.UUID) (*Agent, error) {
+	if s.repo != nil {
+		return s.repoGet(id)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	b, err := os.ReadFile(s.pathFor(id))
@@ -191,6 +200,9 @@ type ListOpts struct {
 
 // List returns agents matching opts, sorted newest-first by LastActiveAt.
 func (s *Store) List(opts ListOpts) ([]*Agent, error) {
+	if s.repo != nil {
+		return s.repoList(opts)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	entries, err := os.ReadDir(s.dir)
@@ -234,6 +246,9 @@ func (s *Store) List(opts ListOpts) ([]*Agent, error) {
 // SoftDelete marks an agent deleted. Caller should schedule PVC GC for
 // the configured grace period (7d default).
 func (s *Store) SoftDelete(id uuid.UUID) error {
+	if s.repo != nil {
+		return s.repoSoftDelete(id)
+	}
 	a, err := s.Get(id)
 	if err != nil {
 		return err
@@ -249,6 +264,9 @@ func (s *Store) SoftDelete(id uuid.UUID) error {
 // AttachSession appends a SessionRef and bumps LastActiveAt. Called by
 // runtime.Spawn after a new session starts for this agent.
 func (s *Store) AttachSession(id uuid.UUID, sessionID string) error {
+	if s.repo != nil {
+		return s.repoAttachSession(id, sessionID)
+	}
 	a, err := s.Get(id)
 	if err != nil {
 		return err
@@ -268,6 +286,9 @@ func (s *Store) AttachSession(id uuid.UUID, sessionID string) error {
 // DetachSession closes out the most-recent open SessionRef matching
 // sessionID. Idempotent — multiple detaches are no-ops after the first.
 func (s *Store) DetachSession(id uuid.UUID, sessionID string) error {
+	if s.repo != nil {
+		return s.repoDetachSession(id, sessionID)
+	}
 	a, err := s.Get(id)
 	if err != nil {
 		return err

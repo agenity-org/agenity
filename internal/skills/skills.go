@@ -17,6 +17,7 @@
 package skills
 
 import (
+	"github.com/chepherd/chepherd/internal/persistence"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,6 +92,7 @@ func (s *Skill) EffectiveBody() string {
 // (immutable); user-defined live on disk.
 type Store struct {
 	dir      string
+	repo     persistence.SkillRepository // v0.9.2 mode (mutually exclusive with dir)
 	mu       sync.RWMutex
 	builtins []Skill // immutable; seeded once in NewStore
 }
@@ -127,6 +129,9 @@ type ListOpts struct {
 
 // List returns builtins (sort_order asc) then user-defined (updated_at desc).
 func (s *Store) List(opts ListOpts) ([]Skill, error) {
+	if s.repo != nil {
+		return s.repoList(opts)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Skill, 0, len(s.builtins))
@@ -180,6 +185,9 @@ func matchOpts(s Skill, opts ListOpts) bool {
 
 // Get returns one skill by ID. Returns nil, nil for not-found.
 func (s *Store) Get(id string) (*Skill, error) {
+	if s.repo != nil {
+		return s.repoGet(id)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i := range s.builtins {
@@ -204,6 +212,9 @@ func (s *Store) Get(id string) (*Skill, error) {
 
 // Create persists a new user-defined Skill.
 func (s *Store) Create(sk Skill) (*Skill, error) {
+	if s.repo != nil {
+		return s.repoCreate(sk)
+	}
 	if sk.Name == "" {
 		return nil, errors.New("name required")
 	}
@@ -234,6 +245,9 @@ func (s *Store) Create(sk Skill) (*Skill, error) {
 
 // Update mutates a user-defined Skill. Builtins → ErrReadOnly.
 func (s *Store) Update(id string, patch Skill) (*Skill, error) {
+	if s.repo != nil {
+		return s.repoUpdate(id, patch)
+	}
 	existing, err := s.Get(id)
 	if err != nil {
 		return nil, err
@@ -283,6 +297,9 @@ func (s *Store) Update(id string, patch Skill) (*Skill, error) {
 // $stateDir/skills-registry/{id}.override.json — the in-memory builtin
 // stays read-only.
 func (s *Store) SetOverride(id, body string) (*Skill, error) {
+	if s.repo != nil {
+		return s.repoSetOverride(id, body)
+	}
 	existing, err := s.Get(id)
 	if err != nil {
 		return nil, err
@@ -325,11 +342,17 @@ func (s *Store) SetOverride(id, body string) (*Skill, error) {
 
 // ClearOverride removes the Layer-2 override and reverts to upstream.
 func (s *Store) ClearOverride(id string) (*Skill, error) {
+	if s.repo != nil {
+		return s.repoClearOverride(id)
+	}
 	return s.SetOverride(id, "")
 }
 
 // Delete removes a user-defined Skill. Builtins → ErrReadOnly.
 func (s *Store) Delete(id string) error {
+	if s.repo != nil {
+		return s.repoDelete(id)
+	}
 	existing, err := s.Get(id)
 	if err != nil {
 		return err
