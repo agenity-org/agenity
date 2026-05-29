@@ -26,6 +26,7 @@ import (
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/google/uuid"
 )
 
@@ -298,16 +299,47 @@ type Runtime struct {
 
 	// Event log — runtime-wide chronological audit (v0.6-F).
 	events *eventBuffer
+
+	// shepherd is the worker-observation tier (#208 v0.9.2).
+	// Nil-OK: when no shepherd is wired, RecordEvent + Observe paths
+	// no-op the broadcast and the Runtime behaves as a v0.9.1-only
+	// spawn-and-manage runtime. cmd/run.go in v0.9.2 mode calls
+	// rt.WithShepherd(shepherd.New(cfg)) to enable.
+	shepherd shepherd.Shepherd
+}
+
+// WithShepherd attaches a shepherd.Shepherd to this Runtime so every
+// RecordEvent broadcast is also delivered to the shepherd's Observe
+// path. Idempotent: re-calling replaces the previously-attached
+// Shepherd. Returns the Runtime for fluent chaining.
+//
+// Refs #208.
+func (r *Runtime) WithShepherd(s shepherd.Shepherd) *Runtime {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.shepherd = s
+	return r
 }
 
 // RecordEvent appends an event to the runtime's audit log. Called by
 // runtime internals on spawn/exit/scorecard/etc. and by agents via the
 // chepherd.record_event MCP tool.
+//
+// v0.9.2 (#208): when a shepherd is attached via WithShepherd, the
+// event is also broadcast to shepherd.Observe so band/judge/signals
+// can react. The shepherd broadcast happens AFTER the local audit
+// buffer push so any panic in shepherd code doesn't lose the audit
+// trail.
 func (r *Runtime) RecordEvent(e Event) {
 	if r.events == nil {
 		return
 	}
 	r.events.push(e)
+	// v0.9.2 (#208): broadcast to attached shepherd, if any. Nil-OK
+	// pattern keeps RecordEvent safe when no shepherd is wired.
+	if r.shepherd != nil {
+		r.shepherd.Observe(context.Background(), e)
+	}
 }
 
 // Events returns the most recent N events (or all if limit == 0).
@@ -891,33 +923,7 @@ func (r *Runtime) GrantChannel(fromTeam, toTeam, scope string) {
 	r.cond.Broadcast()
 }
 
-// SessionByName implements messagebus.SessionRegistry — returns the
-// session pointer + its team name.
-func (r *Runtime) SessionByName(name string) (*session.Session, string, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	id, ok := r.byName[name]
-	if !ok {
-		return nil, "", false
-	}
-	return r.sessions[id], r.info[id].Team, true
-}
-
-// SessionsByTribe implements messagebus.SessionRegistry — name kept for
-// interface compat; semantically returns sessions in the given team.
-func (r *Runtime) SessionsByTribe(team string) []*session.Session {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []*session.Session
-	for id, info := range r.info {
-		if info.Team == team {
-			out = append(out, r.sessions[id])
-		}
-	}
-	return out
-}
-
-// HumanInbox implements messagebus.SessionRegistry.
+// HumanInbox appends a human-inbox entry.
 func (r *Runtime) HumanInbox(from, body string) {
 	r.mu.Lock()
 	id := fmt.Sprintf("msg-%d", time.Now().UnixNano())
@@ -955,32 +961,6 @@ func (r *Runtime) MarkAllInboxRead() int {
 		}
 	}
 	return n
-}
-
-// IsCrossTribeGranted implements messagebus.SessionRegistry — name
-// kept for interface compat; semantically checks cross-team grants.
-func (r *Runtime) IsCrossTribeGranted(fromTeam, toTeam string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, g := range r.grants {
-		if g.FromTeam == fromTeam && g.ToTeam == toTeam {
-			return true
-		}
-	}
-	return false
-}
-
-// IsSessionPaused implements messagebus.SessionRegistry. Reports whether
-// the session's metadata has Paused=true.
-func (r *Runtime) IsSessionPaused(s *session.Session) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for id, ss := range r.sessions {
-		if ss == s {
-			return r.info[id].Paused
-		}
-	}
-	return false
 }
 
 // List returns a snapshot of all session metadata, augmented with the

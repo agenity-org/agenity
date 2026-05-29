@@ -114,9 +114,9 @@ func (s *Session) Geomean() float64 {
 }
 
 // DefaultStateDirs returns the directories to look in for session JSON files,
-// in priority order. The chepherd daemon writes to the first; the legacy
-// Python supervisor writes to the second. Observers read from BOTH so they
-// can sit alongside the Python daemon during migration.
+// in priority order. chepherd run's shepherd tier writes to the first; the
+// legacy Python supervisor writes to the second. Observers read from BOTH
+// so they can sit alongside the Python daemon during migration.
 func DefaultStateDirs() []string {
 	home, _ := os.UserHomeDir()
 	return []string{

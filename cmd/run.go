@@ -1,13 +1,13 @@
-// cmd/run.go — `chepherd run` v0.5 entrypoint
+// cmd/run.go — `chepherd run` v0.9.2 single canonical entrypoint.
 //
-// This is the new pty-host-based runtime. The legacy `chepherd dashboard`
-// and `chepherd daemon` paths (tmux-based) are left UNTOUCHED so existing
-// users keep working while v0.5 stabilizes.
+// chepherd run wires the integrated control plane: runtime spawn-
+// lifecycle + shepherd intelligence + persistence layer + A2A
+// endpoint + MCP HTTP. The legacy `chepherd daemon` + `chepherd
+// shadow` cobra verbs (tmux-based Python-supervisor parity paths)
+// were retired in #208 — chepherd v0.9.2 has one canonical CLI
+// entry per docs/V0.9.2-ARCHITECTURE.md.
 //
-// `chepherd run` boots the runtime, spawns Adam (and Chepherd if monitored
-// mode is on), wires the @target relay, and tails to stdout. For v0.5.0
-// this is a headless harness — the TUI client refactor is tracked
-// separately as chepherd/chepherd#55.
+// `chepherd run` boots the runtime, spawns Adam, and tails to stdout.
 //
 // Usage:
 //
@@ -33,8 +33,8 @@ import (
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/chepherd/chepherd/internal/shepherd"
 	"github.com/chepherd/chepherd/internal/profile"
-	"github.com/chepherd/chepherd/internal/messagebus"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/runtime"
@@ -66,11 +66,9 @@ watching the "default" tribe). Workers are spawned on demand by the operator
 via the dashboard's "+ spawn agent" button. Pass --no-shepherd to start
 completely empty (4-eyes off).
 
-This is the v0.5 development entrypoint. The legacy 'chepherd dashboard' and
-'chepherd daemon' (tmux-based) are LEFT UNTOUCHED so existing users keep working.
-
-When the TUI refactor lands (chepherd/chepherd#55), the dashboard client will
-target this runtime instead of tmux.`,
+chepherd run is the single canonical entrypoint for v0.9.2 — it integrates
+runtime, shepherd tier, persistence layer, A2A endpoint, and MCP HTTP into
+one process per docs/V0.9.2-ARCHITECTURE.md.`,
 	RunE: runRunCmd,
 }
 
@@ -121,15 +119,12 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("runtime: %w", err)
 	}
-	relay := messagebus.New(rt)
-	// Auto-watch every session spawned by the runtime — including dynamic
-	// MCP `chepherd.spawn` invocations. Without this, only the initial
-	// Adam/Chepherd would have their output scanned for @target lines.
-	rt.AddSpawnHook(func(s *session.Session, name string) {
-		if err := relay.Watch(s, name); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: relay.Watch %s: %v\n", name, err)
-		}
-	})
+	// v0.9.2 (#208): internal/messagebus/relay.go (337 LOC + 4 Runtime
+	// SessionRegistry methods) deleted in this sub-branch. A2A
+	// SendMessage supersedes the regex @-line PTY relay entirely;
+	// cross-agent conversation now goes through the A2A JSON-RPC
+	// endpoint or the chepherd.send_to_session shim (which itself
+	// translates onto A2A SendMessage via the Deliverer wired below).
 
 	// MCP server on HTTP/WebSocket — `chepherd mcp` subprocess (used by
 	// agents) dials this endpoint and proxies JSON-RPC over the WS. One
@@ -142,10 +137,32 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if mcpListen == "" {
 		mcpListen = mcpserver.DefaultListenAddr
 	}
-	mcpSrv := mcpserver.New(rt)
+	// v0.9.2 (#208): build the A2A PTY Deliverer once + thread to the
+	// legacy MCP server (chepherd.send_to_session shim translates onto
+	// A2A SendMessage). The same Deliverer instance is also consumed
+	// by the runner-side A2A HTTPS endpoint via a2a.Router.WireDeliverer
+	// when that endpoint is stood up.
+	a2aDeliverer := runtime.NewA2ADeliverer(rt)
+	mcpSrv := mcpserver.NewWithDeliverer(rt, a2aDeliverer)
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
+
+	// v0.9.2 (#208): wire the shepherd tier. Constructs Shepherd from
+	// the same persistence.Store the runtime uses; attaches via
+	// Runtime.WithShepherd so RecordEvent broadcasts reach Observe;
+	// kicks off the periodic tick loop in a goroutine bound to the
+	// process-lifetime context so ctrl-C cleanly shuts it down.
+	shepCfg := shepherd.Config{JudgeCfg: shepherd.DefaultJudgeConfig()}
+	shep := shepherd.NewWithStore(store, shepCfg)
+	rt.WithShepherd(shep)
+	shepCtx, shepCancel := context.WithCancel(context.Background())
+	defer shepCancel()
+	go func() {
+		if err := shep.Run(shepCtx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "shepherd Run: %v\n", err)
+		}
+	}()
 	fmt.Printf("✓ MCP server (HTTP/WS) listening on http://%s/mcp/ws\n", mcpListen)
 
 	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),
@@ -245,7 +262,6 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			_ = httpSrv.Close()
 		}
 		mcpSrv.Stop()
-		relay.Stop()
 		for _, info := range rt.List() {
 			_ = rt.Stop(info.Name)
 		}

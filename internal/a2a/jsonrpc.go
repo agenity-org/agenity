@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -88,6 +89,48 @@ func (r *Router) Register(method string, h methodHandler) error {
 	}
 	r.handlers[method] = h
 	return nil
+}
+
+// WireDeliverer binds the SendMessage method to a Deliverer.
+// Decodes A2A SendMessageParams + invokes Deliverer.Deliver +
+// returns the resulting Task wrapped in a SendMessageResult.
+//
+// After this call the SendMessage handler is no longer a stub. Other
+// 10 methods stay scaffold until their own wire-up.
+//
+// Refs #208.
+func (r *Router) WireDeliverer(deliverer Deliverer) error {
+	return r.Register("SendMessage", makeSendMessageHandler(deliverer))
+}
+
+func makeSendMessageHandler(deliverer Deliverer) methodHandler {
+	return func(req JSONRPCRequest) JSONRPCResponse {
+		var params SendMessageParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return errorResp(req.ID, ErrCodeInvalidParams,
+				"decode SendMessageParams: "+err.Error())
+		}
+		if params.Message.ContextID == "" {
+			return errorResp(req.ID, ErrCodeInvalidParams,
+				"message.contextId is required (resolves to chepherd session ID for interactive mode); taskId is optional (auto-generated if missing)")
+		}
+		task, err := deliverer.Deliver(context.Background(), params.Message)
+		if err != nil {
+			return errorResp(req.ID, ErrCodeInternalError,
+				"deliver: "+err.Error())
+		}
+		return JSONRPCResponse{
+			JSONRPC: "2.0", ID: req.ID,
+			Result: SendMessageResult{Task: task},
+		}
+	}
+}
+
+func errorResp(id json.RawMessage, code int, message string) JSONRPCResponse {
+	return JSONRPCResponse{
+		JSONRPC: "2.0", ID: id,
+		Error: &JSONRPCError{Code: code, Message: message},
+	}
 }
 
 // ServeHTTP makes Router an http.Handler for the JSON-RPC POST path

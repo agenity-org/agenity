@@ -63,6 +63,23 @@ type Agent struct {
 	// Notes is free-form; surfaced in /healthz/agents (future) and
 	// useful for code-reviewers.
 	Notes string `json:"notes,omitempty"`
+	// SubmitSequence is the byte sequence written to the PTY after a
+	// message body to submit it (e.g. claude-code et al. interpret
+	// CR (0x0d) as submit). Empty defaults to []byte{0x0d}. Flavor-
+	// specific override lets multi-line / Ctrl+Enter modes plumb a
+	// different sequence (per architect 2026-05-29 scope-lock).
+	// Refs #208.
+	SubmitSequence []byte `json:"submitSequence,omitempty"`
+}
+
+// EffectiveSubmitSequence returns the flavor's SubmitSequence, or the
+// canonical CR default when empty. Callers use this rather than
+// referencing SubmitSequence directly so the default stays centralized.
+func (a Agent) EffectiveSubmitSequence() []byte {
+	if len(a.SubmitSequence) == 0 {
+		return []byte{0x0d}
+	}
+	return a.SubmitSequence
 }
 
 // Builtin is the compiled-in registry. Operator overrides via

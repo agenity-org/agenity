@@ -1,4 +1,4 @@
-package daemon
+package shepherd
 
 import (
 	"os/exec"

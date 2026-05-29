@@ -23,6 +23,7 @@
 package mcpserver
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -31,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/runtime"
 )
 
@@ -39,6 +41,7 @@ import (
 // StartHTTP() and torn down via Stop().
 type Server struct {
 	rt           *runtime.Runtime
+	deliverer    a2a.Deliverer // v0.9.2: backs the chepherd.send_to_session shim onto A2A SendMessage. Removed in v1.0.
 	httpListener net.Listener
 	httpServer   *http.Server
 	// AuthToken (#139/#153) is the shared-secret bearer token clients
@@ -108,10 +111,40 @@ func (s *Server) CurrentCaller() string {
 	return s.lastCaller
 }
 
+// taskIDOrEmpty returns task.ID or empty string when task is nil.
+// Used by the chepherd.send_to_session shim to surface the auto-
+// generated A2A task ID back to legacy MCP callers.
+func taskIDOrEmpty(task *a2a.Task) string {
+	if task == nil {
+		return ""
+	}
+	return task.ID
+}
+
 // New constructs a Server bound to the runtime. Call StartHTTP(addr) to
 // begin accepting connections.
+//
+// Deprecated: use NewWithDeliverer for v0.9.2 callers; the legacy
+// chepherd.send_to_session MCP tool requires an a2a.Deliverer to bridge
+// onto A2A SendMessage. Calling New produces a Server whose
+// send_to_session handler returns -32000 with a descriptive error.
+// Removed in v1.0.
 func New(rt *runtime.Runtime) *Server {
 	return &Server{rt: rt}
+}
+
+// NewWithDeliverer constructs a Server bound to the runtime AND an
+// a2a.Deliverer. The Deliverer backs the chepherd.send_to_session MCP
+// tool — the legacy v0.9.1 tool now translates calls onto A2A
+// SendMessage rather than writing directly to the target session's PTY.
+//
+// chepherd.send_to_session is DEPRECATED. v0.9.2 callers should migrate
+// to A2A SendMessage directly. The shim is removed in v1.0. Per
+// architect 2026-05-29.
+//
+// Refs #208.
+func NewWithDeliverer(rt *runtime.Runtime, deliverer a2a.Deliverer) *Server {
+	return &Server{rt: rt, deliverer: deliverer}
 }
 
 // DefaultListenAddr is the canonical MCP HTTP bind address. v0.8+ defaults
@@ -495,46 +528,61 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			"lines": lines, "total_lines": len(lines),
 		}
 	case "send_to_session":
+		// v0.9.2 shim: chepherd.send_to_session translates onto A2A
+		// SendMessage via the injected Deliverer. DEPRECATED — callers
+		// should migrate to A2A SendMessage directly; the shim removes
+		// in v1.0. Per architect 2026-05-29.
+		//
+		// Behavior carry-over from v0.9.1:
+		//   - typing-skip delay (operator-wrote-within-15s) preserved
+		//     here in the shim layer so the Deliverer stays substrate-
+		//     agnostic
+		//   - early-bail "no such session" -32000 preserved for caller
+		//     compatibility (Deliverer would return its own error but
+		//     legacy callers expect this exact code)
+		//
+		// v0.9.1 features intentionally dropped (acceptable for a
+		// soon-to-be-removed shim):
+		//   - no_submit flag (no external callers exercise it; A2A
+		//     SendMessage always submits)
+		//   - Inject-not-Write distinction (lastOperatorWrite bumping)
+		//     — the A2A Deliverer uses session.Write
 		var a struct {
 			Name, Body string
 			NoSubmit   bool `json:"no_submit"`
 		}
 		_ = json.Unmarshal(args, &a)
+		if s.deliverer == nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "send_to_session shim unavailable: mcpserver constructed without a2a.Deliverer (use mcpserver.NewWithDeliverer)"}
+			return resp
+		}
 		sess, _ := s.rt.Get(a.Name)
 		if sess == nil {
 			resp.Error = &rpcErr{Code: -32000, Message: "no such session: " + a.Name}
 			return resp
 		}
-		// Typing-skip: if the operator wrote keystrokes within the last 15s,
-		// delay the inject so it doesn't collide with an in-progress thought.
+		// Typing-skip preserved at the shim layer (operator-vs-shepherd
+		// race condition was a v0.9.1 chepherd-specific concern).
 		const founderTypingSkipSec = 15
 		if last := sess.LastOperatorWrite(); !last.IsZero() && time.Since(last) < founderTypingSkipSec*time.Second {
 			remaining := founderTypingSkipSec*time.Second - time.Since(last)
 			time.Sleep(remaining)
 		}
-
-		// Use Inject (not Write) so lastOperatorWrite is not bumped and the
-		// writeMu serializes this against any concurrent operator keystrokes.
 		body := strings.TrimRight(a.Body, "\r\n")
-		if _, err := sess.Inject([]byte(body)); err != nil {
+		task, err := s.deliverer.Deliver(context.Background(), a2a.Message{
+			Role:      "user",
+			Kind:      "message",
+			ContextID: a.Name,
+			Parts:     []a2a.Part{{Kind: "text", Text: body}},
+		})
+		if err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
 		}
-		// Submit by default — send Enter as a SEPARATE PTY write so kitty /
-		// modifyOtherKeys-mode TUIs (Claude Code 2.1.148+) treat it as a
-		// distinct keypress event rather than part of the input buffer.
-		// Tested against claude-code, qwen-code, sovereign-shell. Use
-		// no_submit:true if you only want to deposit text into the input.
-		if !a.NoSubmit {
-			// Brief pause lets the receiver's input editor process the
-			// body before the Enter event arrives.
-			time.Sleep(120 * time.Millisecond)
-			if _, err := sess.Inject([]byte("\r")); err != nil {
-				resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
-				return resp
-			}
+		resp.Result = map[string]any{
+			"ok":     task != nil && task.Status.State == a2a.TaskStateWorking,
+			"taskId": taskIDOrEmpty(task),
 		}
-		resp.Result = map[string]any{"ok": true}
 	case "pause":
 		var a struct {
 			Name   string
