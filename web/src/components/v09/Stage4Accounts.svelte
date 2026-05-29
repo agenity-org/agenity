@@ -36,12 +36,42 @@
 
   const API = '/api-v08/v1';
 
-  // agentType → account_class. Centralised so adding a new agent
-  // type doesn't have to touch every fetch site.
+  // agentType → human-readable class label for the dropdown placeholder
+  // ("— pick anthropic account —"). The actual eligibility filter uses
+  // PROVIDER_COMPATIBILITY below, NOT this map. Centralised here so
+  // adding a new agent type only needs one touch site.
   const TYPE_TO_CLASS = {
     'claude-code': 'anthropic',
     'codex-cli':   'openai',
     'gemini-cli':  'google',
+  };
+
+  // Source of truth for which vault providers can drive which agent
+  // types (#232). Replaces the prior brittle exact-match filter
+  // (`v.account_class === cls || v.provider === cls`) that excluded
+  // `claude-oauth` vault entries from `claude-code` dropdowns because
+  // their provider string isn't `anthropic`. Locks the compatibility
+  // map at the source so the v0.9.3 Accounts-redesign (#225 section E)
+  // inherits a single canonical table rather than re-inventing one.
+  //
+  // Reading direction: keys = vault provider IDs; values = the agent
+  // types compatible with that provider. To add a new provider, add a
+  // row here; to add a new agent type, add it to every compatible
+  // provider's list. Providers absent from this map are treated as
+  // compatible with NOTHING (safer default than the prior unknown-
+  // type wildcard).
+  const PROVIDER_COMPATIBILITY = {
+    'claude-oauth':   ['claude-code', 'aider'],
+    'anthropic-api':  ['claude-code', 'aider', 'opencode'],
+    'openai-api':     ['codex-cli', 'aider'],
+    'openrouter':     ['claude-code', 'codex-cli', 'aider', 'opencode'],
+    'openova-newapi': ['claude-code', 'codex-cli', 'aider', 'opencode'],
+    'dashscope':      ['qwen-code', 'aider'],
+    'qwen-oauth':     ['qwen-code'],
+    'google-ai':      ['gemini-cli', 'aider'],
+    'vertex-ai':      ['gemini-cli'],
+    'google-oauth':   ['gemini-cli'],
+    'ollama':         ['aider', 'opencode'],
   };
 
   let vaultEntries = $state([]);    // [{ id, label, provider, account_class, ... }]
@@ -85,10 +115,22 @@
 
   function classOf(t) { return TYPE_TO_CLASS[t] || ''; }
 
+  // entriesForType returns vault entries whose provider is declared
+  // compatible with agent type `t` per PROVIDER_COMPATIBILITY (#232).
+  // Backward-compatible: if a vault entry carries an `account_class`
+  // field that matches the type's class string, it's also included —
+  // covers older vault entries from the v0.8/v0.9.0 schema before
+  // provider was the canonical key.
   function entriesForType(t) {
-    const cls = classOf(t);
-    if (!cls) return vaultEntries; // unknown type — show everything
-    return vaultEntries.filter(v => v.account_class === cls || v.provider === cls);
+    const legacyCls = classOf(t);
+    return vaultEntries.filter(v => {
+      const compat = PROVIDER_COMPATIBILITY[v.provider] || [];
+      if (compat.includes(t)) return true;
+      // Legacy fallback for pre-v0.9.2 entries that may set account_class
+      // explicitly (e.g. 'anthropic', 'openai', 'google').
+      if (legacyCls && v.account_class === legacyCls) return true;
+      return false;
+    });
   }
 
   // Auto-select the newest matching entry per agent-type once the
