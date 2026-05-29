@@ -111,6 +111,17 @@
 
   function launchedThenClose() { onclose?.(); }
 
+  // #252 — Launch primary CTA hoisted from Stage 6's body into the
+  // outer wizard footer so it's always visible regardless of stage
+  // body scroll. Stage5Launch writes into this controller via
+  // bind:controller; the footer's onclick invokes controller.launch().
+  let launchController = $state({
+    label: '⚡ Launch',
+    canLaunch: false,
+    launching: false,
+    launch: () => {},
+  });
+
   const stepLabels = [
     { label: 'Shape' },
     { label: 'Repo' },
@@ -165,16 +176,22 @@
       <Stage5Launch
         selection={{ template, repo, members: agents, teamName, skillOverrides, agentTypeOverrides, agentModelOverrides, typeAccounts, agentAccountOverrides }}
         bind:saveAsRecipe
+        bind:controller={launchController}
         onlaunch={launchedThenClose}
       />
     {/if}
   </div>
 
   <footer class="foot">
-    <button type="button" class="back" onclick={back} disabled={current === 1}>← Back</button>
+    <button type="button" class="back" onclick={back} disabled={current === 1 || launchController.launching}>← Back</button>
     <button type="button" class="cancel" onclick={() => onclose?.()}>Cancel</button>
     {#if current < 6}
       <button type="button" class="next" onclick={next} disabled={!canAdvance}>Next →</button>
+    {:else}
+      <!-- #252 — Launch CTA hoisted into outer footer, always visible regardless of stage body scroll. -->
+      <button type="button" class="next launch" onclick={() => launchController.launch()} disabled={!launchController.canLaunch}>
+        {launchController.label}
+      </button>
     {/if}
   </footer>
 </div>
