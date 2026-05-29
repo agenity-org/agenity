@@ -41,6 +41,37 @@ if [ -z "$SESSION_ID" ]; then
     exit 2
 fi
 
+# ─── Preflight (#218): Anthropic auth resolution chain ────────────
+# A spawned claude-code agent reads its credentials in this order:
+#   1. spec.ClaudeTokenID → pull from chepherd's token vault
+#   2. vault's most-recently-updated claude-oauth entry (R4)
+#   3. host's ~/.claude/.credentials.json fallback
+# If NONE of these resolve the spawned container hits the OAuth login
+# screen + the SendMessage step 4 fails with "deliver: session: closed"
+# once the agent's idle PTY closes. Guard fails fast with a clear
+# message rather than dragging the operator through a mid-walk error.
+ANTHROPIC_CREDS_OK=false
+if [ -f "$HOME/.claude/.credentials.json" ] && [ -s "$HOME/.claude/.credentials.json" ]; then
+    ANTHROPIC_CREDS_OK=true
+fi
+# Vault check — chepherd stores tokens at <state-dir>/vault.json keyed
+# by provider. If the file mentions a claude-oauth entry we trust the
+# vault path (no decode needed; chepherd reads the actual cred).
+if [ -f "$STATE_DIR/vault.json" ] && grep -q '"provider":"claude-oauth"' "$STATE_DIR/vault.json" 2>/dev/null; then
+    ANTHROPIC_CREDS_OK=true
+fi
+if [ "$ANTHROPIC_CREDS_OK" != "true" ]; then
+    printf "\033[1;31m✗\033[0m PREFLIGHT FAIL — no Anthropic credentials reachable by spawned agents\n" >&2
+    printf "  Tried:\n" >&2
+    printf "    ~/.claude/.credentials.json (host fallback) — not present or empty\n" >&2
+    printf "    %s/vault.json (chepherd vault, claude-oauth provider) — not present or no entry\n" >&2 "$STATE_DIR"
+    printf "  Fix one of:\n" >&2
+    printf "    1. Run \`claude login\` on this host to populate ~/.claude/.credentials.json\n" >&2
+    printf "    2. Capture credentials into chepherd's vault via the dashboard's OAuth flow\n" >&2
+    printf "  See #218 for details.\n" >&2
+    exit 3
+fi
+
 step() {
     printf "\n\033[1;34m▶ %s\033[0m\n" "$*"
 }

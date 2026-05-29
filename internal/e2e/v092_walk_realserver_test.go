@@ -218,6 +218,62 @@ func TestV092Walk_SendMessageDoesNotErrorEnvelope(t *testing.T) {
 	assertSendMessageWorking(t, httpAddr, "shepherd", "name-form")
 }
 
+// TestV092Walk_ShepherdPTYAliveAtT30s pins the #218 liveness contract:
+// a spawned claude-code shepherd is still PTY-reachable 30 seconds after
+// spawn (i.e. SendMessage returns a Task result, not "session: closed").
+//
+// Surfaced by the post-#217 walk-script run on 2026-05-29: at T+4s the
+// SendMessage returned Task{state:"working"} (PR #215+#216+#217 chain
+// confirmed) but at T+14s the same call returned -32603 "deliver:
+// session: closed". The PTY child had exited within the 14s window —
+// the runtime's in-memory map still claimed alive=1 but the container
+// was gone (`/proc/<pid>` empty).
+//
+// Architect-hypothesis was "Anthropic auth missing" but bastion
+// investigation (issue #218 comment) found:
+//   - ~/.claude/.credentials.json present + valid (6h until expiresAt)
+//   - claude-credentials materialized correctly into per-spawn secrets
+//   - claude-onboarding stub materialized correctly
+//   - claude container PID alive 1m30s+ in deliberate isolated repro
+//
+// Root cause is therefore NOT a missing auth env. This test pins the
+// behavioral invariant — alive at T+30s — so any future regression of
+// this class fails at CI regardless of which subsystem produces it
+// (container-name race, claude-code idle exit, podman --replace
+// collision, etc).
+//
+// Skips when `claude` CLI is not in PATH.
+//
+// Refs #208 #218.
+func TestV092Walk_ShepherdPTYAliveAtT30s(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-binary boot in -short mode")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("skipping: 'claude' CLI not in PATH")
+	}
+
+	httpAddr, stateDir := bootChepherdWithShepherd(t)
+
+	sessionID := waitForFirstSessionID(t, stateDir, 5*time.Second)
+	if sessionID == "" {
+		t.Fatal("no session found in SessionRepository after spawn")
+	}
+
+	// ─── Liveness probe at T+5s — sanity that the PTY ever worked ───
+	// If THIS fails, the test is sick (Spawn → SessionRepository
+	// regression OR substrate broken) — not a #218 lifetime regression.
+	assertSendMessageWorking(t, httpAddr, "shepherd", "T5s-sanity")
+
+	// ─── Architect-spec'd assertion: alive at T+30s ─────────────────
+	// Sleep 28s on top of the existing ~5s elapsed in bootChepherd +
+	// the T5s probe — lands at ~T+33s post-spawn.
+	t.Logf("sleeping 28s to reach T+30s post-spawn liveness assertion")
+	time.Sleep(28 * time.Second)
+
+	assertSendMessageWorking(t, httpAddr, "shepherd", "T30s-liveness")
+}
+
 // assertSendMessageWorking sends a SendMessage with contextId=ctxID
 // and asserts the response is a JSON-RPC SUCCESS envelope with a
 // well-formed Task.status.state="working". Fails LOUDLY with the full
