@@ -62,6 +62,13 @@ type Runner interface {
 // Restart / Rename / AttachIO when the session doesn't exist.
 var ErrSessionNotFound = errors.New("runtime: session not found")
 
+// errScaffoldPending returns a sentinel error indicating the named
+// Runner method's implementation arrives in a subsequent commit on
+// this sub-branch. Used by PodRunner stubs until k8s integration lands.
+func errScaffoldPending(method string) error {
+	return errors.New("runtime: " + method + " scaffold pending — k8s integration commit on this sub-branch")
+}
+
 // RunnerKind enumerates the two implementations Runner ships in
 // v0.9.2.
 type RunnerKind string
