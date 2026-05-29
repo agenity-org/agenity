@@ -142,7 +142,12 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if mcpListen == "" {
 		mcpListen = mcpserver.DefaultListenAddr
 	}
-	mcpSrv := mcpserver.New(rt)
+	// v0.9.2 (#208): build the A2A PTY Deliverer once + thread to BOTH
+	// the legacy MCP server (chepherd.send_to_session shim translates
+	// onto A2A SendMessage) AND the A2A HTTPS endpoint (wired in a
+	// later sub-branch when the runner-side server is stood up).
+	a2aDeliverer := runtime.NewA2ADeliverer(rt)
+	mcpSrv := mcpserver.NewWithDeliverer(rt, a2aDeliverer)
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
