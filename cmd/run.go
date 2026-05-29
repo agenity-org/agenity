@@ -1,13 +1,13 @@
-// cmd/run.go — `chepherd run` v0.5 entrypoint
+// cmd/run.go — `chepherd run` v0.9.2 single canonical entrypoint.
 //
-// This is the new pty-host-based runtime. The legacy `chepherd dashboard`
-// and `chepherd daemon` paths (tmux-based) are left UNTOUCHED so existing
-// users keep working while v0.5 stabilizes.
+// chepherd run wires the integrated control plane: runtime spawn-
+// lifecycle + shepherd intelligence + persistence layer + A2A
+// endpoint + MCP HTTP. The legacy `chepherd daemon` + `chepherd
+// shadow` cobra verbs (tmux-based Python-supervisor parity paths)
+// were retired in #208 — chepherd v0.9.2 has one canonical CLI
+// entry per docs/V0.9.2-ARCHITECTURE.md.
 //
-// `chepherd run` boots the runtime, spawns Adam (and Chepherd if monitored
-// mode is on), wires the @target relay, and tails to stdout. For v0.5.0
-// this is a headless harness — the TUI client refactor is tracked
-// separately as chepherd/chepherd#55.
+// `chepherd run` boots the runtime, spawns Adam, and tails to stdout.
 //
 // Usage:
 //
@@ -66,11 +66,9 @@ watching the "default" tribe). Workers are spawned on demand by the operator
 via the dashboard's "+ spawn agent" button. Pass --no-shepherd to start
 completely empty (4-eyes off).
 
-This is the v0.5 development entrypoint. The legacy 'chepherd dashboard' and
-'chepherd daemon' (tmux-based) are LEFT UNTOUCHED so existing users keep working.
-
-When the TUI refactor lands (chepherd/chepherd#55), the dashboard client will
-target this runtime instead of tmux.`,
+chepherd run is the single canonical entrypoint for v0.9.2 — it integrates
+runtime, shepherd tier, persistence layer, A2A endpoint, and MCP HTTP into
+one process per docs/V0.9.2-ARCHITECTURE.md.`,
 	RunE: runRunCmd,
 }
 
