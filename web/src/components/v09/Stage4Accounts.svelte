@@ -30,9 +30,22 @@
 
   let {
     agents = [],
+    // #237 — per-agent agent_type override coming from Stage 4
+    // Agent Types & Models. When an agent's type changes in Stage 4,
+    // the per-agent dropdown here filters against the NEW type's
+    // compatibility, not the template default. Optional; defaults to
+    // empty so callers that haven't been wired don't break.
+    agentTypeOverrides = {},
     typeAccounts = $bindable({}),
     agentAccountOverrides = $bindable({}),
   } = $props();
+
+  // Resolves the effective agent type for the per-agent row, honoring
+  // Stage 4 overrides first (#237) then falling back to the template
+  // default. Used by `entriesForType` lookups in the per-agent UI.
+  function effectiveTypeFor(a) {
+    return agentTypeOverrides[a.label] || a.agent_type || 'claude-code';
+  }
 
   const API = '/api-v08/v1';
 
@@ -101,7 +114,7 @@
     const seen = new Set();
     const out = [];
     for (const a of agents) {
-      const t = a.agent_type || 'claude-code';
+      const t = effectiveTypeFor(a);
       if (!seen.has(t)) { seen.add(t); out.push(t); }
     }
     return out;
@@ -110,7 +123,7 @@
   // Whether any agents of a given type exist (for the "advanced"
   // multi-row UI).
   function agentsOfType(t) {
-    return agents.filter(a => (a.agent_type || 'claude-code') === t);
+    return agents.filter(a => effectiveTypeFor(a) === t);
   }
 
   function classOf(t) { return TYPE_TO_CLASS[t] || ''; }
@@ -167,7 +180,7 @@
   }
 
   function effectiveFor(a) {
-    return agentAccountOverrides[a.label] || typeAccounts[a.agent_type || 'claude-code'] || '';
+    return agentAccountOverrides[a.label] || typeAccounts[effectiveTypeFor(a)] || '';
   }
   const allResolved = $derived.by(() =>
     agents.length > 0 && agents.every(a => !!effectiveFor(a))
@@ -244,17 +257,18 @@
             <em>(use default)</em> to inherit from the row above.
           </p>
           {#each agents as a}
-            {@const cls = classOf(a.agent_type || 'claude-code')}
-            {@const matches = entriesForType(a.agent_type || 'claude-code')}
+            {@const at = effectiveTypeFor(a)}
+            {@const cls = classOf(at)}
+            {@const matches = entriesForType(at)}
             <div class="adv-row">
               <span class="adv-label">{a.label}</span>
-              <span class="adv-type">{a.agent_type || 'claude-code'}</span>
+              <span class="adv-type">{at}</span>
               <select
                 class="picker"
                 value={agentAccountOverrides[a.label] || ''}
                 onchange={(e) => pickAgent(a.label, e.currentTarget.value)}
               >
-                <option value="">— use default ({typeAccounts[a.agent_type || 'claude-code'] || 'unset'}) —</option>
+                <option value="">— use default ({typeAccounts[at] || 'unset'}) —</option>
                 {#each matches as v}
                   <option value={v.id}>{v.label || v.id}</option>
                 {/each}

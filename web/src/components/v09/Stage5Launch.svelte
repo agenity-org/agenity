@@ -74,19 +74,25 @@
   }
   function memberScope(m, skillID) { return m.owned_skills_scope?.[skillID] || ''; }
 
+  // #237 — resolved agent type honors Stage 4 per-agent override
+  // before falling back to the template's `agent_type`. Used by
+  // account resolution + the chips roll-up below.
+  function resolvedAgentType(m) {
+    return selection?.agentTypeOverrides?.[m.label] || m.agent_type || 'claude-code';
+  }
+
   // Account resolution: per-agent override > per-type default.
   function accountFor(m) {
     const ov = selection?.agentAccountOverrides?.[m.label];
     if (ov) return ov;
-    const t = m.agent_type || 'claude-code';
-    return selection?.typeAccounts?.[t] || '';
+    return selection?.typeAccounts?.[resolvedAgentType(m)] || '';
   }
 
   // Account chips roll-up — group members by resolved accountID.
   const reused = $derived.by(() => {
     const counts = new Map();
     for (const m of (selection?.members || [])) {
-      const k = accountFor(m) || `(unset-${m.agent_type || 'claude-code'})`;
+      const k = accountFor(m) || `(unset-${resolvedAgentType(m)})`;
       counts.set(k, (counts.get(k) || 0) + 1);
     }
     return [...counts.entries()].map(([k, n]) => ({ account: k, count: n }));
@@ -133,13 +139,32 @@
       const skByID = {};
       for (const s of (skJson.skills || [])) skByID[s.id] = s;
 
+      // #237 — pull per-agent agent_type + model overrides from
+      // Stage 4 Agent Types & Models. `agentTypeOverrides[label]`
+      // falls back to the template's `agent_type`; the resolved
+      // agent_type drives the POST's `agent` field. Model goes into
+      // `stat_sheet.model_tier` which runtime.go:665 appends as
+      // `--model <name>` on claude-code spawn (other flavors carry
+      // it in stat sheet for downstream wiring in v0.9.3).
+      const agentTypeOverrides = selection?.agentTypeOverrides || {};
+      const agentModelOverrides = selection?.agentModelOverrides || {};
+
       for (const m of members) {
         const ownedSkills = ownedSkillsFor(m);
         const firstSkill = ownedSkills.length ? skByID[ownedSkills[0]] || {} : {};
         const accountID = accountFor(m);
+        const resolvedAgent = agentTypeOverrides[m.label] || m.agent_type || 'claude-code';
+        const resolvedModel = agentModelOverrides[m.label] || '';
+        // Compose stat_sheet honoring (a) the first owned skill's
+        // stat_sheet baseline and (b) the per-agent model_tier override
+        // from Stage 4. Layer order: skill defaults <- model override
+        // (the override wins for the one field we set).
+        const statSheet = (firstSkill.stat_sheet || resolvedModel)
+          ? { ...(firstSkill.stat_sheet || {}), ...(resolvedModel ? { model_tier: resolvedModel } : {}) }
+          : undefined;
         const body = {
           name: m.label,
-          agent: m.agent_type || 'claude-code',
+          agent: resolvedAgent,
           team: selection?.teamName,
           role: 'worker',
           cwd: '/home/chepherd/repos',
@@ -149,7 +174,7 @@
           account_id: accountID,
           claude_token_id: accountID,
           system_prompt: firstSkill.prompt_override || firstSkill.org_override_body || '',
-          stat_sheet: firstSkill.stat_sheet || undefined,
+          stat_sheet: statSheet,
         };
         const r = await fetch('/api-v08/v1/sessions', {
           method: 'POST',
