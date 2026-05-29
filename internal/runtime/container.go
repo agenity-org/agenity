@@ -285,19 +285,37 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 func (r *PodmanRuntime) StopContainer(name string) error {
 	full := "chepherd-agent-" + name
 	args := podmanArgs()
-	// `podman stop` returns non-zero if the container is not running;
-	// we ignore that — `podman rm -f` below handles both stopped +
-	// running cases.
-	_ = exec.Command(args[0], append(append([]string{}, args[1:]...), "stop", "--time", "5", full)...).Run()
-	rm := exec.Command(args[0], append(append([]string{}, args[1:]...), "rm", "-f", full)...)
-	if out, err := rm.CombinedOutput(); err != nil {
+	// #258 reopen — operator reports stuck-stops on the bastion. PR #260
+	// added the call-through but the stop/rm shell-outs were silent
+	// (errors swallowed by `_ =`). Add stderr-logging at every step so
+	// the operator's next stuck-stop has a paper trail: which container,
+	// which command, which exit + stderr.
+	stopArgs := append(append([]string{}, args[1:]...), "stop", "--time", "5", full)
+	stopOut, stopErr := exec.Command(args[0], stopArgs...).CombinedOutput()
+	if stopErr != nil {
+		s := strings.ToLower(string(stopOut))
+		// "no such container" is the only benign case — anything else
+		// is the operator's stuck-stop bug surfacing. Don't fail the
+		// chain (rm -f below will retry), but DO log.
+		if !strings.Contains(s, "no such container") && !strings.Contains(s, "not found") {
+			fmt.Fprintf(os.Stderr, "podman stop %s: %v (%s)\n", full, stopErr, strings.TrimSpace(string(stopOut)))
+		}
+	}
+	rmArgs := append(append([]string{}, args[1:]...), "rm", "-f", full)
+	rm := exec.Command(args[0], rmArgs...)
+	out, err := rm.CombinedOutput()
+	if err != nil {
 		s := strings.ToLower(string(out))
 		// "no such container" / "not found" => already gone, success.
 		if strings.Contains(s, "no such container") || strings.Contains(s, "not found") {
 			return nil
 		}
+		fmt.Fprintf(os.Stderr, "podman rm -f %s: %v (%s)\n", full, err, strings.TrimSpace(string(out)))
 		return fmt.Errorf("podman rm %s: %w (%s)", full, err, strings.TrimSpace(string(out)))
 	}
+	// Successful rm — log the disposition so operator can confirm
+	// post-Stop-click that the container actually went away.
+	fmt.Fprintf(os.Stderr, "podman rm -f %s: ok (%s)\n", full, strings.TrimSpace(string(out)))
 	return nil
 }
 
@@ -342,15 +360,24 @@ func (r *DockerRuntime) AgentHomeDir(agentName, stateDir string) (string, error)
 }
 func (r *DockerRuntime) StopContainer(name string) error {
 	full := "chepherd-agent-" + name
-	_ = exec.Command("docker", "stop", "--time", "5", full).Run()
+	// #258 reopen — same verbose-logging treatment as PodmanRuntime.
+	if stopOut, stopErr := exec.Command("docker", "stop", "--time", "5", full).CombinedOutput(); stopErr != nil {
+		s := strings.ToLower(string(stopOut))
+		if !strings.Contains(s, "no such container") && !strings.Contains(s, "not found") {
+			fmt.Fprintf(os.Stderr, "docker stop %s: %v (%s)\n", full, stopErr, strings.TrimSpace(string(stopOut)))
+		}
+	}
 	rm := exec.Command("docker", "rm", "-f", full)
-	if out, err := rm.CombinedOutput(); err != nil {
+	out, err := rm.CombinedOutput()
+	if err != nil {
 		s := strings.ToLower(string(out))
 		if strings.Contains(s, "no such container") || strings.Contains(s, "not found") {
 			return nil
 		}
+		fmt.Fprintf(os.Stderr, "docker rm -f %s: %v (%s)\n", full, err, strings.TrimSpace(string(out)))
 		return fmt.Errorf("docker rm %s: %w (%s)", full, err, strings.TrimSpace(string(out)))
 	}
+	fmt.Fprintf(os.Stderr, "docker rm -f %s: ok (%s)\n", full, strings.TrimSpace(string(out)))
 	return nil
 }
 func (r *DockerRuntime) ListAgentContainers() ([]string, error) {
