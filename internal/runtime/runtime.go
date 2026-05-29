@@ -1425,6 +1425,67 @@ func (r *Runtime) Stop(name string) error {
 	return nil
 }
 
+// #273 — expectedAgentEntrypointSHA is set at build time via Makefile's
+// -X ldflag to the SHA256 of scripts/agent-entrypoint.sh. At chepherd
+// boot, VerifyAgentEntrypointSHA shells out to the chepherd-agent:latest
+// image's /usr/local/bin/agent-entrypoint and compares — a mismatch
+// means the operator's chepherd binary was rebuilt after a scripts/
+// agent-entrypoint.sh change but the chepherd-agent image was NOT, so
+// every new spawn uses the stale entrypoint and silently regresses to
+// whichever bug the entrypoint change was meant to fix (e.g. #254's
+// `! -e` skip-if-exists pinning yesterday's credentials).
+//
+// Empty when chepherd is built without the -X (e.g. plain `go build`).
+// In that case the check is skipped — operator-friendly fallback for
+// dev builds.
+var expectedAgentEntrypointSHA = ""
+
+// VerifyAgentEntrypointSHA computes the SHA256 of the chepherd-agent:latest
+// image's /usr/local/bin/agent-entrypoint and compares it to the
+// build-time baked expectedAgentEntrypointSHA. Loud stderr warning +
+// rebuild instruction on mismatch. Best-effort: podman-call failures
+// (image missing, podman unavailable in dev mode) are silent — we
+// don't block boot on diagnostic infrastructure.
+//
+// Returns true when the SHAs match OR the check was intentionally
+// skipped (empty expected, podman unavailable, BareExec). Returns
+// false ONLY when a real drift was detected.
+func VerifyAgentEntrypointSHA(containerRuntime ContainerRuntime) bool {
+	if expectedAgentEntrypointSHA == "" {
+		return true // build-skipped (dev `go build` without ldflags)
+	}
+	if containerRuntime == nil || containerRuntime.Name() == "bare" {
+		return true // BareExec doesn't use the agent image
+	}
+	bin := "podman"
+	if containerRuntime.Name() == "docker" {
+		bin = "docker"
+	}
+	cmd := exec.Command(bin, "run", "--rm", "--entrypoint=/bin/sha256sum",
+		"chepherd-agent:latest", "/usr/local/bin/agent-entrypoint")
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-image-check] skipped: %v (run `make agent-image` to build the agent image)\n", err)
+		return true
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 1 {
+		return true
+	}
+	actualSHA := fields[0]
+	if actualSHA == expectedAgentEntrypointSHA {
+		fmt.Fprintf(os.Stderr, "[chepherd-image-check] chepherd-agent:latest entrypoint SHA matches build (#273)\n")
+		return true
+	}
+	fmt.Fprintf(os.Stderr, "\n[chepherd-image-check] ⚠ STALE chepherd-agent:latest IMAGE DETECTED (#273)\n")
+	fmt.Fprintf(os.Stderr, "[chepherd-image-check]   expected agent-entrypoint SHA: %s (this chepherd binary)\n", expectedAgentEntrypointSHA)
+	fmt.Fprintf(os.Stderr, "[chepherd-image-check]   actual   agent-entrypoint SHA: %s (in chepherd-agent:latest)\n", actualSHA)
+	fmt.Fprintf(os.Stderr, "[chepherd-image-check]   every Spawn from this chepherd uses the STALE entrypoint\n")
+	fmt.Fprintf(os.Stderr, "[chepherd-image-check]   → rebuild the agent image:  make agent-image  (or: podman build -f Dockerfile.agent -t chepherd-agent:latest .)\n")
+	fmt.Fprintf(os.Stderr, "[chepherd-image-check]   spawned agents will inherit pre-#254 stale credentials behaviour until rebuild lands.\n\n")
+	return false
+}
+
 // instanceUUIDFromStateDir derives the chepherd instance UUID from the
 // absolute state-dir path: SHA256 of the resolved absolute path, first
 // 8 hex chars. Stable across reboots (same path → same UUID), unique
@@ -1446,6 +1507,11 @@ func instanceUUIDFromStateDir(stateDir string) string {
 // InstanceUUID exposes this chepherd's 8-char instance fingerprint
 // for cmd/run.go's boot-banner + #270's verification logging.
 func (r *Runtime) InstanceUUID() string { return r.instanceUUID }
+
+// ContainerRuntime exposes the active ContainerRuntime so cmd/run.go's
+// startup checks (#273 image-drift verification) can interrogate the
+// running image without poking r.containerRuntime directly.
+func (r *Runtime) ContainerRuntime() ContainerRuntime { return r.containerRuntime }
 
 // ReapOrphanContainers garbage-collects sibling agent containers that
 // aren't tracked by the live runtime — they survived a chepherd crash

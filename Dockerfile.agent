@@ -56,7 +56,16 @@ RUN useradd -m -u 1000 -s /bin/bash agent \
 # token in-place but the vault remains source of truth — chepherd captures
 # fresh tokens via PTY OAuth-URL detection (R5).
 COPY scripts/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
-RUN chmod +x /usr/local/bin/agent-entrypoint
+# #273 — defensive removal of any leftover `chepherd-agent-entrypoint`
+# from older base-image layers. A previous build flow installed the
+# script under that name + the ENTRYPOINT was switched to
+# `agent-entrypoint` without removing the old file. Result: walker /
+# operator probes that `cat /usr/local/bin/chepherd-agent-entrypoint`
+# returned the post-#257 contents BUT the actual ENTRYPOINT runs the
+# stale `agent-entrypoint`. This RUN line guarantees the leftover is
+# gone on every fresh build.
+RUN chmod +x /usr/local/bin/agent-entrypoint \
+ && rm -f /usr/local/bin/chepherd-agent-entrypoint
 
 USER agent
 WORKDIR /home/agent
