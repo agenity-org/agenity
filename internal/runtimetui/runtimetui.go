@@ -1,5 +1,7 @@
 // Package runtimetui is chepherd v0.5's TUI client, wired against the
-// new runtime.Runtime + messagebus.Relay + ptyhost.Session APIs.
+// runtime.Runtime + ptyhost.Session APIs. Originally also depended on
+// the internal/messagebus regex @-relay; that's been retired in v0.9.2
+// (#208) since A2A SendMessage supersedes @-line PTY routing.
 //
 // Separate package from internal/tui/ (the legacy tmux-based TUI) so the
 // existing 'chepherd dashboard' command remains untouched while v0.5

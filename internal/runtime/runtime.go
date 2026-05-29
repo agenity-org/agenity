@@ -891,33 +891,7 @@ func (r *Runtime) GrantChannel(fromTeam, toTeam, scope string) {
 	r.cond.Broadcast()
 }
 
-// SessionByName implements messagebus.SessionRegistry — returns the
-// session pointer + its team name.
-func (r *Runtime) SessionByName(name string) (*session.Session, string, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	id, ok := r.byName[name]
-	if !ok {
-		return nil, "", false
-	}
-	return r.sessions[id], r.info[id].Team, true
-}
-
-// SessionsByTribe implements messagebus.SessionRegistry — name kept for
-// interface compat; semantically returns sessions in the given team.
-func (r *Runtime) SessionsByTribe(team string) []*session.Session {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []*session.Session
-	for id, info := range r.info {
-		if info.Team == team {
-			out = append(out, r.sessions[id])
-		}
-	}
-	return out
-}
-
-// HumanInbox implements messagebus.SessionRegistry.
+// HumanInbox appends a human-inbox entry.
 func (r *Runtime) HumanInbox(from, body string) {
 	r.mu.Lock()
 	id := fmt.Sprintf("msg-%d", time.Now().UnixNano())
@@ -955,32 +929,6 @@ func (r *Runtime) MarkAllInboxRead() int {
 		}
 	}
 	return n
-}
-
-// IsCrossTribeGranted implements messagebus.SessionRegistry — name
-// kept for interface compat; semantically checks cross-team grants.
-func (r *Runtime) IsCrossTribeGranted(fromTeam, toTeam string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, g := range r.grants {
-		if g.FromTeam == fromTeam && g.ToTeam == toTeam {
-			return true
-		}
-	}
-	return false
-}
-
-// IsSessionPaused implements messagebus.SessionRegistry. Reports whether
-// the session's metadata has Paused=true.
-func (r *Runtime) IsSessionPaused(s *session.Session) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for id, ss := range r.sessions {
-		if ss == s {
-			return r.info[id].Paused
-		}
-	}
-	return false
 }
 
 // List returns a snapshot of all session metadata, augmented with the
