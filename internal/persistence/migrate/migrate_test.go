@@ -63,9 +63,14 @@ func TestRun_SQLite_AppliesAndIdempotent(t *testing.T) {
 	).Scan(&applied); err != nil {
 		t.Fatalf("count bookkeeping: %v", err)
 	}
-	if applied != 1 {
-		t.Errorf("applied count = %d, want 1 (only 001_init.sqlite.sql at this point)", applied)
+	// Every *.sqlite.sql file should be applied once.
+	wantApplied := len(wantTables) // bookkeeping table is always there; both 001 + 002 contribute to entity tables
+	// Count migration files directly to validate idempotent re-apply.
+	files, _ := listMigrationFiles("sqlite")
+	if applied != len(files) {
+		t.Errorf("applied count = %d, want %d (one per .sqlite.sql migration file)", applied, len(files))
 	}
+	_ = wantApplied
 }
 
 func TestRun_UnsupportedDialect(t *testing.T) {

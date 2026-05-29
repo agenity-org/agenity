@@ -34,11 +34,11 @@ func (r *SkillRepository) Get(ctx context.Context, id string) (*persistence.Skil
 		readOnly int
 	)
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, default_body, override_body, read_only, source, path, sort_order, updated_at
+		`SELECT id, name, default_body, override_body, read_only, source, path, sort_order, metadata_json, updated_at
 		 FROM skills WHERE id = $1`,
 		id,
 	).Scan(&s.ID, &s.Name, &s.DefaultBody, &s.OverrideBody, &readOnly,
-		&s.Source, &s.Path, &s.SortOrder, &s.UpdatedAt)
+		&s.Source, &s.Path, &s.SortOrder, &s.Metadata, &s.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("sqlite skills Get %q: not found", id)
 	}
@@ -72,7 +72,7 @@ func (r *SkillRepository) List(ctx context.Context, opts persistence.SkillListOp
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 	q := fmt.Sprintf(
-		`SELECT id, name, default_body, override_body, read_only, source, path, sort_order, updated_at
+		`SELECT id, name, default_body, override_body, read_only, source, path, sort_order, metadata_json, updated_at
 		 FROM skills %s ORDER BY sort_order ASC, id ASC`,
 		where,
 	)
@@ -88,7 +88,7 @@ func (r *SkillRepository) List(ctx context.Context, opts persistence.SkillListOp
 			readOnly int
 		)
 		if err := rows.Scan(&s.ID, &s.Name, &s.DefaultBody, &s.OverrideBody, &readOnly,
-			&s.Source, &s.Path, &s.SortOrder, &s.UpdatedAt); err != nil {
+			&s.Source, &s.Path, &s.SortOrder, &s.Metadata, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		s.ReadOnly = readOnly == 1
@@ -106,8 +106,8 @@ func (r *SkillRepository) Save(ctx context.Context, s *persistence.Skill) error 
 	}
 	s.UpdatedAt = time.Now().UTC()
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO skills (id, name, default_body, override_body, read_only, source, path, sort_order, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`INSERT INTO skills (id, name, default_body, override_body, read_only, source, path, sort_order, metadata_json, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT(id) DO UPDATE SET
 		     name = excluded.name,
 		     default_body = excluded.default_body,
@@ -116,9 +116,10 @@ func (r *SkillRepository) Save(ctx context.Context, s *persistence.Skill) error 
 		     source = excluded.source,
 		     path = excluded.path,
 		     sort_order = excluded.sort_order,
+		     metadata_json = excluded.metadata_json,
 		     updated_at = excluded.updated_at`,
 		s.ID, s.Name, s.DefaultBody, s.OverrideBody, boolToInt(s.ReadOnly),
-		s.Source, s.Path, s.SortOrder, s.UpdatedAt,
+		s.Source, s.Path, s.SortOrder, jsonOrEmpty(s.Metadata), s.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("sqlite skills Save %q: %w", s.ID, err)

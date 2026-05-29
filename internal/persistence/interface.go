@@ -82,7 +82,10 @@ type Skill struct {
 	Source       string // upstream source URL
 	Path         string // upstream path
 	SortOrder    int
-	UpdatedAt    time.Time
+	Metadata     []byte // JSON-encoded domain-specific fields (Frontmatter,
+	// DefaultTools, AgentTypeCompat, StatSheet, Tags, TeamOnly, etc.) that
+	// don't have dedicated columns. Empty/nil → no extras.
+	UpdatedAt time.Time
 }
 
 type SkillListOpts struct {
@@ -109,6 +112,7 @@ type Agent struct {
 	OwnedSkills      []string
 	OwnedSkillsScope map[string]string
 	Sessions         []SessionRef
+	Metadata         []byte // JSON-encoded extras (status sheet, tags, etc.)
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -161,7 +165,8 @@ type Template struct {
 	ID          string
 	Name        string
 	Description string
-	Body        []byte // canonical YAML
+	Body        []byte // canonical YAML / encoded body
+	Metadata    []byte // JSON-encoded extras (Icon, WhenToUse, Slots, etc.)
 	UpdatedAt   time.Time
 }
 

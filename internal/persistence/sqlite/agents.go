@@ -37,12 +37,12 @@ func (r *AgentRepository) Get(ctx context.Context, id string) (*persistence.Agen
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, type, label, role_id, creator_account,
 		        owned_skills_json, owned_skills_scope_json, sessions_json,
-		        created_at, updated_at
+		        metadata_json, created_at, updated_at
 		 FROM agents WHERE id = $1`,
 		id,
 	).Scan(&a.ID, &a.Type, &a.Label, &a.RoleID, &a.CreatorAccount,
 		&skillsJSON, &scopeJSON, &sessionsJSON,
-		&a.CreatedAt, &a.UpdatedAt)
+		&a.Metadata, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("sqlite agents Get %q: not found", id)
 	}
@@ -131,8 +131,8 @@ func (r *AgentRepository) Save(ctx context.Context, a *persistence.Agent) error 
 		`INSERT INTO agents
 		   (id, type, label, role_id, creator_account,
 		    owned_skills_json, owned_skills_scope_json, sessions_json,
-		    created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		    metadata_json, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 ON CONFLICT(id) DO UPDATE SET
 		     type = excluded.type,
 		     label = excluded.label,
@@ -141,10 +141,11 @@ func (r *AgentRepository) Save(ctx context.Context, a *persistence.Agent) error 
 		     owned_skills_json = excluded.owned_skills_json,
 		     owned_skills_scope_json = excluded.owned_skills_scope_json,
 		     sessions_json = excluded.sessions_json,
+		     metadata_json = excluded.metadata_json,
 		     updated_at = excluded.updated_at`,
 		a.ID, a.Type, a.Label, a.RoleID, a.CreatorAccount,
 		string(skillsJSON), string(scopeJSON), string(sessionsJSON),
-		a.CreatedAt, a.UpdatedAt,
+		jsonOrEmpty(a.Metadata), a.CreatedAt, a.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("sqlite agents Save %q: %w", a.ID, err)

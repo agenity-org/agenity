@@ -127,7 +127,11 @@ func accounts(t *testing.T, r persistence.AccountRepository) {
 
 func templates(t *testing.T, r persistence.TemplateRepository) {
 	ctx := context.Background()
-	tmpl := &persistence.Template{ID: "eq-tmpl", Name: "n", Description: "d", Body: []byte("yaml: data")}
+	tmpl := &persistence.Template{
+		ID: "eq-tmpl", Name: "n", Description: "d",
+		Body:     []byte("yaml: data"),
+		Metadata: []byte(`{"icon":"PlusCircle","slots":[]}`),
+	}
 	if err := r.Save(ctx, tmpl); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -137,6 +141,10 @@ func templates(t *testing.T, r persistence.TemplateRepository) {
 	}
 	if got.Name != "n" || string(got.Body) != "yaml: data" {
 		t.Errorf("Get = %+v", got)
+	}
+	// Metadata round-trips intact.
+	if string(got.Metadata) != `{"icon":"PlusCircle","slots":[]}` {
+		t.Errorf("Metadata = %q, want round-trip", string(got.Metadata))
 	}
 }
 
@@ -239,6 +247,7 @@ func skills(t *testing.T, r persistence.SkillRepository) {
 		ID: "eq-tdd", Name: "tdd", DefaultBody: "Test first.",
 		OverrideBody: "Test first and assert on behavior.",
 		ReadOnly:     false, Source: "upstream", Path: "/skills/tdd", SortOrder: 10,
+		Metadata: []byte(`{"icon":"Beaker","tags":["test"]}`),
 	}
 	if err := r.Save(ctx, s); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -249,6 +258,9 @@ func skills(t *testing.T, r persistence.SkillRepository) {
 	}
 	if got.OverrideBody != "Test first and assert on behavior." || got.SortOrder != 10 {
 		t.Errorf("Get = %+v", got)
+	}
+	if string(got.Metadata) != `{"icon":"Beaker","tags":["test"]}` {
+		t.Errorf("Skill.Metadata = %q, want round-trip", string(got.Metadata))
 	}
 	all, _ := r.List(ctx, persistence.SkillListOpts{})
 	if len(all) != 1 {
@@ -265,6 +277,7 @@ func agents(t *testing.T, r persistence.AgentRepository) {
 		OwnedSkills:      []string{"tdd", "code-review"},
 		OwnedSkillsScope: map[string]string{"tdd": "all"},
 		Sessions:         []persistence.SessionRef{{SessionID: "s-1", AttachedAt: time.Now().UTC().Truncate(time.Second)}},
+		Metadata:         []byte(`{"pvc_handle":"pvc-eq"}`),
 	}
 	if err := r.Save(ctx, a); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -276,6 +289,9 @@ func agents(t *testing.T, r persistence.AgentRepository) {
 	if got.Type != "claude-code" || got.OwnedSkillsScope["tdd"] != "all" ||
 		len(got.OwnedSkills) != 2 || len(got.Sessions) != 1 {
 		t.Errorf("Get = %+v", got)
+	}
+	if string(got.Metadata) != `{"pvc_handle":"pvc-eq"}` {
+		t.Errorf("Agent.Metadata = %q, want round-trip", string(got.Metadata))
 	}
 }
 

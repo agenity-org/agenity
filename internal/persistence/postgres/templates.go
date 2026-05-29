@@ -28,9 +28,9 @@ func (r *TemplateRepository) Get(ctx context.Context, id string) (*persistence.T
 	}
 	var t persistence.Template
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, description, body, updated_at FROM templates WHERE id = $1`,
+		`SELECT id, name, description, body, metadata_json, updated_at FROM templates WHERE id = $1`,
 		id,
-	).Scan(&t.ID, &t.Name, &t.Description, &t.Body, &t.UpdatedAt)
+	).Scan(&t.ID, &t.Name, &t.Description, &t.Body, &t.Metadata, &t.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("postgres templates Get %q: not found", id)
 	}
@@ -42,7 +42,7 @@ func (r *TemplateRepository) Get(ctx context.Context, id string) (*persistence.T
 
 func (r *TemplateRepository) List(ctx context.Context) ([]*persistence.Template, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, description, body, updated_at FROM templates ORDER BY id`,
+		`SELECT id, name, description, body, metadata_json, updated_at FROM templates ORDER BY id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres templates List: %w", err)
@@ -51,7 +51,7 @@ func (r *TemplateRepository) List(ctx context.Context) ([]*persistence.Template,
 	var out []*persistence.Template
 	for rows.Next() {
 		var t persistence.Template
-		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Body, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Body, &t.Metadata, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, &t)
@@ -68,14 +68,15 @@ func (r *TemplateRepository) Save(ctx context.Context, t *persistence.Template) 
 	}
 	t.UpdatedAt = time.Now().UTC()
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO templates (id, name, description, body, updated_at)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO templates (id, name, description, body, metadata_json, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT(id) DO UPDATE SET
 		     name = excluded.name,
 		     description = excluded.description,
 		     body = excluded.body,
+		     metadata_json = excluded.metadata_json,
 		     updated_at = excluded.updated_at`,
-		t.ID, t.Name, t.Description, t.Body, t.UpdatedAt,
+		t.ID, t.Name, t.Description, t.Body, pgJSONOrEmpty(t.Metadata), t.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("postgres templates Save %q: %w", t.ID, err)
