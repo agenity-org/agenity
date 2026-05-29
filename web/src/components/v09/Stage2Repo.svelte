@@ -58,8 +58,17 @@
   //   Gitea / on-prem: instance-specific, operator's call.
   const PAT_HELPERS = {
     github: {
-      url:   'https://github.com/settings/tokens/new?scopes=repo,workflow,read:org,write:org,project,write:packages,read:packages,delete:packages,user:email,read:user,gist,notifications,admin:repo_hook,write:gpg_key,read:gpg_key&description=chepherd',
-      label: 'Create a GitHub PAT — broad scopes pre-selected; uncheck any you want to exclude',
+      // #265 — `&expiration=none` pre-selects "No expiration" on the
+      // PAT-creation form. Without it, GitHub defaults to 30 days +
+      // operator's chepherd setup silently breaks 30 days later when
+      // every spawned agent's `gh` commands start 401-ing. Composes
+      // cleanly with #262 (#235 broad-scope set) in the doc comment
+      // above — the broad scopes still need to be pre-selected; the
+      // no-expiry default is orthogonal. Operators who actively want
+      // a finite-lifetime token OR a tighter scope set flip the
+      // relevant control manually before submitting.
+      url:   'https://github.com/settings/tokens/new?scopes=repo,workflow,read:org,write:org,project,write:packages,read:packages,delete:packages,user:email,read:user,gist,notifications,admin:repo_hook,write:gpg_key,read:gpg_key&expiration=none&description=chepherd',
+      label: 'Create a GitHub PAT — broad scopes + no-expiry pre-selected; uncheck any you want to exclude',
     },
     gitlab: {
       url:   'https://gitlab.com/-/user_settings/personal_access_tokens?scopes=read_api,read_repository,write_repository',
