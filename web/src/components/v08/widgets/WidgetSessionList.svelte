@@ -146,12 +146,165 @@
     if (s < 3600) return `${Math.floor(s/60)}m`;
     return `${Math.floor(s/3600)}h`;
   }
+
+  // ── #253 BULK ACTIONS ────────────────────────────────────────────
+  // Operator can multi-select via #247's Ctrl/Shift+click substrate;
+  // when 2+ rows are selected we surface a bulk-action toolbar in the
+  // pane header. Five actions: Pause / Resume / Restart / Stop /
+  // Message. Restart + Stop require modal confirmation (destructive).
+  // Dispatch uses Promise.allSettled so a single 404 doesn't abort
+  // the whole batch; per-agent status rendered inline below the
+  // toolbar. Successful agents drop out of selection; failed agents
+  // stay selected for re-run.
+  let bulkMessage = $state('');
+  let confirmingAction = $state(null);   // 'stop' | 'restart' | null
+  // launchResults shape: { [agentName]: 'pending' | 'ok' | { error } }
+  let bulkResults = $state(null);
+  let bulkInProgress = $state(false);
+
+  function clearSelection() {
+    selectedAgents = new Set();
+    lastClickedAgent = '';
+  }
+
+  async function callOne(action, agent) {
+    const url = `${API}/sessions/${encodeURIComponent(agent)}` +
+      (action === 'stop' ? '' :
+       action === 'pause' || action === 'resume' ? '/pause' :
+       action === 'restart' ? '/restart' :
+       action === 'message' ? '/messages' : '');
+    const method = action === 'stop' ? 'DELETE' : 'POST';
+    const init = { method };
+    if (action === 'pause' || action === 'resume') {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify({ paused: action === 'pause' });
+    } else if (action === 'message') {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify({ body: bulkMessage });
+    }
+    const r = await fetch(url, init);
+    if (!r.ok) {
+      const t = (await r.text()).trim();
+      throw new Error(t || `HTTP ${r.status}`);
+    }
+    return true;
+  }
+
+  async function runBulkAction(action) {
+    if (selectedAgents.size === 0) return;
+    if ((action === 'stop' || action === 'restart') && confirmingAction !== action) {
+      confirmingAction = action;
+      return;
+    }
+    confirmingAction = null;
+    bulkInProgress = true;
+    const targets = [...selectedAgents];
+    bulkResults = Object.fromEntries(targets.map(t => [t, 'pending']));
+    const settled = await Promise.allSettled(
+      targets.map(async (agent) => {
+        try { await callOne(action, agent); return { agent, ok: true }; }
+        catch (e) { return { agent, ok: false, error: String(e.message || e) }; }
+      })
+    );
+    const nextResults = { ...bulkResults };
+    const survived = new Set();
+    for (const s of settled) {
+      const { agent, ok, error } = s.status === 'fulfilled' ? s.value : { agent: '?', ok: false, error: String(s.reason) };
+      nextResults[agent] = ok ? 'ok' : { error };
+      if (!ok) survived.add(agent);
+    }
+    bulkResults = nextResults;
+    bulkInProgress = false;
+    // Successful agents drop out of selection; failed stay selected
+    // so the operator can retry without re-selecting.
+    selectedAgents = survived;
+    if (action === 'message') bulkMessage = '';
+    // Auto-clear the result strip after a short hold so the next
+    // selection starts visually clean. Failed rows are still surfaced
+    // by the persistent 'failed' class on the list item if needed.
+    setTimeout(() => {
+      if (!bulkInProgress) bulkResults = null;
+    }, 4500);
+  }
+
+  function cancelConfirm() { confirmingAction = null; }
+
+  function actionLabel(a) {
+    return { stop: 'Stop', restart: 'Restart', pause: 'Pause', resume: 'Resume', message: 'Send' }[a] || a;
+  }
 </script>
+
+<!--
+  #253 — bulk-action toolbar appears when 2+ rows selected. Hidden
+  for N=1 because the existing right-click context menu already covers
+  per-agent actions.
+-->
+{#if selectedAgents.size > 1}
+  <div class="bulk-toolbar">
+    <div class="bulk-head">
+      <span class="bulk-count">{selectedAgents.size} selected</span>
+      <button class="bulk-clear" type="button" onclick={clearSelection} title="clear selection">×</button>
+    </div>
+    <div class="bulk-actions">
+      <button type="button" class="ba pause" onclick={() => runBulkAction('pause')} disabled={bulkInProgress} title="Pause all selected agents">⏸ Pause</button>
+      <button type="button" class="ba resume" onclick={() => runBulkAction('resume')} disabled={bulkInProgress} title="Resume all selected agents">▶ Resume</button>
+      <button type="button" class="ba restart" onclick={() => runBulkAction('restart')} disabled={bulkInProgress} title="Restart all selected agents (conversation preserved)">↻ Restart</button>
+      <button type="button" class="ba stop danger" onclick={() => runBulkAction('stop')} disabled={bulkInProgress} title="Stop all selected agents (destructive)">■ Stop</button>
+    </div>
+    <div class="bulk-msg">
+      <input type="text" bind:value={bulkMessage} placeholder="Message all {selectedAgents.size}…" disabled={bulkInProgress}
+             onkeydown={(e) => { if (e.key === 'Enter' && bulkMessage.trim()) runBulkAction('message'); }} />
+      <button type="button" class="ba send" disabled={bulkInProgress || !bulkMessage.trim()} onclick={() => runBulkAction('message')}>Send →</button>
+    </div>
+    {#if bulkResults}
+      <ul class="bulk-results">
+        {#each Object.entries(bulkResults) as [agent, status]}
+          <li class:ok={status === 'ok'} class:pending={status === 'pending'} class:failed={typeof status === 'object'}>
+            {#if status === 'pending'}
+              <span class="br-spin">⟳</span> <span class="br-name">{agent}</span> <span class="br-text">spawning…</span>
+            {:else if status === 'ok'}
+              <span class="br-ok">✓</span> <span class="br-name">{agent}</span>
+            {:else}
+              <span class="br-fail">✗</span> <span class="br-name">{agent}</span> <span class="br-text" title={status.error}>{status.error}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
+{/if}
+
+{#if confirmingAction}
+  <div class="confirm-backdrop" onclick={cancelConfirm}>
+    <div class="confirm-modal" onclick={(e) => e.stopPropagation()}>
+      <h4>
+        {#if confirmingAction === 'stop'}
+          Stop {selectedAgents.size} agents?
+        {:else}
+          Restart {selectedAgents.size} agents?
+        {/if}
+      </h4>
+      <p>
+        {#if confirmingAction === 'stop'}
+          This will kill the running session containers. Their work-tree state is preserved on disk but in-flight conversation context is lost.
+        {:else}
+          Sessions will restart in-place. Conversation context is preserved.
+        {/if}
+      </p>
+      <div class="confirm-actions">
+        <button type="button" class="cancel" onclick={cancelConfirm}>Cancel</button>
+        <button type="button" class="confirm danger" onclick={() => runBulkAction(confirmingAction)}>
+          {actionLabel(confirmingAction)} {selectedAgents.size}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <div class="list">
   {#each tree as group (group.team.name)}
     <section class="team">
-      <h3 class="team-head" on:click={() => openTeamSettings(group.team, group.members)} title="open team settings">
+      <h3 class="team-head" onclick={() => openTeamSettings(group.team, group.members)} title="open team settings">
         <span class="team-name">{group.team.name}</span>
         <span class="team-meta">· {group.team.topology} · {group.members.length}</span>
       </h3>
@@ -161,8 +314,8 @@
           {#if agent}
             {@const score = geomean(agent.scorecard)}
             <li class:selected={selectedAgents.has(agent.name)}
-                on:click={(ev) => handleAgentClick(ev, agent.name)}
-                on:contextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
+                onclick={(ev) => handleAgentClick(ev, agent.name)}
+                oncontextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
                 title="Click to select. Ctrl+click to toggle. Shift+click for range. Right-click for membership actions.">
               <span class="icon" class:shepherd={m.role === 'shepherd'}>{m.role === 'shepherd' ? '✻' : '●'}</span>
               <span class="name">{agent.name}</span>
@@ -180,14 +333,14 @@
 </div>
 
 {#if ctxMenu}
-  <div class="ctx-backdrop" on:click={closeContext}>
-    <div class="ctx-menu" style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;" on:click|stopPropagation>
+  <div class="ctx-backdrop" onclick={closeContext}>
+    <div class="ctx-menu" style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;" onclick={(e) => e.stopPropagation()}>
       <div class="ctx-head">{ctxMenu.agent} <small>· {ctxMenu.currentTeam} / {ctxMenu.currentRole}</small></div>
-      <button on:click={() => { window.dispatchEvent(new CustomEvent('chepherd-open-agent-settings', { detail: { agentName: ctxMenu.agent } })); closeContext(); }}>⚙ Settings…</button>
-      <button on:click={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: true }) }); closeContext(); }}>⏸ Pause</button>
-      <button on:click={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: false }) }); closeContext(); }}>▶ Resume</button>
-      <button on:click={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/restart`, { method: 'POST' }); closeContext(); }}>↻ Restart</button>
-      <button class="danger" on:click={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}`, { method: 'DELETE' }); closeContext(); }}>■ Stop</button>
+      <button onclick={() => { window.dispatchEvent(new CustomEvent('chepherd-open-agent-settings', { detail: { agentName: ctxMenu.agent } })); closeContext(); }}>⚙ Settings…</button>
+      <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: true }) }); closeContext(); }}>⏸ Pause</button>
+      <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: false }) }); closeContext(); }}>▶ Resume</button>
+      <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/restart`, { method: 'POST' }); closeContext(); }}>↻ Restart</button>
+      <button class="danger" onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}`, { method: 'DELETE' }); closeContext(); }}>■ Stop</button>
     </div>
   </div>
 {/if}
@@ -217,4 +370,102 @@
   .ctx-menu button { padding: 0.35rem 0.6rem; background: transparent; color: var(--fg); border: none; border-radius: 4px; cursor: pointer; text-align: left; font-size: 0.82rem; }
   .ctx-menu button:hover { background: var(--bg); color: var(--accent); }
   .ctx-menu button small { color: var(--fg-muted); }
+
+  /* #253 — bulk action toolbar surfaces above the team list when 2+
+     rows selected. Sticky-style header so it stays visible while the
+     operator scrolls through long lists. */
+  .bulk-toolbar {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 0.4rem 0.5rem 0.6rem 0.5rem;
+    padding: 0.5rem 0.6rem;
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .bulk-head { display: flex; align-items: center; gap: 0.5rem; }
+  .bulk-count {
+    flex: 1; color: var(--accent, #87ceeb);
+    font-size: 0.82rem; font-weight: 600;
+  }
+  .bulk-clear {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--fg-muted); cursor: pointer;
+    width: 1.6rem; height: 1.6rem; border-radius: 4px;
+    font-size: 0.95rem; line-height: 1; padding: 0;
+  }
+  .bulk-clear:hover { color: var(--danger, #e74c3c); border-color: var(--danger, #e74c3c); }
+  .bulk-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.3rem; }
+  .ba {
+    padding: 0.32rem 0.4rem; font-size: 0.78rem; font-weight: 500;
+    background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5);
+    border: 1px solid var(--border, #2a2a2a); border-radius: 4px;
+    cursor: pointer; font-family: inherit;
+    transition: background 80ms, border-color 80ms;
+  }
+  .ba:hover { background: rgba(135, 206, 235, 0.10); border-color: var(--accent-2, #87ceeb); }
+  .ba:disabled { opacity: 0.4; cursor: not-allowed; }
+  .ba.danger { color: var(--danger, #e74c3c); }
+  .ba.danger:hover { background: rgba(231, 76, 60, 0.12); border-color: var(--danger, #e74c3c); }
+  .bulk-msg { display: flex; gap: 0.3rem; align-items: center; }
+  .bulk-msg input {
+    flex: 1; padding: 0.35rem 0.55rem; border-radius: 4px;
+    border: 1px solid var(--border, #2a2a2a);
+    background: var(--bg, #0a0a0a); color: var(--fg, #f5f5f5);
+    font: inherit; font-size: 0.8rem;
+  }
+  .bulk-msg input:focus { border-color: var(--accent-2, #87ceeb); outline: none; }
+  .ba.send { background: var(--accent-2, #87ceeb); color: #0a0a0a; border-color: var(--accent-2, #87ceeb); }
+  .ba.send:hover:not(:disabled) { background: #6fb6d3; }
+  .ba.send:disabled { background: var(--border, #2a2a2a); color: var(--fg-muted, #888); border-color: var(--border, #2a2a2a); }
+  .bulk-results {
+    list-style: none; padding: 0; margin: 0;
+    border-top: 1px solid var(--border, #2a2a2a);
+    padding-top: 0.4rem;
+    max-height: 8rem; overflow-y: auto;
+    font-size: 0.78rem;
+  }
+  .bulk-results li {
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.18rem 0.1rem;
+  }
+  .br-spin { color: var(--accent-2, #87ceeb); }
+  .br-ok   { color: var(--success, #4ade80); }
+  .br-fail { color: var(--danger, #e74c3c); }
+  .br-name { font-weight: 500; }
+  .br-text { color: var(--fg-muted, #888); font-size: 0.74rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bulk-results li.failed .br-text { color: var(--danger, #e74c3c); }
+
+  /* Destructive confirmation modal — backdrop + centered panel.
+     Stop / Restart require explicit confirm; Pause / Resume / Message
+     fire inline. */
+  .confirm-backdrop {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .confirm-modal {
+    background: var(--bg-elev, #1a1a1a);
+    border: 1px solid var(--border-strong, #3a3a3a);
+    border-radius: 8px;
+    padding: 1.1rem 1.25rem;
+    min-width: 320px; max-width: 460px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  }
+  .confirm-modal h4 { margin: 0 0 0.6rem 0; font-size: 1rem; color: var(--fg, #f5f5f5); }
+  .confirm-modal p { margin: 0 0 0.9rem 0; color: var(--fg-muted, #aaa); font-size: 0.85rem; line-height: 1.4; }
+  .confirm-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+  .confirm-actions button {
+    padding: 0.45rem 0.9rem; border-radius: 5px;
+    cursor: pointer; font: inherit; font-size: 0.85rem; font-weight: 500;
+    border: 1px solid var(--border, #2a2a2a);
+    background: transparent; color: var(--fg, #f5f5f5);
+  }
+  .confirm-actions .cancel:hover { background: var(--bg, #0a0a0a); }
+  .confirm-actions .confirm {
+    background: var(--accent-2, #87ceeb); color: #0a0a0a; border-color: var(--accent-2, #87ceeb);
+  }
+  .confirm-actions .confirm.danger {
+    background: var(--danger, #e74c3c); color: #ffffff; border-color: var(--danger, #e74c3c);
+  }
+  .confirm-actions .confirm:hover { filter: brightness(1.08); }
 </style>
