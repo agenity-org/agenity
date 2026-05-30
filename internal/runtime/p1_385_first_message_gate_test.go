@@ -42,7 +42,7 @@ func TestP1_385_StartupChromeWithoutCursor_DoesNotFireCompleter(t *testing.T) {
 		calls++
 	}
 
-	go pumpPTYToBroker(pub, src, task, completer)
+	go pumpPTYToBroker(pub, src, task, completer, nil)
 	time.Sleep(15 * time.Millisecond) // let pump subscribe
 
 	// Banner + permission warning chunks — no prompt cursor (❯) yet.
@@ -87,7 +87,7 @@ func TestP1_385_CursorThenSilence_FiresCompleter(t *testing.T) {
 		capturedResponse = response
 	}
 
-	go pumpPTYToBroker(pub, src, task, completer)
+	go pumpPTYToBroker(pub, src, task, completer, nil)
 	time.Sleep(15 * time.Millisecond)
 
 	// Phase 1: banner chunks WITHOUT cursor — gate must hold.
@@ -143,7 +143,7 @@ func TestP1_385_BannerOnlyChannelClose_StillFinalizes(t *testing.T) {
 		calls++
 	}
 
-	go pumpPTYToBroker(pub, src, task, completer)
+	go pumpPTYToBroker(pub, src, task, completer, nil)
 	time.Sleep(15 * time.Millisecond)
 	src.PushChunk([]byte("Welcome to Claude Code\n"))
 	time.Sleep(15 * time.Millisecond)
