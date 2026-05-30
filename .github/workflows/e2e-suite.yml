@@ -1,0 +1,93 @@
+name: e2e-suite
+# #428 P0 — comprehensive E2E test gate.
+#
+# This workflow runs the architect-specified T1..T10 test suite on
+# every PR and main push. Each test names its assertions (Tn.X1...);
+# a failure cites the specific chepherd contract that broke.
+#
+# T3 (real-claude A2A round-trip) skips by default because the
+# CHEPHERD_TEST_LIVE_CLAUDE env gate is intentionally NOT set in this
+# workflow — see issue #436 for the silence-finalize seam refinement
+# that re-enables it. The skip is loud (the test logs "DEFERRED →
+# #436"), not silent.
+#
+# 9 of 10 tests run + must PASS; the 10th (T3) SKIPs with a clear
+# reference. Adjusting branch-protection to require this workflow's
+# `e2e-suite` check makes the suite a hard merge gate.
+
+on:
+  push:
+    branches: [main, v0.9.2-build]
+  pull_request:
+    branches: [main, v0.9.2-build]
+
+jobs:
+  e2e-suite:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+
+      - name: Verify podman + slirp4netns available
+        # ubuntu-22.04 runners ship podman + slirp4netns. We log
+        # the versions so failure attribution is easy if the runner
+        # image ever drops them.
+        run: |
+          podman --version
+          slirp4netns --version || true
+          # The harness uses /tmp for state-dir; ensure it's writable
+          # (some runners use tmpfs quota that can surprise rootless
+          # podman; this is a safe no-op when /tmp is normal).
+          mkdir -p /tmp
+          test -w /tmp
+
+      - name: Build chepherd-agent:latest image
+        # The #428 harness gates each test on the presence of this
+        # image (see chepherdAgentImageAvailable in
+        # internal/e2e/p0_428_t1_t2_peer_discovery_test.go). Without
+        # this step, every test would skip + the CI gate would be a
+        # no-op masquerading as PASS — that's exactly the rubbish
+        # the operator forbade in #428's "no rubbish tests!!!"
+        # mandate. Build deterministic from the same SHA the test
+        # runs against.
+        run: make agent-image
+
+      - name: Run #428 T-suite
+        # -run "TestT" matches T1..T10 verbatim. -timeout 300s gives
+        # headroom for the 3-spawn sequential setup in T7 (~15s) +
+        # the bounce-restart in T6. The -race flag is intentionally
+        # omitted: the harness's chepherd subprocess is the unit
+        # under test; -race adds noise without catching real races
+        # (the test boundary is the HTTP/MCP wire).
+        run: |
+          go test -run "TestT" -v -timeout=300s ./internal/e2e/...
+
+      - name: Suite summary
+        # Print the suite summary even on test failure so the CI
+        # log is self-explanatory without scrolling through the
+        # verbose output. `if: always()` so the step runs whether
+        # the test job succeeded or failed.
+        if: always()
+        run: |
+          echo "::group::T-suite contract (#428)"
+          echo "T1 — peer-discovery on spawn"
+          echo "T2 — skills materialize as subdirs"
+          echo "T3 — SKIPS by default (live-claude → #436)"
+          echo "T4 — get_peer_card MCP contract"
+          echo "T5 — peer_status (HTTP + MCP surface parity)"
+          echo "T6 — skills persist across chepherd bounce"
+          echo "T7 — Stop → regen chain"
+          echo "T8 — role-change → team canon"
+          echo "T9 — cross-team isolation"
+          echo "T10 — alert_human → inbox"
+          echo "::endgroup::"
