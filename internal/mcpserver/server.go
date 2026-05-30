@@ -266,6 +266,13 @@ func (s *Server) toolList() []map[string]any {
 				"lines": map[string]any{"type": "integer"},
 			},
 		}},
+		{"name": "chepherd.get_peer_card", "description": "Fetch a sibling agent's per-session AgentCard — role, capabilities, skills, current state, scorecard. Use this to discover what a peer can do BEFORE engaging them. The card complements chepherd.list_sessions (which only lists names+roles). Args: name (the peer's @-address).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+			},
+		}},
 		{"name": "chepherd.send_to_session", "description": "Write a message directly into a session's PTY stdin. Used by the Scrum Master to advise Adam (prefer @target relay for normal conversation). Args: name, body.", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"name", "body"},
@@ -498,6 +505,26 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			return resp
 		}
 		resp.Result = map[string]any{"ok": true}
+	case "get_peer_card":
+		// #404 P0.1 — return a sibling's PeerAgentCard. Builds from the
+		// live runtime registry; same shape as the HTTP endpoint
+		// /api/v1/sessions/<name>/agent-card so the two sources of
+		// truth agree.
+		var a struct{ Name string }
+		if err := json.Unmarshal(args, &a); err != nil {
+			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
+			return resp
+		}
+		if a.Name == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "name is required"}
+			return resp
+		}
+		_, info := s.rt.Get(a.Name)
+		if info == nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "no such session: " + a.Name}
+			return resp
+		}
+		resp.Result = runtime.BuildPeerAgentCard(info)
 	case "read_pane":
 		var a struct {
 			Name  string
