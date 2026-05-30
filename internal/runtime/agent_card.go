@@ -81,6 +81,12 @@ func stateLabel(info *SessionInfo) string {
 // strings advertised by a role. Matches the role-guidance from
 // agent_briefing.go so peer agents reading the card know what to
 // expect when interacting.
+//
+// #404 P0.1 follow-up — extended the role coverage so reviewer,
+// scrum-master, product-owner, security, devops don't hit the
+// general-purpose fallback (architect's #407 walk caught this).
+// Operators add custom roles via the spawn wizard's free-text role
+// field; the default arm still handles those gracefully.
 func capabilitiesForRole(role string) []string {
 	switch strings.ToLower(role) {
 	case "shepherd":
@@ -101,11 +107,41 @@ func capabilitiesForRole(role string) []string {
 			"test-execution",
 			"pr-shipping",
 		}
-	case "qa":
+	case "qa", "tester":
 		return []string{
 			"surface-walk",
 			"defect-filing",
 			"verdict-retraction",
+		}
+	case "reviewer", "reviewer-discipline", "reviewer-architect", "reviewer-economics":
+		return []string{
+			"code-review",
+			"gap-analysis",
+			"verdict-render",
+		}
+	case "scrum-master", "scrummaster":
+		return []string{
+			"team-cadence",
+			"verdict-attribution",
+			"impediment-removal",
+		}
+	case "product-owner", "po":
+		return []string{
+			"backlog-prioritization",
+			"acceptance-criteria",
+			"stakeholder-translation",
+		}
+	case "security", "security-reviewer":
+		return []string{
+			"threat-modeling",
+			"vuln-triage",
+			"secret-hygiene",
+		}
+	case "devops", "sre":
+		return []string{
+			"deploy-pipeline",
+			"observability",
+			"incident-response",
 		}
 	default:
 		return []string{"general-purpose"}

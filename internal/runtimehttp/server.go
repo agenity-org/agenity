@@ -1322,6 +1322,13 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 		// instance-level /.well-known/agent-card.json (a2a discovery)
 		// but scoped to ONE session inside the team.
 		writeJSON(w, http.StatusOK, runtime.BuildPeerAgentCard(info))
+	case sub == "peer-status" && r.Method == http.MethodGet:
+		// #404 P0.2 — live activity status. Pulls runtime.sessionActivity
+		// counters (total bytes, 5-minute window, idle seconds) + a
+		// ring-buffer tail excerpt so peer agents answer "what is X
+		// doing right now" without polling each other. Companion to
+		// /agent-card (#404 P0.1, capabilities surface).
+		writeJSON(w, http.StatusOK, s.rt.BuildPeerStatus(name))
 	case sub == "" && r.Method == http.MethodDelete:
 		_ = s.rt.Stop(name)
 		// #377 P0 TRIGGER layer: also delete the persistence row so the

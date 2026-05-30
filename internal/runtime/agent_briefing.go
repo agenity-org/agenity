@@ -115,6 +115,7 @@ func renderAgentClaudeMD(spec SpawnSpec, peers []PeerBrief) string {
 	fmt.Fprintf(&b, "## MCP tools you have\n\n")
 	fmt.Fprintf(&b, "- `chepherd.list_sessions` — enumerate current peers\n")
 	fmt.Fprintf(&b, "- `chepherd.get_peer_card` — fetch a peer's role, capabilities, skills, current state. Use BEFORE engaging a peer (#404 P0.1)\n")
+	fmt.Fprintf(&b, "- `chepherd.peer_status` — fetch a peer's LIVE activity (last_activity_at, idle_seconds, recent PTY excerpt). Use to answer 'what is X doing right now' (#404 P0.2)\n")
 	fmt.Fprintf(&b, "- `chepherd.send_to_session` — message a peer\n")
 	fmt.Fprintf(&b, "- `chepherd.alert_human` — escalate to operator\n")
 	fmt.Fprintf(&b, "- `chepherd.spawn` — spawn a new agent (use sparingly; every peer is real LLM cost)\n")
