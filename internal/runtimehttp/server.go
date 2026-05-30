@@ -1202,8 +1202,26 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 		// resume) from never-existed (404, definitive). The dashboard
 		// uses the distinction to stop the 5s WebSocket attach loop on
 		// stale-cache sessions + transition to a Resume UI.
+		//
+		// #377 P0: DELETE on a persisted-but-not-live row must clean
+		// the store (idempotent garbage-collection), not return 410.
+		// Pre-fix this branch short-circuited for ALL methods → the
+		// DELETE handler at the switch below was unreachable for
+		// orphan rows → operator's dashboard X button returned 410
+		// and the row stayed forever. Operator accumulated 58 orphan
+		// rows from chepherd restarts. Method-gate the cleanup:
+		// DELETE → remove row + 200; everything else → 410.
 		if s.SessionStore != nil {
 			if state, err := s.SessionStore.Get(r.Context(), name); err == nil && len(state) > 0 {
+				if sub == "" && r.Method == http.MethodDelete {
+					_ = s.SessionStore.Delete(r.Context(), name)
+					writeJSON(w, http.StatusOK, map[string]any{
+						"ok":      true,
+						"cleaned": true,
+						"wasLive": false,
+					})
+					return
+				}
 				writeJSON(w, http.StatusGone, map[string]any{
 					"error":     "session persisted but not running",
 					"canResume": true,
@@ -1223,7 +1241,16 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, info)
 	case sub == "" && r.Method == http.MethodDelete:
 		_ = s.rt.Stop(name)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		// #377 P0 TRIGGER layer: also delete the persistence row so the
+		// next chepherd restart doesn't auto-resume a stopped container
+		// and re-create the orphan. Without this, every live DELETE
+		// leaves a future orphan; that's how the operator accumulated
+		// 58 of them. The Get-then-Delete branch above handles existing
+		// orphans (CONTAINMENT); this prevents new ones (TRIGGER).
+		if s.SessionStore != nil {
+			_ = s.SessionStore.Delete(r.Context(), name)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleaned": true, "wasLive": true})
 	case sub == "pause" && r.Method == http.MethodPost:
 		var req struct{ Paused bool }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
