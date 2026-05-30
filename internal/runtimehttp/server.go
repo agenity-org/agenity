@@ -253,12 +253,13 @@ func (s *Server) Handler() http.Handler {
 		apiHandler.ServeHTTP(w, r2)
 	}))
 
-	// #223 — one-release-window 301 redirect for bookmark holders who
-	// still type /v0.9.1/. The dashboard route moved to /v0.9.2/ with
-	// the v0.9.2 ship; this redirect ships in v0.9.2 and gets removed
-	// in v0.9.3 (per architect on the #223 thread).
-	mux.HandleFunc("/v0.9.1/", func(w http.ResponseWriter, r *http.Request) {
-		target := "/v0.9.2/" + strings.TrimPrefix(r.URL.Path, "/v0.9.1/")
+	// #297 — one-release-window 301 redirect for bookmark holders who
+	// still type /v0.9.2/. The dashboard route moved to /v0.9.3/ with
+	// the v0.9.3 ship; this redirect ships in v0.9.3 and gets removed
+	// in v0.9.4. The /v0.9.1/ redirect from #223 is dropped per the
+	// one-release-window rule (two versions back = bookmark forfeit).
+	mux.HandleFunc("/v0.9.2/", func(w http.ResponseWriter, r *http.Request) {
+		target := "/v0.9.3/" + strings.TrimPrefix(r.URL.Path, "/v0.9.2/")
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
 		}
