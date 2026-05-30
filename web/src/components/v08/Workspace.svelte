@@ -209,6 +209,16 @@
 
   // --- key hijack mode (capture vs passthrough) ---
   let captureMode = $state(true);     // default ON per operator decision
+  // #397 P0 — visible state + Ctrl+B command palette + ? help overlay.
+  // Architect: operator couldn't discover that Ctrl+Shift+Esc was the
+  // capture-mode toggle. Adding three discovery aids:
+  //   1. Topbar indicator showing capture state (rendered below)
+  //   2. Ctrl+B opens a command palette listing every shortcut + action
+  //   3. ? key opens a cheatsheet overlay (passthrough — works without
+  //      capture mode)
+  let showCmdPalette = $state(false);
+  let showShortcutHelp = $state(false);
+  let cmdPaletteFilter = $state('');
   $effect(() => {
     function onKey(e) {
       // Release toggle: Ctrl+Shift+Esc — always works regardless of mode.
@@ -216,6 +226,41 @@
         e.preventDefault();
         captureMode = !captureMode;
         return;
+      }
+      // #397 P0 — Ctrl+B (chepherd command prefix) ALWAYS captures,
+      // even when captureMode is off. The prefix is the operator's
+      // "I want to talk to chepherd" anchor — must be reliable.
+      // Mirrors tmux's prefix-key discoverability pattern.
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B') && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        showCmdPalette = !showCmdPalette;
+        cmdPaletteFilter = '';
+        showShortcutHelp = false;
+        return;
+      }
+      // #397 P0 — ? key (without modifiers, when not in a text input)
+      // opens the keyboard cheatsheet overlay. Passthrough behavior
+      // so it works even when captureMode is off — discovery aid.
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const t = e.target;
+        const isText = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable ||
+                            (t.classList && (t.classList.contains('xterm-helper-textarea') || t.closest?.('.xterm'))));
+        if (!isText) {
+          e.preventDefault();
+          showShortcutHelp = !showShortcutHelp;
+          showCmdPalette = false;
+          return;
+        }
+      }
+      // Escape closes the overlays.
+      if (e.key === 'Escape' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+        if (showCmdPalette || showShortcutHelp) {
+          e.preventDefault();
+          showCmdPalette = false;
+          showShortcutHelp = false;
+          return;
+        }
       }
       if (!captureMode) return;
       // Ctrl+Alt+* is the universal-fallback flavor that browsers don't
@@ -608,6 +653,18 @@
         {/if}
       </div>
     {/if}
+    <!-- #397 P0 — keyboard-shortcuts state indicator + command-palette
+         opener. Hover for full tooltip; click to open palette. -->
+    <button class="icon-btn capture-state"
+            class:on={captureMode} class:off={!captureMode}
+            on:click={() => { showCmdPalette = !showCmdPalette; cmdPaletteFilter = ''; }}
+            title={captureMode
+              ? 'Shortcuts ON · Ctrl+Shift+Esc to disable · Ctrl+B for command palette · ? for cheatsheet'
+              : 'Shortcuts OFF · Ctrl+Shift+Esc to enable · Ctrl+B still opens palette · ? still opens cheatsheet'}
+            aria-label="keyboard shortcuts state">
+      ⌨{captureMode ? '' : '✕'}
+    </button>
+    <button class="icon-btn" on:click={() => { showShortcutHelp = !showShortcutHelp; }} title="Keyboard shortcuts cheatsheet (press ?)" aria-label="Keyboard cheatsheet">?</button>
     <button class="icon-btn" on:click={toggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
     <button class="icon-btn" on:click={dispatchLogout} title="Sign out — clear stored token + return to login screen" aria-label="Sign out">⎋</button>
     <button class="save-layout-btn" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">
@@ -669,6 +726,79 @@
         <button class="secondary" on:click={() => (showSaveAs = false)}>Cancel</button>
         <button class="primary" on:click={saveAs} disabled={!saveAsName.trim()}>Save</button>
       </footer>
+    </div>
+  </div>
+{/if}
+
+<!-- #397 P0 — command palette (Ctrl+B). Discoverable list of every
+     chepherd action. Filter via the input. Click an item to run. -->
+{#if showCmdPalette}
+  <div class="overlay" on:click={() => { showCmdPalette = false; }}>
+    <div class="palette" on:click|stopPropagation>
+      <input class="palette-input" placeholder="Type to filter…  (Ctrl+B closes · Esc closes)"
+             bind:value={cmdPaletteFilter}
+             autofocus
+             on:keydown={(e) => { if (e.key === 'Enter') { /* future: run first match */ } }} />
+      <div class="palette-list">
+        {#each [
+          { id: 'cmd-new-tab', label: 'New tab in focused pane', shortcut: 'Ctrl+Alt+T', action: () => focusedPaneID && window.dispatchEvent(new CustomEvent('chepherd-pane-new-tab', { detail: { paneID: focusedPaneID } })) },
+          { id: 'cmd-cycle-tab', label: 'Cycle to next tab', shortcut: 'Ctrl+Alt+Tab · Ctrl+`', action: () => focusedPaneID && window.dispatchEvent(new CustomEvent('chepherd-pane-cycle-tab', { detail: { paneID: focusedPaneID, direction: +1 } })) },
+          { id: 'cmd-cycle-tab-prev', label: 'Cycle to previous tab', shortcut: 'Ctrl+Shift+Alt+Tab', action: () => focusedPaneID && window.dispatchEvent(new CustomEvent('chepherd-pane-cycle-tab', { detail: { paneID: focusedPaneID, direction: -1 } })) },
+          { id: 'cmd-pane-left', label: 'Focus pane to the left', shortcut: 'Ctrl+←', action: () => movePaneFocus('left') },
+          { id: 'cmd-pane-right', label: 'Focus pane to the right', shortcut: 'Ctrl+→', action: () => movePaneFocus('right') },
+          { id: 'cmd-pane-up', label: 'Focus pane above', shortcut: 'Ctrl+↑', action: () => movePaneFocus('up') },
+          { id: 'cmd-pane-down', label: 'Focus pane below', shortcut: 'Ctrl+↓', action: () => movePaneFocus('down') },
+          { id: 'cmd-help', label: 'Show keyboard cheatsheet', shortcut: '?', action: () => { showShortcutHelp = true; showCmdPalette = false; } },
+          { id: 'cmd-toggle-capture', label: captureMode ? 'Disable shortcuts (passthrough mode)' : 'Enable shortcuts (capture mode)', shortcut: 'Ctrl+Shift+Esc', action: () => { captureMode = !captureMode; } },
+          { id: 'cmd-toggle-theme', label: 'Toggle theme', shortcut: '', action: () => toggleTheme() },
+          { id: 'cmd-logout', label: 'Sign out', shortcut: '', action: () => dispatchLogout() },
+        ].filter(c => !cmdPaletteFilter || c.label.toLowerCase().includes(cmdPaletteFilter.toLowerCase())) as cmd (cmd.id)}
+          <button class="palette-item" on:click={() => { cmd.action(); if (cmd.id !== 'cmd-help') showCmdPalette = false; }}>
+            <span class="pl-label">{cmd.label}</span>
+            {#if cmd.shortcut}<span class="pl-key">{cmd.shortcut}</span>{/if}
+          </button>
+        {/each}
+      </div>
+      <div class="palette-footer">Esc · Ctrl+B to close</div>
+    </div>
+  </div>
+{/if}
+
+<!-- #397 P0 — keyboard cheatsheet overlay (?). Read-only reference,
+     no actions. Plain Ctrl+T / Ctrl+Tab caveat captured per existing
+     onKey comment. -->
+{#if showShortcutHelp}
+  <div class="overlay" on:click={() => { showShortcutHelp = false; }}>
+    <div class="cheatsheet" on:click|stopPropagation>
+      <header class="cs-head">
+        <h2>Keyboard shortcuts</h2>
+        <button class="icon-btn" on:click={() => { showShortcutHelp = false; }} title="Close (Esc)">✕</button>
+      </header>
+      <table class="cs-table">
+        <tbody>
+          <tr><td class="cs-k">Ctrl+B</td><td>Open command palette</td></tr>
+          <tr><td class="cs-k">?</td><td>Show / hide this cheatsheet</td></tr>
+          <tr><td class="cs-k">Ctrl+Shift+Esc</td><td>Toggle shortcut capture mode (on/off)</td></tr>
+          <tr><td class="cs-section" colspan="2">Tabs</td></tr>
+          <tr><td class="cs-k">Ctrl+Alt+Tab</td><td>Cycle to next tab in focused pane</td></tr>
+          <tr><td class="cs-k">Ctrl+Shift+Alt+Tab</td><td>Cycle to previous tab</td></tr>
+          <tr><td class="cs-k">Ctrl+Alt+T</td><td>New tab in focused pane</td></tr>
+          <tr><td class="cs-k">Ctrl+`</td><td>Cycle tabs (no Alt — plain browser friendly)</td></tr>
+          <tr><td class="cs-section" colspan="2">Pane navigation</td></tr>
+          <tr><td class="cs-k">Ctrl+←/→/↑/↓</td><td>Focus pane in that direction</td></tr>
+          <tr><td class="cs-section" colspan="2">Notes</td></tr>
+        </tbody>
+      </table>
+      <p class="cs-note">
+        Plain <kbd>Ctrl+T</kbd> and <kbd>Ctrl+Tab</kbd> are intentionally not bound —
+        browsers capture them at the OS layer. Install chepherd as a PWA
+        (Chrome menu → "Install chepherd…") for those to work too.
+      </p>
+      <p class="cs-note">
+        Capture is <strong>{captureMode ? 'ON' : 'OFF'}</strong>. The ⌨ topbar icon
+        shows live state. Toggle via <kbd>Ctrl+Shift+Esc</kbd>.
+      </p>
+      <footer class="cs-foot"><button class="primary" on:click={() => { showShortcutHelp = false; }}>Got it (Esc)</button></footer>
     </div>
   </div>
 {/if}
@@ -773,6 +903,32 @@
   button.secondary { background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.42rem 0.85rem; cursor: pointer; font-size: 0.88rem; }
   button.icon-btn { background: transparent; color: var(--fg-muted); border: 1px solid var(--border-strong); border-radius: 6px; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   button.icon-btn.small { width: 28px; height: 24px; font-size: 0.7rem; padding: 0; }
+  /* #397 P0 — capture-state indicator. ON: subtle accent border;
+     OFF: muted + the ✕ glyph signals "shortcuts not capturing". */
+  button.icon-btn.capture-state.on { color: var(--accent); border-color: var(--accent); }
+  button.icon-btn.capture-state.off { color: var(--fg-faint); border-style: dashed; }
+  /* #397 P0 — command palette + cheatsheet overlay. */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: flex-start; justify-content: center; z-index: 1100; padding-top: 8vh; }
+  .palette { background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 8px; width: min(640px, 90vw); display: flex; flex-direction: column; max-height: 70vh; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+  .palette-input { background: transparent; color: var(--fg); border: none; border-bottom: 1px solid var(--border); padding: 0.85rem 1rem; font-size: 1.0rem; outline: none; font-family: inherit; }
+  .palette-input:focus { border-bottom-color: var(--accent); }
+  .palette-list { overflow-y: auto; padding: 0.3rem; display: flex; flex-direction: column; gap: 0.05rem; }
+  .palette-item { background: transparent; color: var(--fg); border: 1px solid transparent; border-radius: 4px; padding: 0.5rem 0.7rem; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 1rem; font-size: 0.88rem; text-align: left; }
+  .palette-item:hover { background: var(--bg); border-color: var(--border); }
+  .pl-label { flex: 1; }
+  .pl-key { color: var(--fg-faint); font-family: ui-monospace, monospace; font-size: 0.78rem; }
+  .palette-footer { padding: 0.4rem 1rem; border-top: 1px solid var(--border); font-size: 0.72rem; color: var(--fg-faint); text-align: right; }
+  .cheatsheet { background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 8px; width: min(560px, 90vw); padding: 1rem 1.2rem 0.8rem; max-height: 80vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+  .cs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
+  .cs-head h2 { font-size: 1.05rem; margin: 0; color: var(--fg); }
+  .cs-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .cs-table tr { border-bottom: 1px solid var(--border); }
+  .cs-k { font-family: ui-monospace, monospace; color: var(--accent); padding: 0.4rem 0.6rem 0.4rem 0; white-space: nowrap; }
+  .cs-table td:last-child { padding: 0.4rem 0; color: var(--fg-muted); }
+  .cs-section { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); padding: 0.5rem 0 0.2rem; border-top: 1px solid var(--border); border-bottom: none; }
+  .cs-note { font-size: 0.78rem; color: var(--fg-muted); margin: 0.6rem 0 0; }
+  .cs-note kbd { font-family: ui-monospace, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 0.05rem 0.3rem; font-size: 0.78rem; }
+  .cs-foot { display: flex; justify-content: flex-end; margin-top: 0.8rem; }
   .font-knob { display: flex; align-items: center; gap: 0.15rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.14rem; }
   .font-num { font-size: 0.7rem; color: var(--fg-muted); padding: 0 0.3rem; min-width: 28px; text-align: center; font-family: ui-monospace, monospace; }
   .agent-menu { position: relative; }
