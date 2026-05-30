@@ -820,6 +820,16 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime.Spawn: agent secrets: %w", err)
 	}
+	// #395 P0 + #396 P0 — write the chepherd briefing (CLAUDE.md +
+	// skills/) into the per-agent home dir BEFORE spawner.Spawn. The
+	// container's bind-mount of agentHomeDir → /home/agent makes
+	// these visible to claude-code on session start. Without this,
+	// spawned agents are "vanilla" claude-code — they don't know
+	// they're in a chepherd team, can't message peers, answer "who
+	// are your siblings" with claude-code's local subagent catalog
+	// (Explore, Plan, statusline-setup) instead of the actual peer
+	// list. Best-effort: failures log + spawn continues.
+	materializeAgentBriefing(spec, agentHomeDir, r.snapshotPeersForBriefing(spec.Team, spec.Name))
 	// #172 — mint the Agent UUID BEFORE the spawner runs so its PVC
 	// handle can be threaded into the container env. The container
 	// runtime sees CHEPHERD_PVC_HANDLE and provisions /workspace from
@@ -1142,6 +1152,34 @@ func (r *Runtime) MarkAllInboxRead() int {
 
 // List returns a snapshot of all session metadata, augmented with the
 // activity counters from each session's sniffer.
+// snapshotPeersForBriefing returns the current peer list (filtered to
+// the given team, excluding self) used by materializeAgentBriefing
+// to populate the per-agent CLAUDE.md at spawn time. Best-effort:
+// peers spawned AFTER this snapshot won't appear in the static list;
+// the agent is expected to use chepherd.list_sessions for live data
+// (called out in the CLAUDE.md text). #395.
+func (r *Runtime) snapshotPeersForBriefing(team, selfName string) []PeerBrief {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]PeerBrief, 0, len(r.info))
+	for _, info := range r.info {
+		if info == nil || info.Name == selfName {
+			continue
+		}
+		// Filter to same team when team set; otherwise include all peers.
+		if team != "" && info.Team != "" && info.Team != team {
+			continue
+		}
+		out = append(out, PeerBrief{
+			Name:      info.Name,
+			Role:      string(info.Role),
+			AgentSlug: info.AgentSlug,
+			Team:      info.Team,
+		})
+	}
+	return out
+}
+
 func (r *Runtime) List() []*SessionInfo {
 	r.mu.Lock()
 	type pair struct {
