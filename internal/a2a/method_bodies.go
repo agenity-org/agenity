@@ -58,16 +58,16 @@ func (m *MethodBodies) Register(r *Router) error {
 		name string
 		h    methodHandler
 	}{
-		{"GetTask", m.handleGetTask},
-		{"ListTasks", m.handleListTasks},
-		{"CancelTask", m.handleCancelTask},
-		{"ResubscribeTask", m.handleResubscribeTask},
-		{"SendStreamingMessage", m.handleSendStreamingMessage},
-		{"SetTaskPushNotificationConfig", m.handleSetTaskPushNotificationConfig},
-		{"GetTaskPushNotificationConfig", m.handleGetTaskPushNotificationConfig},
-		{"ListTaskPushNotificationConfigs", m.handleListTaskPushNotificationConfigs},
-		{"DeleteTaskPushNotificationConfig", m.handleDeleteTaskPushNotificationConfig},
-		{"GetAuthenticatedExtendedCard", m.handleGetAuthenticatedExtendedCard},
+		{"tasks/get", m.handleGetTask},
+		{"tasks/list", m.handleListTasks},
+		{"tasks/cancel", m.handleCancelTask},
+		{"tasks/resubscribe", m.handleResubscribeTask},
+		{"message/stream", m.handleSendStreamingMessage},
+		{"tasks/pushNotificationConfig/set", m.handleSetTaskPushNotificationConfig},
+		{"tasks/pushNotificationConfig/get", m.handleGetTaskPushNotificationConfig},
+		{"tasks/pushNotificationConfig/list", m.handleListTaskPushNotificationConfigs},
+		{"tasks/pushNotificationConfig/delete", m.handleDeleteTaskPushNotificationConfig},
+		{"agent/getAuthenticatedExtendedCard", m.handleGetAuthenticatedExtendedCard},
 	}
 	for _, reg := range regs {
 		if err := r.Register(reg.name, reg.h); err != nil {
@@ -258,7 +258,7 @@ func (m *MethodBodies) handleSendStreamingMessage(req JSONRPCRequest) JSONRPCRes
 		ID:        taskID,
 		RunnerSID: m.RunnerSID,
 		State:     string(TaskStateSubmitted),
-		Method:    "SendStreamingMessage",
+		Method:    "message/stream",
 		InputBlob: inputBlob,
 		CreatedAt: now,
 		UpdatedAt: now,

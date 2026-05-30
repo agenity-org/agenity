@@ -8,13 +8,17 @@ import (
 	"net/http"
 )
 
-// JSON-RPC 2.0 envelope per the A2A spec. v0.9.2 scaffold registers
-// all 11 methods; bodies arrive in S5-S7.
+// JSON-RPC 2.0 envelope per the A2A v1.0 spec. v0.9.2 scaffold
+// registers all 11 methods; bodies arrive in S5-S7.
 //
-// PascalCase method names match the A2A spec exactly (NOT the legacy
-// snake_case from pre-v0.9.2 internal MCP tools, which retire in S2).
+// Method names follow the A2A v1.0 wire shape (slash + camelCase):
+// "message/send", "tasks/get", "tasks/pushNotificationConfig/set",
+// "agent/getAuthenticatedExtendedCard", etc. The pre-#291 PascalCase
+// names ("SendMessage", "GetTask", ...) were a scaffold convention
+// from #208 that diverged from the spec and broke real-world interop
+// with Google's A2A SDK + spec-compliant peers.
 //
-// Refs #208.
+// Refs #208 #291.
 type JSONRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"` // always "2.0"
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -59,9 +63,10 @@ type Router struct {
 // stub handlers that return JSON-RPC error code -32603 with body
 // "scaffold: implementation pending in S5-S7 sub-branches".
 //
-// Method names use PascalCase per the A2A spec (NOT snake_case).
+// Method names use A2A v1.0 wire shape (slash + camelCase); see
+// the package-level JSONRPCRequest doc for the migration history.
 //
-// Refs #208.
+// Refs #208 #291.
 func NewRouter() *Router {
 	r := &Router{handlers: map[string]methodHandler{}}
 	for _, name := range A2AMethodNames() {
@@ -91,16 +96,16 @@ func (r *Router) Register(method string, h methodHandler) error {
 	return nil
 }
 
-// WireDeliverer binds the SendMessage method to a Deliverer.
+// WireDeliverer binds the "message/send" method to a Deliverer.
 // Decodes A2A SendMessageParams + invokes Deliverer.Deliver +
 // returns the resulting Task wrapped in a SendMessageResult.
 //
-// After this call the SendMessage handler is no longer a stub. Other
-// 10 methods stay scaffold until their own wire-up.
+// After this call the "message/send" handler is no longer a stub.
+// Other 10 methods stay scaffold until their own wire-up.
 //
-// Refs #208.
+// Refs #208 #291.
 func (r *Router) WireDeliverer(deliverer Deliverer) error {
-	return r.Register("SendMessage", makeSendMessageHandler(deliverer))
+	return r.Register("message/send", makeSendMessageHandler(deliverer))
 }
 
 func makeSendMessageHandler(deliverer Deliverer) methodHandler {
@@ -173,20 +178,22 @@ func writeError(w http.ResponseWriter, id json.RawMessage, code int, message str
 	})
 }
 
-// A2AMethodNames returns the canonical 11 A2A method names in
-// PascalCase per the A2A spec.
+// A2AMethodNames returns the canonical 11 A2A method names in their
+// v1.0 spec wire shape (slash + camelCase). Pre-#291 these were
+// PascalCase, which broke real-world interop with Google's A2A SDK +
+// spec-compliant peers — see #291 for the migration history.
 func A2AMethodNames() []string {
 	return []string{
-		"SendMessage",
-		"SendStreamingMessage",
-		"GetTask",
-		"ListTasks",
-		"CancelTask",
-		"ResubscribeTask",
-		"SetTaskPushNotificationConfig",
-		"GetTaskPushNotificationConfig",
-		"ListTaskPushNotificationConfigs",
-		"DeleteTaskPushNotificationConfig",
-		"GetAuthenticatedExtendedCard",
+		"message/send",
+		"message/stream",
+		"tasks/get",
+		"tasks/list",
+		"tasks/cancel",
+		"tasks/resubscribe",
+		"tasks/pushNotificationConfig/set",
+		"tasks/pushNotificationConfig/get",
+		"tasks/pushNotificationConfig/list",
+		"tasks/pushNotificationConfig/delete",
+		"agent/getAuthenticatedExtendedCard",
 	}
 }

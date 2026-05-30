@@ -442,7 +442,7 @@ func TestV092Walk_ShepherdPTYAliveAtT30s(t *testing.T) {
 func assertSendMessageWorking(t *testing.T, httpAddr, ctxID, label string) {
 	t.Helper()
 	body := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":"e2e-%s","method":"SendMessage","params":{"message":{"role":"user","kind":"message","contextId":%q,"parts":[{"kind":"text","text":"e2e theater-proof"}]}}}`,
+		`{"jsonrpc":"2.0","id":"e2e-%s","method":"message/send","params":{"message":{"role":"user","kind":"message","contextId":%q,"parts":[{"kind":"text","text":"e2e theater-proof"}]}}}`,
 		label, ctxID,
 	)
 	req, err := http.NewRequest(

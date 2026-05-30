@@ -28,7 +28,7 @@ func TestEventRepository_AppendList(t *testing.T) {
 	seed := []persistence.Event{
 		{ID: "e1", Kind: "spawn", Actor: "operator", Timestamp: base},
 		{ID: "e2", Kind: "a2a_call", Actor: "agent-X", Timestamp: base.Add(time.Minute),
-			A2AMethod: "SendMessage", CallerOrg: "org-Y", CallerSID: "sid-c"},
+			A2AMethod: "message/send", CallerOrg: "org-Y", CallerSID: "sid-c"},
 		{ID: "e3", Kind: "spawn", Actor: "operator", Timestamp: base.Add(2 * time.Minute)},
 	}
 	for _, e := range seed {
@@ -57,7 +57,7 @@ func TestEventRepository_AppendList(t *testing.T) {
 	}
 
 	// A2A fields round-trip correctly on the second event.
-	if events[1].A2AMethod != "SendMessage" || events[1].CallerOrg != "org-Y" || events[1].CallerSID != "sid-c" {
+	if events[1].A2AMethod != "message/send" || events[1].CallerOrg != "org-Y" || events[1].CallerSID != "sid-c" {
 		t.Errorf("a2a fields lost: %+v", events[1])
 	}
 

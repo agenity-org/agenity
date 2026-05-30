@@ -145,7 +145,7 @@ func TestV092Walk_EndToEnd(t *testing.T) {
 	sendBody, _ := json.Marshal(a2a.JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"e2e-1"`),
-		Method:  "SendMessage",
+		Method:  "message/send",
 		Params: jsonRawT(t, a2a.SendMessageParams{Message: a2a.Message{
 			Role:      "user",
 			Kind:      "message",

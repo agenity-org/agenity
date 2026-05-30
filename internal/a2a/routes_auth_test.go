@@ -40,7 +40,7 @@ func TestAuthMiddleware_MissingAuthorization(t *testing.T) {
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/jsonrpc", "application/json",
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"GetTask"}`))
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tasks/get"}`))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestAuthMiddleware_BadToken(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/jsonrpc",
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"GetTask"}`))
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tasks/get"}`))
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -85,7 +85,7 @@ func TestAuthMiddleware_HappyPath(t *testing.T) {
 	r := NewRouter()
 	// Replace the GetTask stub with a handler that confirms it ran.
 	called := false
-	_ = r.Register("GetTask", func(req JSONRPCRequest) JSONRPCResponse {
+	_ = r.Register("tasks/get", func(req JSONRPCRequest) JSONRPCResponse {
 		called = true
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]string{"ok": "yes"}}
 	})
@@ -95,7 +95,7 @@ func TestAuthMiddleware_HappyPath(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/jsonrpc",
-		bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"GetTask"}`)))
+		bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tasks/get"}`)))
 	req.Header.Set("Authorization", "Bearer good")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -115,7 +115,7 @@ func TestAuthMiddleware_NilValidatorIsDevPassthrough(t *testing.T) {
 	mux := http.NewServeMux()
 	r := NewRouter()
 	called := false
-	_ = r.Register("GetTask", func(req JSONRPCRequest) JSONRPCResponse {
+	_ = r.Register("tasks/get", func(req JSONRPCRequest) JSONRPCResponse {
 		called = true
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]string{"ok": "yes"}}
 	})
@@ -126,7 +126,7 @@ func TestAuthMiddleware_NilValidatorIsDevPassthrough(t *testing.T) {
 
 	// No Authorization header — should pass.
 	resp, err := http.Post(srv.URL+"/jsonrpc", "application/json",
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"GetTask"}`))
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tasks/get"}`))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
