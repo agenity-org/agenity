@@ -72,9 +72,9 @@
   let oauthPollHandle = null;
 
   const SHAPES = [
-    { id: 'solo',            icon: '🧑',  title: 'Solo',             blurb: 'One agent, no shepherd. Quick exploration.' },
+    { id: 'solo',            icon: '🧑',  title: 'Solo',             blurb: 'One agent, no Scrum Master. Quick exploration.' },
     { id: 'solo-supervised', icon: '👤',  title: 'Solo + Chepherd',  blurb: 'One worker + one chepherd watching. The daily default.' },
-    { id: 'pair',            icon: '👥',  title: 'Pair',             blurb: 'Implementer + reviewer + shepherd. Code review built in.' },
+    { id: 'pair',            icon: '👥',  title: 'Pair',             blurb: 'Implementer + reviewer + Scrum Master. Code review built in.' },
     { id: 'council',         icon: '🏛',  title: 'Council',          blurb: '5 agents: implementer + tester + 2 reviewers + orchestrator.' },
     { id: 'resurrect',       icon: '↻',   title: 'Resurrect a team', blurb: 'Bring back a previously-spawned team with their last sessions.' },
     { id: 'custom-yaml',     icon: '🛠',  title: 'Custom (YAML)',    blurb: 'Define your own team in catalog YAML.' },
