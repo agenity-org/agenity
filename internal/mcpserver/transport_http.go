@@ -184,9 +184,53 @@ func BridgeStdioToHTTP(url string) error {
 	if tok := os.Getenv("CHEPHERD_TOKEN"); tok != "" {
 		hdr.Set("Authorization", "Bearer "+tok)
 	}
-	c, _, err := dialer.Dial(url, hdr)
-	if err != nil {
-		return fmt.Errorf("mcp bridge: dial %s: %w", url, err)
+
+	// #422 P0 — retry the WS dial with exponential backoff. Operator's
+	// agent showed `/mcp ✘ failed` with -32000 after #419 instrumented
+	// the server-side dispatch (which showed no failures because no
+	// connect ever reached dispatch — the bridge was failing AT THE
+	// DIAL). Most common cause: chepherd container is up + listening
+	// but the FIRST agent spawn happens before the listener fully
+	// accepts new connections, OR a transient slirp4netns DNS resolve
+	// fails. The bridge was a single-shot dial that surfaced any
+	// transient failure as a permanent -32000.
+	//
+	// Retry sequence: 5 attempts at 0s, 1s, 2s, 4s, 8s (total ~15s).
+	// Each attempt logs to stderr so `podman logs chepherd-agent-...`
+	// shows the WS dial diagnostic trail. After 5 failures we surface
+	// the last error so claude-code's /mcp shows a real reason.
+	var c *websocket.Conn
+	var lastErr error
+	backoff := time.Duration(0)
+	const maxAttempts = 5
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if backoff > 0 {
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp-bridge] attempt %d/%d backing off %s before dial %s\n",
+				attempt, maxAttempts, backoff, url)
+			time.Sleep(backoff)
+		}
+		conn, resp, err := dialer.Dial(url, hdr)
+		if err == nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp-bridge] dial %s OK on attempt %d/%d\n", url, attempt, maxAttempts)
+			c = conn
+			break
+		}
+		lastErr = err
+		status := ""
+		if resp != nil {
+			status = fmt.Sprintf(" (HTTP %d)", resp.StatusCode)
+		}
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp-bridge] dial %s FAILED attempt %d/%d: %v%s\n",
+			url, attempt, maxAttempts, err, status)
+		// Exponential backoff: 1s, 2s, 4s, 8s
+		if backoff == 0 {
+			backoff = 1 * time.Second
+		} else {
+			backoff *= 2
+		}
+	}
+	if c == nil {
+		return fmt.Errorf("mcp bridge: dial %s failed after %d attempts: %w", url, maxAttempts, lastErr)
 	}
 	defer c.Close()
 	c.SetReadLimit(4 * 1024 * 1024)
