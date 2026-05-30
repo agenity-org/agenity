@@ -74,7 +74,14 @@ exec podman run \
   --detach \
   -e HOME=/home/chepherd \
   -p "127.0.0.1:${PORT}:8080" \
-  -p "127.0.0.1:9090:9090" \
+  -p "0.0.0.0:9090:9090" \
+  `# ↑ #398 P0: 9090 MUST bind 0.0.0.0 so agent sibling containers can reach the MCP server.` \
+  `# Rootless slirp4netns containers reach the host via 10.0.2.2; a 127.0.0.1 binding excludes` \
+  `# that path → "network is unreachable" from inside the agent → MCP toolkit (chepherd.list_sessions,` \
+  `# send_to_session, alert_human) unavailable → #395/#396 briefing capability dark. Tradeoff: 9090 is` \
+  `# now reachable from any host-network interface; mitigated by the chepherd-host being the security` \
+  `# boundary in v0.9.x. v0.9.4 refactor (#398 Option C in body) moves MCP to a sibling container on` \
+  `# a dedicated chepherd-net so it's only reachable from agent containers + chepherd, not from host.` \
   -v "${STATE_DIR}:/home/chepherd/.local/state/chepherd:rw" \
   "${CLAUDE_MOUNTS[@]}" \
   -v "${REPOS_DIR}:/home/chepherd/repos:rw" \
