@@ -172,12 +172,23 @@ func (s *Server) dispatchWithAgent(req *rpcReq, agent string) rpcResp {
 }
 
 // dispatch routes one request to its handler.
+//
+// #414 P0 — every dispatch logs a one-line audit entry to stderr
+// (caller + method + outcome) so when the agent's `/mcp` shows
+// "-32000" or "disconnected", the operator can grep
+// `journalctl -u chepherd | grep '\[chepherd-mcp\]'` for the exact
+// failure point. Pre-#414 the only signal was the agent-side
+// error, with no server-side visibility into auth/dispatch/error
+// emission.
 func (s *Server) dispatch(req *rpcReq) rpcResp {
+	caller := s.CurrentCaller()
 	if req.Method == "" {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: empty method → -32600\n", caller)
 		return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: -32600, Message: "invalid request"}}
 	}
 	// Standard MCP discovery
 	if req.Method == "initialize" {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: initialize → OK\n", caller)
 		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{}},
@@ -185,16 +196,29 @@ func (s *Server) dispatch(req *rpcReq) rpcResp {
 		}}
 	}
 	if req.Method == "tools/list" {
-		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": s.toolList()}}
+		tools := s.toolList()
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: tools/list → OK (%d tools)\n", caller, len(tools))
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": tools}}
 	}
 	if req.Method == "tools/call" {
-		return s.toolCall(req)
+		resp := s.toolCall(req)
+		if resp.Error != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: tools/call → ERROR %d: %s\n", caller, resp.Error.Code, resp.Error.Message)
+		} else {
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: tools/call → OK\n", caller)
+		}
+		return resp
 	}
 
 	// Direct chepherd.* method calls (non-MCP test path)
 	if strings.HasPrefix(req.Method, "chepherd.") {
-		return s.toolCallDirect(req.ID, strings.TrimPrefix(req.Method, "chepherd."), req.Params)
+		resp := s.toolCallDirect(req.ID, strings.TrimPrefix(req.Method, "chepherd."), req.Params)
+		if resp.Error != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: %s → ERROR %d: %s\n", caller, req.Method, resp.Error.Code, resp.Error.Message)
+		}
+		return resp
 	}
+	fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: %s → -32601 method not found\n", caller, req.Method)
 	return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: -32601, Message: "method not found: " + req.Method}}
 }
 
