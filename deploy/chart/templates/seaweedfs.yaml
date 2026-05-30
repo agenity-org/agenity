@@ -1,0 +1,257 @@
+{{- /*
+  SeaweedFS storage backend — #225 row D7.
+  Deploys 3 StatefulSets (master, volume, filer) when
+  .Values.seaweedfs.enabled is true. Filer exposes the S3 API at
+  :{{ .Values.seaweedfs.filer.s3Port }} which chepherd points at via
+  .Values.storage.s3.endpoint.
+*/}}
+{{- if .Values.seaweedfs.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chepherd.fullname" . }}-seaweedfs
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+data:
+  master.toml: |
+    # Master serves discovery + topology. Replication=001 (1 per volume).
+    [master.replication]
+    copy_1 = 1
+  filer.toml: |
+    # Filer keeps metadata in LevelDB (single-replica) + bridges S3.
+    [leveldb2]
+    enabled = true
+    dir = "/data/filerldb2"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "chepherd.fullname" . }}-seaweedfs-s3
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  accessKey: {{ randAlphaNum 20 | quote }}
+  secretKey: {{ randAlphaNum 40 | quote }}
+---
+# Master — discovery + topology + replication policy
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chepherd.fullname" . }}-seaweedfs-master
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs-master
+spec:
+  serviceName: {{ include "chepherd.fullname" . }}-seaweedfs-master
+  replicas: {{ .Values.seaweedfs.master.replicas }}
+  selector:
+    matchLabels:
+      {{- include "chepherd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs-master
+  template:
+    metadata:
+      labels:
+        {{- include "chepherd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seaweedfs-master
+    spec:
+      containers:
+        - name: master
+          image: "{{ .Values.seaweedfs.image.repository }}:{{ .Values.seaweedfs.image.tag }}"
+          imagePullPolicy: {{ .Values.seaweedfs.image.pullPolicy }}
+          args:
+            - master
+            - -port=9333
+            - -mdir=/data
+            - -ip=$(POD_IP)
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 9333
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.seaweedfs.master.resources | nindent 12 }}
+  {{- if .Values.seaweedfs.master.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.seaweedfs.master.persistence.storageClass }}
+        storageClassName: {{ .Values.seaweedfs.master.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.seaweedfs.master.persistence.size }}
+  {{- end }}
+---
+# Volume — actual blob storage. Hot tier on local PVC; cold tier
+# optionally tiered to external S3 via tier.s3.* when enabled.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chepherd.fullname" . }}-seaweedfs-volume
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs-volume
+spec:
+  serviceName: {{ include "chepherd.fullname" . }}-seaweedfs-volume
+  replicas: {{ .Values.seaweedfs.volume.replicas }}
+  selector:
+    matchLabels:
+      {{- include "chepherd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs-volume
+  template:
+    metadata:
+      labels:
+        {{- include "chepherd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seaweedfs-volume
+    spec:
+      containers:
+        - name: volume
+          image: "{{ .Values.seaweedfs.image.repository }}:{{ .Values.seaweedfs.image.tag }}"
+          imagePullPolicy: {{ .Values.seaweedfs.image.pullPolicy }}
+          args:
+            - volume
+            - -mserver={{ include "chepherd.fullname" . }}-seaweedfs-master:9333
+            - -dir=/data
+            - -port=8080
+            - -ip=$(POD_IP)
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.seaweedfs.volume.resources | nindent 12 }}
+  {{- if .Values.seaweedfs.volume.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.seaweedfs.volume.persistence.storageClass }}
+        storageClassName: {{ .Values.seaweedfs.volume.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.seaweedfs.volume.persistence.size }}
+  {{- end }}
+---
+# Filer — POSIX/S3 gateway. chepherd talks to the S3 API on this filer.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chepherd.fullname" . }}-seaweedfs-filer
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs-filer
+spec:
+  serviceName: {{ include "chepherd.fullname" . }}-seaweedfs-filer
+  replicas: {{ .Values.seaweedfs.filer.replicas }}
+  selector:
+    matchLabels:
+      {{- include "chepherd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs-filer
+  template:
+    metadata:
+      labels:
+        {{- include "chepherd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seaweedfs-filer
+    spec:
+      containers:
+        - name: filer
+          image: "{{ .Values.seaweedfs.image.repository }}:{{ .Values.seaweedfs.image.tag }}"
+          imagePullPolicy: {{ .Values.seaweedfs.image.pullPolicy }}
+          args:
+            - filer
+            - -master={{ include "chepherd.fullname" . }}-seaweedfs-master:9333
+            - -s3
+            - -s3.port={{ .Values.seaweedfs.filer.s3Port }}
+            - -ip=$(POD_IP)
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: SEAWEEDFS_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "chepherd.fullname" . }}-seaweedfs-s3
+                  key: accessKey
+            - name: SEAWEEDFS_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "chepherd.fullname" . }}-seaweedfs-s3
+                  key: secretKey
+          ports:
+            - containerPort: 8888
+              name: http
+            - containerPort: {{ .Values.seaweedfs.filer.s3Port }}
+              name: s3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  {{- if .Values.seaweedfs.filer.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.seaweedfs.filer.persistence.storageClass }}
+        storageClassName: {{ .Values.seaweedfs.filer.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.seaweedfs.filer.persistence.size }}
+  {{- end }}
+---
+# Headless services for StatefulSet DNS resolution
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chepherd.fullname" . }}-seaweedfs-master
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "chepherd.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs-master
+  ports:
+    - name: http
+      port: 9333
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chepherd.fullname" . }}-seaweedfs-filer
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "chepherd.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs-filer
+  ports:
+    - name: http
+      port: 8888
+      targetPort: http
+    - name: s3
+      port: {{ .Values.seaweedfs.filer.s3Port }}
+      targetPort: s3
+{{- end }}

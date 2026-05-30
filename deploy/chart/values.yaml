@@ -6,7 +6,7 @@
 # PodRunner against the cluster's own k8s API, so the chart's
 # ServiceAccount gets per-namespace Pod create/exec/delete RBAC.
 #
-# Refs #225 row D2.
+# Refs #225 row D2 #225 row D7 (SeaweedFS).
 
 image:
   # Operators with a private registry: override repository + pullPolicy.
@@ -106,3 +106,76 @@ securityContext:
   capabilities:
     drop:
       - ALL
+
+# SeaweedFS storage backend (#225 row D7).
+# When enabled, the chart deploys a co-located SeaweedFS cluster
+# (1 master, 1 volume server, 1 filer) and points chepherd at it
+# via S3 API. Provides hot/warm/cold tiering for artifacts +
+# vault blobs + claude session jsonls per V0.9.2-ARCHITECTURE §7.
+#
+# Operators with an existing S3-compatible store (AWS S3, MinIO,
+# Wasabi) keep enabled: false + set storage.s3.* fields instead so
+# chepherd talks to their bucket directly.
+seaweedfs:
+  enabled: false
+  image:
+    repository: chrislusf/seaweedfs
+    tag: "3.79"
+    pullPolicy: IfNotPresent
+  master:
+    replicas: 1
+    persistence:
+      enabled: true
+      size: 5Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+  volume:
+    replicas: 1
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 4Gi
+    # Tier-cold: when set, volumes older than maxAgeDays are moved
+    # to the configured S3 backend (typically cheaper object storage).
+    tier:
+      enabled: false
+      maxAgeDays: 30
+      s3:
+        endpoint: ""
+        bucket: ""
+        credentialsSecret: ""
+  filer:
+    replicas: 1
+    s3Port: 8333
+    persistence:
+      enabled: true
+      size: 5Gi
+      storageClass: ""
+
+# chepherd storage backend selection. Defaults to local PVC.
+# When seaweedfs.enabled OR external S3 is configured, chepherd
+# uses S3 for artifacts + vault blobs + session jsonls (large/
+# append-mostly data); chepherd.db (SQLite metadata) stays on
+# PVC so transactional reads remain fast.
+storage:
+  # 'pvc' = local PVC (current default); 's3' = SeaweedFS or external S3.
+  backend: pvc
+  s3:
+    endpoint: ""           # e.g. http://<release>-seaweedfs-filer:8333
+    region: us-east-1
+    bucket: chepherd-blobs
+    # K8s Secret with keys: accessKey, secretKey. When seaweedfs.enabled,
+    # leave empty — chart provisions a Secret named "<release>-seaweedfs-s3".
+    credentialsSecret: ""
+    pathStyle: true        # true for SeaweedFS + MinIO; false for AWS S3
