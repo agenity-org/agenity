@@ -28,6 +28,11 @@ import (
 // Refs #208 #225 row B1 row A2.
 func RegisterRoutes(mux *http.ServeMux, card *AgentCard, router *Router, authValidator TokenValidator, broker *StreamBroker) {
 	mux.Handle(AgentCardPath, ServeAgentCard(card))
+	// #378 P1 — also serve the suffix-less alias so peer agents that
+	// try the shorter form first don't land on chepherd's SPA wildcard
+	// (which returns marketing landing-page HTML, opaque to A2A
+	// discovery). The aliased handler returns identical JSON bytes.
+	mux.Handle(AgentCardAliasPath, ServeAgentCard(card))
 	if authValidator == nil {
 		mux.Handle("/jsonrpc", router)
 	} else {
