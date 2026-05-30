@@ -207,3 +207,28 @@ observability:
         memory: 256Mi
       limits:
         memory: 1Gi
+
+# mTLS server config (#225 row B4 deployment-side).
+# Top-level tls: block (not under chepherd: — that key is already
+# defined above).
+# When enabled, chepherd serves HTTPS with the cert/key from
+# .chepherd.tls.serverSecret. When clientCASecret is also set,
+# chepherd requires + verifies a client cert against that CA
+# (mTLS); the cert subject is extracted into the
+# 'Authorization: mTLS <subject>' header for B4 MTLSValidator
+# to match against AcceptedSubjects.
+#
+# Typical wiring: cert-manager provisions both secrets via
+# Certificate CRDs; this chart just mounts them. Operators with
+# an external mTLS terminator (Cilium / Envoy / Istio) keep
+# enabled: false + let the proxy strip mTLS before forwarding
+# to chepherd over plaintext within the mesh.
+tls:
+  enabled: false
+  # K8s Secret with keys: tls.crt, tls.key (cert-manager Certificate
+  # writes this shape by default).
+  serverSecret: ""
+  # Optional K8s Secret with key: ca.crt — when set, chepherd
+  # ClientAuth=RequireAndVerifyClientCert against this CA bundle.
+  # Leave empty for server-side-only TLS.
+  clientCASecret: ""
