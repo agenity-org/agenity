@@ -390,6 +390,16 @@ func extractAgentReplyText(history []map[string]any) string {
 // test — proves the harness pipeline (spawn → boot → attach → send →
 // task lifecycle → reply extraction) is working end-to-end.
 //
+// Post-#434 walk: architect's option-1 warmup-discard pattern was
+// added between the 3-spawn settle and T3.C1 to work around the
+// #387 silence-finalize caveat (continuously-animated TUI prevents
+// byte-silence on the FIRST message after spawn). A "ack" warmup
+// task is sent + awaited; by the time it completes the PTY animation
+// has frozen + subsequent messages land on a settled byte stream
+// where silence-finalize works correctly. If the warmup itself times
+// out, the test fails loudly with a diagnostic pointing at the
+// #387 v0.9.4 finalize-on-token-marker refinement target.
+//
 // Named assertions:
 //
 //	T3.C1 — message/send returns a working task ID
@@ -455,6 +465,31 @@ func TestT3_RealClaudePeerSummaryViaA2A(t *testing.T) {
 	// summarize.
 	time.Sleep(3 * time.Second)
 
+	// #387 silence-finalize caveat workaround (architect 2026-05-31
+	// post-#434 walk): real claude-code in newly-spawned containers
+	// runs a continuously-animated TUI that prevents the silence
+	// detector (which measures bytes-in-window) from triggering on
+	// the FIRST message after spawn. The task never reaches
+	// 'completed' even with a 240s budget because the byte stream
+	// never goes idle long enough.
+	//
+	// Workaround: send a discard warmup message ("ack") + wait for
+	// its task to complete. By the time it does, the TUI animation
+	// has frozen + subsequent messages land on a settled PTY where
+	// silence-finalize works correctly.
+	//
+	// If the warmup itself doesn't complete, the #387 caveat is
+	// deeper than expected + we fail with a clear diagnostic so the
+	// next pivot (Option 2 — skip T3 until v0.9.4 finalize-on-
+	// token-marker ships) is easy to decide.
+	warmupID, err := h.a2aSend(speakerSID, "ack")
+	if err != nil {
+		t.Fatalf("T3 warmup: message/send: %v", err)
+	}
+	if _, err := h.waitTaskCompleted(warmupID, 90*time.Second); err != nil {
+		t.Fatalf("T3 warmup FAIL: warmup task didn't complete in 90s (%v) — the #387 silence-finalize caveat is deeper than the warmup workaround can fix. Architect pivot Option 2 (skip T3 until v0.9.4 finalize-on-token-marker ships) recommended.", err)
+	}
+
 	// T3.C1 — message/send returns a working task. Narrowed prompt
 	// per architect 2026-05-31: "Reply with exactly one word:
 	// ready". Keeps the test as a round-trip smoke; orientation
@@ -465,11 +500,8 @@ func TestT3_RealClaudePeerSummaryViaA2A(t *testing.T) {
 		t.Fatalf("T3.C1 FAIL: message/send: %v", err)
 	}
 
-	// T3.C2 — tasks/get reaches completed. 240s budget gives real
-	// claude room to think + emit + silence-finalize on slow CPUs
-	// or first-conversation MCP warmups. Pre-tuning 90s was too
-	// tight; architect walk on host hit a 1m30s timeout even for a
-	// simple reply.
+	// T3.C2 — tasks/get reaches completed on a settled PTY (post-
+	// warmup). 240s budget per #434.
 	history, err := h.waitTaskCompleted(taskID, 240*time.Second)
 	if err != nil {
 		t.Fatalf("T3.C2 FAIL: %v", err)
