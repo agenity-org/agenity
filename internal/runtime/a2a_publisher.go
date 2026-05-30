@@ -5,62 +5,11 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 )
-
-// pumpSendMark coordinates the byte-offset send-mark between Deliver
-// and pumpPTYToBroker (#387 P0).
-//
-// Lifecycle:
-//
-//  1. Deliver creates a pumpSendMark
-//  2. Deliver spawns pumpPTYToBroker with the mark
-//  3. Pump calls sess.Subscribe — closes Subscribed when done
-//  4. Deliver waits on <-mark.Subscribed
-//  5. Deliver calls sess.Write(message)
-//  6. Deliver calls mark.MarkSendNow() — signals SendNow chan
-//  7. Pump receives on SendNow → records current responseBuf.Len()
-//     as sendOffset; all subsequent silence-finalize slices use that
-//     offset to exclude pre-send banner chrome from the captured
-//     response
-//
-// #385 P1's cursor-gate alone wasn't enough: real claude-code banners
-// contain ❯ inside the input-box TUI rendering (architect found 5+
-// occurrences via grep on podman logs). The cursor gate accepted
-// banner chunks as "response complete" because the banner DID
-// contain a cursor. The byte-offset boundary is structural:
-// everything received before MarkSendNow is banner; everything after
-// is response, regardless of how many cursors are in either.
-//
-// Subscribed nil ⇒ pump doesn't signal subscribe (back-compat for
-// tests that spawn pump without a Deliver-driven mark).
-// SendNow nil ⇒ pump never receives a mark (back-compat: full buf
-// used for the silence gate, matching pre-#387 behavior).
-type pumpSendMark struct {
-	Subscribed chan struct{}
-	SendNow    chan struct{}
-	once       sync.Once
-}
-
-func newPumpSendMark() *pumpSendMark {
-	return &pumpSendMark{
-		Subscribed: make(chan struct{}),
-		SendNow:    make(chan struct{}),
-	}
-}
-
-// MarkSendNow signals the pump to record the current responseBuf
-// offset as the send boundary. Idempotent.
-func (m *pumpSendMark) MarkSendNow() {
-	if m == nil {
-		return
-	}
-	m.once.Do(func() { close(m.SendNow) })
-}
 
 // ansiEscapeRE matches CSI sequences (ESC [ ... letter) + OSC sequences
 // (ESC ] ... BEL/ST) + the bare ESC + simple two-byte sequences. Good
@@ -139,18 +88,39 @@ func (d *A2ADeliverer) SetBroker(b brokerPublisher) {
 // without changes.
 //
 // Refs #306 (A3) #324 (CI fix) #379 P0 (receive-loop completion)
-// #385 P1 (cursor gate) #387 P0 (byte-offset send-mark).
+// #385 P1 (cursor gate — superseded) #387 P0 (byte-offset send-mark
+// — superseded) #389 P0 (two-silence protocol).
 //
 // completer (#379) is invoked exactly ONCE with the accumulated agent
-// response text when the silence window elapses, the channel closes,
-// or sub.Done fires. nil disables the receive-loop persistence path
-// (back-compat for tests without taskStore wiring).
+// response text when the response is detected complete. nil disables
+// the receive-loop persistence path (back-compat for tests without
+// taskStore wiring).
 //
-// mark (#387) coordinates the byte-offset send boundary with the
-// caller (Deliver). nil ⇒ no marking; pump uses full responseBuf for
-// silence-gate + completer (matches pre-#387 behavior for back-compat
-// with #379/#385 tests).
-func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Task, completer func(taskID, response string), mark *pumpSendMark) {
+// #389 P0 — TWO-SILENCE PROTOCOL replaces the #387 mark struct +
+// #385 cursor gate:
+//
+//   - FIRST silence: end of banner/echo paint. Record sendOffset =
+//     responseBuf.Len(). All subsequent silence-finalize slices use
+//     this offset to exclude pre-response content.
+//   - SECOND+ silence: response complete. finalize buf[sendOffset:].
+//
+// Why this is structurally correct: silence is observable from
+// inside the pump goroutine without coordination with Deliver. The
+// race that defeated #387 (Deliver's MarkSendNow firing before any
+// chunks land, sendOffset=0, banner included) is impossible here —
+// sendOffset only advances on observable silence, which by
+// definition only occurs after content arrives.
+//
+// Cost: +1 silence-window (~1.5s default) on the FIRST observable
+// activity-then-silence cycle per pump lifetime. For a fresh-spawn
+// + message/send + agent reply, that's one extra window between
+// banner-paint and response-start.
+//
+// channel-close + sub.Done finalize unconditionally (use full buf if
+// sendOffset is still unset, response slice otherwise). Fast-exit
+// agents that never observe a banner-end silence still get their
+// Task moved out of "working".
+func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Task, completer func(taskID, response string)) {
 	if sess == nil || task == nil {
 		return
 	}
@@ -159,13 +129,6 @@ func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Ta
 		return
 	}
 	defer sess.Unsubscribe(sub)
-
-	// #387 P0 — tell the caller we've subscribed. Subsequent
-	// sess.Write calls will land on the live channel (not just the
-	// pre-subscribe ring snapshot). If mark is nil, this is a no-op.
-	if mark != nil {
-		close(mark.Subscribed)
-	}
 
 	// Initial status — SSE subscribers see the working state immediately.
 	if broker != nil {
@@ -209,15 +172,6 @@ func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Ta
 		}
 	}
 
-	// #387 P0 — channel-or-nil pattern: when mark is wired, sendNowCh
-	// is the real chan and a receive arms sendOffset; when mark is
-	// nil, sendNowCh stays nil so the select branch never fires
-	// (selecting from nil chan blocks forever, which is what we want).
-	var sendNowCh <-chan struct{}
-	if mark != nil {
-		sendNowCh = mark.SendNow
-	}
-
 	silence := silenceWindow()
 	silenceTimer := time.NewTimer(silence)
 	defer silenceTimer.Stop()
@@ -230,13 +184,6 @@ func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Ta
 
 	for {
 		select {
-		case <-sendNowCh:
-			// #387 P0 — Deliver wrote the message. Record the boundary
-			// so subsequent silence-finalize only considers post-send
-			// bytes. Disable the case after firing (nil chan blocks
-			// forever in select).
-			sendOffset = responseBuf.Len()
-			sendNowCh = nil
 		case chunk, ok := <-sub.Ch:
 			if !ok {
 				finalize()
@@ -264,27 +211,25 @@ func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Ta
 			silenceTimer.Reset(silence)
 			timerArmed = true
 		case <-silenceTimer.C:
-			// #379 P0 — silence window elapsed → response complete.
-			// Fire the completer (persists agent response + flips
-			// state) and the broker's done event, then exit.
+			// #389 P0 TWO-SILENCE PROTOCOL — supersedes the #385
+			// cursor gate + #387 mark-coordination both of which
+			// failed live (cursor present in banner TUI chrome
+			// defeated #385; mark-fires-before-banner-arrives race
+			// defeated #387).
 			//
-			// #385 P1 — gate silence-finalize on having observed
-			// claude-code's prompt cursor (❯, UTF-8 e2 9d af).
+			// First silence → record sendOffset = end of banner +
+			// any input-echo. No finalize yet — re-arm timer.
 			//
-			// #387 P0 — apply the gate to the POST-SEND slice only
-			// (buf[sendOffset:]). Pre-#387 the gate ran against the
-			// full buffer; real claude-code banners contain ❯ inside
-			// the TUI input-box rendering (architect found 5+
-			// occurrences via grep on podman logs), so the gate
-			// passed during banner-paint silence and the first-
-			// message-after-spawn completer captured banner chrome
-			// instead of the reply. Slicing at sendOffset is
-			// structural: everything before the mark is banner;
-			// everything after is response.
+			// Second+ silence → finalize buf[sendOffset:]. By
+			// construction this slice contains ONLY the agent's
+			// response (anything pre-banner-end is excluded).
 			//
-			// sub.Done + channel-close paths intentionally bypass
-			// this gate so fast-exiting agents finalize cleanly.
-			if !bytes.Contains(responseSlice(), promptCursorUTF8) {
+			// sub.Done + channel-close still finalize whatever is
+			// in the slice (sendOffset = -1 → full buf, otherwise
+			// post-mark slice) so fast-exit agents don't strand
+			// the Task at "working".
+			if sendOffset < 0 {
+				sendOffset = responseBuf.Len()
 				silenceTimer.Reset(silence)
 				continue
 			}
