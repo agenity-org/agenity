@@ -46,7 +46,7 @@ func call(t *testing.T, r *Router, method string, params any) JSONRPCResponse {
 // TestGetTask_NotFound pins the not-found error code.
 func TestGetTask_NotFound(t *testing.T) {
 	r, _ := newTestRouter(t)
-	resp := call(t, r, "GetTask", getTaskParams{TaskID: "missing"})
+	resp := call(t, r, "tasks/get", getTaskParams{TaskID: "missing"})
 	if resp.Error == nil || resp.Error.Code != -32004 {
 		t.Errorf("expected -32004 not-found, got %+v", resp.Error)
 	}
@@ -61,7 +61,7 @@ func TestSendStreamingMessage_PersistsAndStreams(t *testing.T) {
 		ContextID: "ctx-1",
 		Parts:     []Part{{Kind: "text", Text: "hello"}},
 	}}
-	resp := call(t, r, "SendStreamingMessage", params)
+	resp := call(t, r, "message/stream", params)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -93,7 +93,7 @@ func TestCancelTask_TerminalStateIsNoOp(t *testing.T) {
 	if err := mb.Store.Tasks().Save(context.Background(), seedTask("t-completed", string(TaskStateCompleted))); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	resp := call(t, r, "CancelTask", cancelTaskParams{TaskID: "t-completed"})
+	resp := call(t, r, "tasks/cancel", cancelTaskParams{TaskID: "t-completed"})
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -109,7 +109,7 @@ func TestCancelTask_WorkingTransitionsToCanceled(t *testing.T) {
 	if err := mb.Store.Tasks().Save(context.Background(), seedTask("t-working", string(TaskStateWorking))); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	resp := call(t, r, "CancelTask", cancelTaskParams{TaskID: "t-working"})
+	resp := call(t, r, "tasks/cancel", cancelTaskParams{TaskID: "t-working"})
 	result := resp.Result.(cancelTaskResult)
 	if result.Task.Status.State != TaskStateCanceled {
 		t.Errorf("expected CANCELED after cancel, got %q", result.Task.Status.State)
@@ -124,7 +124,7 @@ func TestCancelTask_WorkingTransitionsToCanceled(t *testing.T) {
 func TestPushNotificationConfigCRUD(t *testing.T) {
 	r, _ := newTestRouter(t)
 	// Set
-	setResp := call(t, r, "SetTaskPushNotificationConfig", pushConfig{
+	setResp := call(t, r, "tasks/pushNotificationConfig/set", pushConfig{
 		TaskID:     "task-x",
 		URL:        "https://example.com/hook",
 		SigningKey: "secret",
@@ -142,7 +142,7 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 		t.Errorf("server echoed signing key")
 	}
 	// Get
-	getResp := call(t, r, "GetTaskPushNotificationConfig", getPushConfigParams{ID: cfgID})
+	getResp := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{ID: cfgID})
 	if getResp.Error != nil {
 		t.Fatalf("Get: %+v", getResp.Error)
 	}
@@ -150,7 +150,7 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 		t.Errorf("Get URL mismatch: %+v", getResp.Result)
 	}
 	// List
-	listResp := call(t, r, "ListTaskPushNotificationConfigs", listPushConfigsParams{TaskID: "task-x"})
+	listResp := call(t, r, "tasks/pushNotificationConfig/list", listPushConfigsParams{TaskID: "task-x"})
 	if listResp.Error != nil {
 		t.Fatalf("List: %+v", listResp.Error)
 	}
@@ -158,7 +158,7 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 		t.Errorf("List expected 1 config, got %d", got)
 	}
 	// Delete
-	delResp := call(t, r, "DeleteTaskPushNotificationConfig", deletePushConfigParams{ID: cfgID})
+	delResp := call(t, r, "tasks/pushNotificationConfig/delete", deletePushConfigParams{ID: cfgID})
 	if delResp.Error != nil {
 		t.Fatalf("Delete: %+v", delResp.Error)
 	}
@@ -166,7 +166,7 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 		t.Errorf("Delete returned ok=false")
 	}
 	// Get-after-delete is not found.
-	gone := call(t, r, "GetTaskPushNotificationConfig", getPushConfigParams{ID: cfgID})
+	gone := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{ID: cfgID})
 	if gone.Error == nil || gone.Error.Code != -32004 {
 		t.Errorf("expected -32004 after delete, got %+v", gone.Error)
 	}
@@ -175,7 +175,7 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 // TestGetAuthenticatedExtendedCard returns the wired card body.
 func TestGetAuthenticatedExtendedCard(t *testing.T) {
 	r, _ := newTestRouter(t)
-	resp := call(t, r, "GetAuthenticatedExtendedCard", struct{}{})
+	resp := call(t, r, "agent/getAuthenticatedExtendedCard", struct{}{})
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -195,7 +195,7 @@ func TestStreamingMethods_WithoutSubscribeFn(t *testing.T) {
 	mb := &MethodBodies{Store: store, AgentCardFn: func() AgentCard { return AgentCard{} }, SubscribeFn: nil}
 	r := NewRouter()
 	_ = mb.Register(r)
-	for _, m := range []string{"SendStreamingMessage", "ResubscribeTask"} {
+	for _, m := range []string{"message/stream", "tasks/resubscribe"} {
 		resp := call(t, r, m, map[string]any{"taskId": "x", "message": map[string]any{"contextId": "c", "parts": []any{}}})
 		if resp.Error == nil || resp.Error.Code != -32004 {
 			t.Errorf("%s should return -32004 without SubscribeFn, got %+v", m, resp.Error)
@@ -210,7 +210,7 @@ func seedTask(id, state string) *persistence.Task {
 		ID:        id,
 		RunnerSID: "test-runner",
 		State:     state,
-		Method:    "SendMessage",
+		Method:    "message/send",
 		InputBlob: []byte(`{"role":"user","contextId":"ctx","parts":[]}`),
 	}
 }

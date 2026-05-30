@@ -144,7 +144,7 @@ func (f *FederatedDeliverer) forward(ctx context.Context, peerURL string, msg a2
 	envelope := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      "fed-" + msg.MessageID,
-		"method":  "SendMessage",
+		"method":  "message/send",
 		"params":  map[string]any{"message": msg},
 	}
 	body, err := json.Marshal(envelope)

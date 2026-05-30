@@ -72,7 +72,7 @@ func TestWireDeliverer_DispatchesSendMessage(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(JSONRPCRequest{
-		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "SendMessage",
+		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "message/send",
 		Params: jsonRaw(t, SendMessageParams{Message: Message{
 			Role:      "user",
 			ContextID: "sess-1",
@@ -113,7 +113,7 @@ func TestWireDeliverer_RejectsEmptyContextID(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(JSONRPCRequest{
-		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "SendMessage",
+		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "message/send",
 		Params: jsonRaw(t, SendMessageParams{Message: Message{
 			Role:  "user",
 			Parts: []Part{{Kind: "text", Text: "ping"}},
@@ -145,7 +145,7 @@ func TestWireDeliverer_AcceptsMissingTaskID(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(JSONRPCRequest{
-		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "SendMessage",
+		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "message/send",
 		Params: jsonRaw(t, SendMessageParams{Message: Message{
 			Role:      "user",
 			ContextID: "sess-1",
@@ -173,7 +173,7 @@ func TestWireDeliverer_PropagatesDelivererError(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(JSONRPCRequest{
-		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "SendMessage",
+		JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "message/send",
 		Params: jsonRaw(t, SendMessageParams{Message: Message{
 			Role: "user", ContextID: "sess-x",
 			Parts: []Part{{Kind: "text", Text: "ping"}},

@@ -451,9 +451,9 @@ func newAgentCard(listenAddr string) *a2a.AgentCard {
 	return &a2a.AgentCard{
 		ProtocolVersion: "1.0",
 		Name:            "chepherd",
-		Description:     "chepherd v0.9.2 control-plane Agent — PTY-host runtime + shepherd intelligence + A2A endpoint",
+		Description:     "chepherd v0.9.3 control-plane Agent — PTY-host runtime + Scrum Master intelligence + A2A endpoint",
 		URL:             "http://" + listenAddr + "/jsonrpc",
-		Version:         "0.9.2",
+		Version:         "0.9.3",
 		Capabilities: a2a.AgentCapabilities{
 			Streaming:         true,
 			PushNotifications: true,

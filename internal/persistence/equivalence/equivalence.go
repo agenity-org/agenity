@@ -101,12 +101,12 @@ func events(t *testing.T, r persistence.EventRepository) {
 	}
 	if err := r.Append(ctx, persistence.Event{
 		ID: "eq-e2", Kind: "a2a", Timestamp: now.Add(time.Second),
-		A2AMethod: "SendMessage", CallerOrg: "org-Z",
+		A2AMethod: "message/send", CallerOrg: "org-Z",
 	}); err != nil {
 		t.Fatalf("Append e2: %v", err)
 	}
 	es, _ := r.List(ctx, persistence.EventListOpts{Kinds: []string{"a2a"}})
-	if len(es) != 1 || es[0].A2AMethod != "SendMessage" || es[0].CallerOrg != "org-Z" {
+	if len(es) != 1 || es[0].A2AMethod != "message/send" || es[0].CallerOrg != "org-Z" {
 		t.Errorf("List kind=a2a = %v", es)
 	}
 }
@@ -180,7 +180,7 @@ func grants(t *testing.T, r persistence.RBACGrantRepository) {
 func tasks(t *testing.T, r persistence.TaskRepository) {
 	ctx := context.Background()
 	tk := &persistence.Task{
-		ID: "eq-task", RunnerSID: "runner-1", State: "WORKING", Method: "SendMessage",
+		ID: "eq-task", RunnerSID: "runner-1", State: "WORKING", Method: "message/send",
 		InputBlob: []byte(`{"msg":"hi"}`),
 	}
 	if err := r.Save(ctx, tk); err != nil {
