@@ -34,7 +34,7 @@ func (f *fakeValidator) Validate(_ context.Context, token string) (string, error
 func TestAuthMiddleware_MissingAuthorization(t *testing.T) {
 	mux := http.NewServeMux()
 	r := NewRouter()
-	RegisterRoutes(mux, &AgentCard{}, r, &fakeValidator{want: "good"})
+	RegisterRoutes(mux, &AgentCard{}, r, &fakeValidator{want: "good"}, nil)
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -61,7 +61,7 @@ func TestAuthMiddleware_MissingAuthorization(t *testing.T) {
 func TestAuthMiddleware_BadToken(t *testing.T) {
 	mux := http.NewServeMux()
 	r := NewRouter()
-	RegisterRoutes(mux, &AgentCard{}, r, &fakeValidator{want: "good"})
+	RegisterRoutes(mux, &AgentCard{}, r, &fakeValidator{want: "good"}, nil)
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -89,7 +89,7 @@ func TestAuthMiddleware_HappyPath(t *testing.T) {
 		called = true
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]string{"ok": "yes"}}
 	})
-	RegisterRoutes(mux, &AgentCard{}, r, &fakeValidator{want: "good"})
+	RegisterRoutes(mux, &AgentCard{}, r, &fakeValidator{want: "good"}, nil)
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -119,7 +119,7 @@ func TestAuthMiddleware_NilValidatorIsDevPassthrough(t *testing.T) {
 		called = true
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]string{"ok": "yes"}}
 	})
-	RegisterRoutes(mux, &AgentCard{}, r, nil) // no auth — back-compat
+	RegisterRoutes(mux, &AgentCard{}, r, nil, nil) // no auth — back-compat
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

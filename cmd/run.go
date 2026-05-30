@@ -264,11 +264,18 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// SubscribeFn is nil for now — SSE streaming binding lands in a
 		// follow-up; SendStreamingMessage + ResubscribeTask return -32004
 		// until that wiring is complete.
+		// v0.9.3 #225 row A2 — SSE broker for streaming methods. When
+		// wired, SendStreamingMessage + ResubscribeTask return a
+		// streamID + the SSE GET /a2a/stream/<streamID> path delivers
+		// task state transitions. nil disables streaming (returns
+		// -32004).
+		streamBroker := a2a.NewStreamBroker()
+		rs.StreamBroker = streamBroker
 		methodBodies := &a2a.MethodBodies{
 			Store:       store,
 			AgentCardFn: func() a2a.AgentCard { return *newAgentCard(runFlagListen) },
 			RunnerSID:   rt.InstanceUUID(),
-			SubscribeFn: nil,
+			SubscribeFn: streamBroker.SubscribeFn(),
 		}
 		if err := methodBodies.Register(a2aRouter); err != nil {
 			return fmt.Errorf("a2a: register method bodies: %w", err)

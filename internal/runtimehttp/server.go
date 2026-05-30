@@ -71,6 +71,10 @@ type Server struct {
 	// because A2A advertises its own securitySchemes on the Agent Card.
 	A2ACard   *a2a.AgentCard
 	A2ARouter *a2a.Router
+	// v0.9.3 #225 row A2 — SSE broker for SendStreamingMessage +
+	// ResubscribeTask. nil disables /a2a/stream/* + the streaming
+	// JSON-RPC methods return -32004.
+	StreamBroker *a2a.StreamBroker
 
 	// v0.9.3 #225 row C1 — federation orchestrator + cached agent-card
 	// store. Federation is nil when --federation-registry-url is empty;
@@ -213,7 +217,7 @@ func (s *Server) Handler() http.Handler {
 		if s.Auth != nil {
 			validator = &authProviderValidator{provider: s.Auth}
 		}
-		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter, validator)
+		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter, validator, s.StreamBroker)
 	}
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)

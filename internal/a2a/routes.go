@@ -7,25 +7,35 @@ import (
 	"strings"
 )
 
-// RegisterRoutes wires the A2A scaffold's two HTTP endpoints onto
-// the given mux:
+// RegisterRoutes wires the A2A scaffold's HTTP endpoints onto the
+// given mux:
 //
 //   - GET /.well-known/agent-card.json → ServeAgentCard
 //   - POST /jsonrpc                    → router.ServeHTTP
+//   - GET /a2a/stream/<streamID>       → broker.Handler (when broker != nil)
 //
 // When `authValidator` is non-nil, every POST /jsonrpc request is
 // gated by Bearer-token validation: missing/invalid token returns
 // HTTP 401 + JSON-RPC error code -32001 ("authentication required").
 // Pass nil to skip enforcement (back-compat for dev mode).
 //
-// Refs #208 #225 row B1.
-func RegisterRoutes(mux *http.ServeMux, card *AgentCard, router *Router, authValidator TokenValidator) {
+// When `broker` is non-nil, /a2a/stream/<streamID> is wired for SSE
+// streaming of task state transitions (#225 row A2). nil disables
+// the stream endpoint — callers of SendStreamingMessage /
+// ResubscribeTask will receive -32004 from the method bodies (which
+// is the same state as before A2 landed).
+//
+// Refs #208 #225 row B1 row A2.
+func RegisterRoutes(mux *http.ServeMux, card *AgentCard, router *Router, authValidator TokenValidator, broker *StreamBroker) {
 	mux.Handle(AgentCardPath, ServeAgentCard(card))
 	if authValidator == nil {
 		mux.Handle("/jsonrpc", router)
-		return
+	} else {
+		mux.Handle("/jsonrpc", AuthMiddleware(router, authValidator))
 	}
-	mux.Handle("/jsonrpc", AuthMiddleware(router, authValidator))
+	if broker != nil {
+		mux.Handle("/a2a/stream/", broker.Handler())
+	}
 }
 
 // TokenValidator is the minimal seam between RegisterRoutes and an

@@ -154,7 +154,7 @@ func newInstance(t *testing.T, sid string, bearer string) *instance {
 		ProtocolVersion: "1.0.0",
 	}
 	// Fill in URL after the test server boots — done below via SetURL.
-	a2a.RegisterRoutes(mux, card, router, &stubValidator{want: bearer})
+	a2a.RegisterRoutes(mux, card, router, &stubValidator{want: bearer}, nil)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	card.URL = srv.URL
