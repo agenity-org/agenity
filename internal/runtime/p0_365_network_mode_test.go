@@ -12,12 +12,20 @@ import (
 	"testing"
 )
 
-func TestP0_365_AgentNetworkMode_DefaultsToSlirp4netns(t *testing.T) {
+// SUPERSEDED 2026-05-31 — #398 P0 v2 supersedes #365's slirp4netns
+// default. The new default is "chepherd-net" (user-defined podman
+// network created by scripts/start.sh). slirp4netns kernel-isolation
+// blocked agents from reaching the MCP server on the host loopback;
+// chepherd-net gives agents container-name DNS to chepherd directly.
+// The #365 P0 fix (rootless-friendly default that doesn't require
+// CNI plugin) is still satisfied — chepherd-net works rootless.
+// Kept this test under the #365 file but with the new contract.
+func TestP0_365_AgentNetworkMode_DefaultsToChepherdNet(t *testing.T) {
 	t.Setenv("CHEPHERD_CONTAINER_NETWORK", "")
 	got := agentNetworkMode()
-	want := "slirp4netns:port_handler=slirp4netns"
+	want := "chepherd-net"
 	if got != want {
-		t.Errorf("agentNetworkMode() = %q, want %q (rootless-friendly default per #365)", got, want)
+		t.Errorf("agentNetworkMode() = %q, want %q (#398 v2 supersedes #365 slirp4netns default)", got, want)
 	}
 }
 
@@ -62,7 +70,7 @@ func TestP0_365_SpawnArgs_UsesNetworkMode(t *testing.T) {
 	t.Error("--network flag absent from argv")
 }
 
-func TestP0_365_SpawnArgs_DefaultsToSlirp4netns(t *testing.T) {
+func TestP0_365_SpawnArgs_DefaultsToChepherdNet(t *testing.T) {
 	t.Setenv("CHEPHERD_CONTAINER_NETWORK", "")
 	r := &PodmanRuntime{}
 	argv, _ := r.SpawnArgs("agent-y", "/tmp/home", "/tmp/secrets", "/tmp/cwd",
@@ -72,8 +80,8 @@ func TestP0_365_SpawnArgs_DefaultsToSlirp4netns(t *testing.T) {
 			if i+1 >= len(argv) {
 				t.Fatal("--network has no value")
 			}
-			if argv[i+1] != "slirp4netns:port_handler=slirp4netns" {
-				t.Errorf("--network value = %q, want slirp4netns:port_handler=slirp4netns", argv[i+1])
+			if argv[i+1] != "chepherd-net" {
+				t.Errorf("--network value = %q, want chepherd-net (#398 v2)", argv[i+1])
 			}
 			return
 		}

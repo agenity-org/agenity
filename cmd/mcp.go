@@ -34,7 +34,7 @@ HTTP/WebSocket endpoint and proxies stdio JSON-RPC over the WS.
 URL precedence:
   1. --url flag
   2. CHEPHERD_MCP_URL env var
-  3. ws://host.containers.internal:9090/mcp/ws  (Podman default)
+  3. ws://chepherd:9090/mcp/ws  (chepherd-net podman default, #398 v2)
 
 Not intended for interactive use. The chepherd 'run' command emits the
 agent MCP config pointing here automatically when it spawns peers.`,
@@ -42,7 +42,7 @@ agent MCP config pointing here automatically when it spawns peers.`,
 }
 
 func init() {
-	mcpCmd.Flags().StringVar(&mcpFlagURL, "url", "", "chepherd MCP WebSocket URL (default: $CHEPHERD_MCP_URL or ws://host.containers.internal:9090/mcp/ws)")
+	mcpCmd.Flags().StringVar(&mcpFlagURL, "url", "", "chepherd MCP WebSocket URL (default: $CHEPHERD_MCP_URL or ws://chepherd:9090/mcp/ws — #398 v2)")
 	rootCmd.AddCommand(mcpCmd)
 }
 
@@ -52,10 +52,15 @@ func runMCPCmd(_ *cobra.Command, _ []string) error {
 		url = os.Getenv("CHEPHERD_MCP_URL")
 	}
 	if url == "" {
-		// Podman-friendly default: host.containers.internal resolves to
-		// the host's bridge IP inside a rootless container. On K8s this
-		// is overridden via env to ws://chepherd:9090/mcp/ws.
-		url = "ws://host.containers.internal:9090/mcp/ws"
+		// #398 P0 v2 — chepherd-net container-name DNS default.
+		// scripts/start.sh attaches chepherd + every agent to the
+		// `chepherd-net` user-defined podman network so agents reach
+		// the MCP server by container name without host-loopback
+		// gymnastics. Bare-host dev mode (chepherd outside chepherd-net):
+		// override via CHEPHERD_MCP_URL=ws://host.containers.internal:9090/mcp/ws
+		// + run with --network slirp4netns... etc. K8s in-cluster
+		// matches by coincidence (chepherd Service DNS).
+		url = "ws://chepherd:9090/mcp/ws"
 	}
 	if err := mcpserver.BridgeStdioToHTTP(url); err != nil {
 		return fmt.Errorf("chepherd mcp: %w", err)
