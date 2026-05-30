@@ -766,8 +766,12 @@ type MemberOverrideReq struct {
 // promptsHandler returns the default system prompt for a given role so
 // the SpawnModal can pre-fill its textarea + the operator can tweak.
 //
-//	GET /api/v1/prompts/worker    → { role: "worker",   prompt: "..." }
-//	GET /api/v1/prompts/shepherd  → { role: "shepherd", prompt: "..." }
+//	GET /api/v1/prompts/worker       → { role: "worker",      prompt: "..." }
+//	GET /api/v1/prompts/scrummaster  → { role: "scrummaster", prompt: "..." }
+//	GET /api/v1/prompts/shepherd     → { role: "shepherd",    prompt: "..." }
+//	                                   (legacy back-compat alias; same body)
+//
+// Refs #292.
 func (s *Server) promptsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -776,7 +780,7 @@ func (s *Server) promptsHandler(w http.ResponseWriter, r *http.Request) {
 	role := strings.TrimPrefix(r.URL.Path, "/api/v1/prompts/")
 	var body string
 	switch role {
-	case "shepherd":
+	case "scrummaster", "shepherd": // legacy alias for back-compat (#292)
 		body = prompts.ScrumMaster
 	default:
 		body = prompts.Worker

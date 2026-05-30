@@ -97,7 +97,7 @@
     <div class="body">
       <div class="primer">
         <strong>How team templates work.</strong> A template is a recipe for a team
-        (e.g. <em>pair</em> = 1 implementer + 1 reviewer + 1 shepherd). Applying it
+        (e.g. <em>pair</em> = 1 implementer + 1 reviewer + 1 Scrum Master). Applying it
         spawns every member at once + auto-joins them to a new team. Each member
         can be a <strong>Fresh</strong> session OR <strong>Resumed</strong> from a
         previous Claude session in this working directory — picked per-member
@@ -118,7 +118,7 @@
         <label>Team name (defaults to template name) <input bind:value={team} placeholder={selected || ''} /></label>
         <label>Topology <select bind:value={topology}>
           <option value="">(template default)</option>
-          <option value="hub">hub (shepherd in the middle)</option>
+          <option value="hub">hub (Scrum Master in the middle)</option>
           <option value="mesh">mesh (peer-to-peer)</option>
           <option value="custom">custom</option>
         </select></label>
@@ -135,7 +135,7 @@
           {#each detail.members as m}
             <div class="member">
               <div class="m-head">
-                <span class="m-icon" class:shepherd={m.role === 'shepherd'}>{m.role === 'shepherd' ? '✻' : '●'}</span>
+                <span class="m-icon" class:scrummaster={['shepherd','scrummaster'].includes(m.role)}>{['shepherd','scrummaster'].includes(m.role) ? '✻' : '●'}</span>
                 <span class="m-name">{m.name}</span>
                 <span class="m-role">· {m.role} · {m.agent}</span>
               </div>
@@ -201,7 +201,7 @@
   .member:last-child { border-bottom: none; }
   .m-head { font-size: 0.82rem; }
   .m-icon { color: var(--accent-2); margin-right: 0.35rem; }
-  .m-icon.shepherd { color: var(--accent); }
+  .m-icon.scrummaster { color: var(--accent); }
   .m-name { font-weight: 600; }
   .m-role { color: var(--fg-muted); }
   details.fork { margin-top: 1rem; border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.55rem 0.7rem; background: var(--bg); }
