@@ -2254,9 +2254,21 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 		// section so the second-and-later racers pick up the first
 		// racer's freshly-written pair (no spurious second POST).
 		r.claudeRefreshMu.Lock()
-		// Re-read vault inside the lock — by the time we got here,
-		// another racer may have already refreshed + written back.
-		if r.vault != nil && spec.ClaudeTokenID != "" {
+		// Re-read vault inside the lock IFF we previously selected from
+		// vault — by the time we got here, another racer may have
+		// already refreshed + written back, and we want to pick up that
+		// fresher pair instead of double-POSTing the same stale refresh.
+		//
+		// #374 P0 — if we previously selected from the host (#369 P0
+		// path), re-reading vault here would CLOBBER the fresh-host
+		// payload with the stale vault snapshot. The architect's
+		// 2026-05-30 walk showed: log said "preferring host" but the
+		// bytes written to /run/secrets/claude-credentials were the
+		// 13H-stale vault payload — operator's claude printed
+		// "Please run /login · API Error: 401". Pin host bytes
+		// through to the WriteFile below by gating the re-read.
+		pickedFromHost := strings.HasPrefix(src, "host-fallback:")
+		if !pickedFromHost && r.vault != nil && spec.ClaudeTokenID != "" {
 			if v, err := r.vault.GetValue(spec.ClaudeTokenID); err == nil && v != "" {
 				payload = v
 			}

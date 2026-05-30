@@ -67,6 +67,13 @@ func stalePayload() string {
 //
 // Pre-#264 this test FAILED — every concurrent caller POST'd.
 func TestRefreshTokenSerialisedAcrossConcurrentSpawns(t *testing.T) {
+	// Isolate HOME so the #369 P0 / #371 host-vs-vault comparison sees
+	// no host-side .credentials.json. Without this, a developer host
+	// that has real fresh ~/.claude/.credentials.json would have the
+	// materializer pick the host bytes (fresh, no refresh needed) and
+	// post-#371 the test sees 0 POSTs instead of 1. Determinism wants
+	// vault-as-sole-source here.
+	t.Setenv("HOME", t.TempDir())
 	var posts int64
 	// Mock Anthropic OAuth endpoint that COUNTS requests + invalidates
 	// the refresh-token on first use to mirror real-world behaviour
