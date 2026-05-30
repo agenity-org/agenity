@@ -242,8 +242,16 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		// this chepherd binary's UUID so a parallel chepherd binary
 		// on the same host can't clobber or reap these containers.
 		"--name", containerNamePrefix(r.instanceUUID)+agentName,
-		// Default bridge network — sibling to chepherd on host podman.
-		"--network", "bridge",
+		// #365 — network mode. Default is slirp4netns
+		// (rootless-friendly; no CNI plugin required) which matches
+		// the CHEPHERD_MCP_URL=ws://10.0.2.100:... env contract. Pre-
+		// #365 default was "bridge" which fails on rootless podman
+		// without CNI ("failed to mount netns directory for rootless
+		// cni: no such file or directory", exit 127). Operators on
+		// rootful podman with CNI installed (or who explicitly want
+		// per-pod network isolation) override via the CHEPHERD_CONTAINER_NETWORK
+		// env var.
+		"--network", agentNetworkMode(),
 		// Per-agent persistent home (claude session files, config).
 		"-v", hostHome+":/home/agent:rw,U",
 		// Working repo — read/write. Source is the host path; the
@@ -464,7 +472,7 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	dockerArgs := []string{
 		"docker", "run", "--interactive", "--tty",  // #363: corpse persists
 		"--name", containerNamePrefix(r.instanceUUID) + agentName,
-		"--network", "bridge",
+		"--network", agentNetworkMode(),
 		"-v", agentHomeDir + ":/home/agent:rw",
 		"-v", cwd + ":" + cwd + ":rw",
 		"--workdir", cwd,
@@ -624,4 +632,25 @@ func imageExists(image string) bool {
 		return true
 	}
 	return false
+}
+
+// agentNetworkMode returns the podman/docker --network argument used
+// when spawning agent containers. Default: slirp4netns (rootless-
+// friendly + no CNI plugin required + matches CHEPHERD_MCP_URL gateway
+// IP contract). Override via CHEPHERD_CONTAINER_NETWORK env var for
+// operators on rootful podman with CNI or those who explicitly need
+// per-pod bridge isolation.
+//
+// Common values:
+//   - "slirp4netns:port_handler=slirp4netns" (default; rootless)
+//   - "host"   (no isolation; simplest sibling-to-chepherd case)
+//   - "bridge" (per-pod isolation; requires CNI plugin)
+//   - "none"   (no network at all)
+//
+// Refs #365 P0.
+func agentNetworkMode() string {
+	if m := os.Getenv("CHEPHERD_CONTAINER_NETWORK"); m != "" {
+		return m
+	}
+	return "slirp4netns:port_handler=slirp4netns"
 }
