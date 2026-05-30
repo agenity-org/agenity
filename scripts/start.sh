@@ -67,9 +67,57 @@ podman rm -f chepherd 2>/dev/null || true
 # without any host-loopback gymnastics. Sets up cleanly for v0.9.4
 # Option C (full sibling-pod architecture).
 #
-# `podman network create` is idempotent via `|| true` — re-runs across
-# operator bounces don't error out if the network already exists.
-podman network create chepherd-net 2>/dev/null || true
+# #403 P0 — chepherd-net depends on a working podman network backend.
+# Podman 4.x+ ships netavark by default and needs no extra packages.
+# Podman 3.x defaults to CNI which requires /opt/cni/bin/* plugins
+# from the containernetworking-plugins package. On Ubuntu 22.04
+# default install the CNI plugins are missing → chepherd container
+# fails to start with "failed to mount netns directory for rootless
+# cni: no such file or directory" (architect's #403 repro). Detect
+# the backend up-front + fall back to slirp4netns + propagate the
+# choice to the runtime so agents get the matching network mode.
+NETWORK_BACKEND="$(podman info --format '{{.Host.NetworkBackend}}' 2>/dev/null || echo unknown)"
+USE_CHEPHERD_NET=0
+case "${NETWORK_BACKEND}" in
+  netavark)
+    USE_CHEPHERD_NET=1
+    ;;
+  cni)
+    # CNI requires /opt/cni/bin/bridge etc. Probe one canonical plugin
+    # before trusting CNI; missing plugins are the most common cause
+    # of "failed to mount netns directory" (#403 P0).
+    if [ -x /opt/cni/bin/bridge ] && [ -x /opt/cni/bin/firewall ]; then
+      USE_CHEPHERD_NET=1
+    fi
+    ;;
+esac
+if [ "${USE_CHEPHERD_NET}" -eq 1 ]; then
+  # `podman network create` is idempotent via `|| true` — re-runs
+  # across operator bounces don't error if the network already exists.
+  podman network create chepherd-net 2>/dev/null || true
+  NETWORK_ARGS=(--network chepherd-net)
+  AGENT_NETWORK_ENV=(-e "CHEPHERD_CONTAINER_NETWORK=chepherd-net" -e "CHEPHERD_MCP_URL=ws://chepherd:9090/mcp/ws")
+  HOST_PORT_BIND="127.0.0.1"
+  echo "→ Network: chepherd-net (backend=${NETWORK_BACKEND}, agents reach MCP via container DNS)" >&2
+else
+  # Fallback: slirp4netns. Multi-agent MCP via chepherd-net DNS isn't
+  # available; chepherd-net fix #398v2/#395/#396 ship as advisory
+  # capability rather than guaranteed. Operators install
+  # containernetworking-plugins or upgrade to netavark for full
+  # multi-agent operation.
+  NETWORK_ARGS=()
+  AGENT_NETWORK_ENV=(-e "CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns" -e "CHEPHERD_MCP_URL=ws://host.containers.internal:9090/mcp/ws")
+  HOST_PORT_BIND="0.0.0.0"  # so agents can at least reach via 10.0.2.2 (kernel-isolation caveat per #398 v1 still applies, but this is the best we can do)
+  echo "" >&2
+  echo "⚠  WARNING: podman network backend '${NETWORK_BACKEND}' lacks required plugins (#403 P0)." >&2
+  echo "   Falling back to slirp4netns. Multi-agent MCP toolkit may be degraded:" >&2
+  echo "   - Agent → chepherd MCP reachable via host.containers.internal (10.0.2.2)" >&2
+  echo "   - Kernel-level rootless-loopback isolation may still block back-connects" >&2
+  echo "   For full multi-agent capability, install containernetworking-plugins (apt:" >&2
+  echo "   containernetworking-plugins or dnf: containernetworking-plugins) OR upgrade" >&2
+  echo "   to Podman 4.x+ (netavark backend). Bounce chepherd after install." >&2
+  echo "" >&2
+fi
 
 if [ -z "${NO_HOST_CLAUDE}" ] && [ ${#CLAUDE_MOUNTS[@]} -gt 0 ]; then
   echo "→ Starting chepherd (sibling-container architecture, host ~/.claude auto-detected)..."
@@ -86,18 +134,24 @@ exec podman run \
   --name chepherd \
   --rm \
   --detach \
-  --network chepherd-net \
-  `# ↑ #398 P0 v2: chepherd attaches to chepherd-net so agent sibling containers (also attached)` \
-  `# can reach the MCP server via container-name DNS: ws://chepherd:9090/mcp/ws. Replaces the` \
-  `# Option A 0.0.0.0:9090 host-port binding which slirp4netns kernel-isolation blocked agents` \
-  `# from reaching despite the host-side bind succeeding. 9090 host-port mapping kept only for` \
-  `# operator-side curl debugging; agents use the in-network address.` \
+  "${NETWORK_ARGS[@]}" \
+  `# ↑ #398 P0 v2 + #403 fallback: NETWORK_ARGS expands to "--network chepherd-net" when CNI/` \
+  `# netavark plugins are present, OR to nothing (default slirp4netns) when the backend isn't` \
+  `# functional. The runtime gets the matching CHEPHERD_CONTAINER_NETWORK + CHEPHERD_MCP_URL` \
+  `# via AGENT_NETWORK_ENV below so agentNetworkMode() and the MCP URL default both pick the` \
+  `# fallback path consistently.` \
   -e HOME=/home/chepherd \
   -p "127.0.0.1:${PORT}:8080" \
-  -p "127.0.0.1:9090:9090" \
-  `# ↑ #398 v2: back to 127.0.0.1-only for the host-port mapping. Agents reach chepherd via` \
-  `# chepherd-net (container-name DNS); this mapping is only for operator-side curl/debug from` \
-  `# the host. v0.9.4 Option C will drop this mapping entirely + put MCP in a sibling container.` \
+  -p "${HOST_PORT_BIND}:9090:9090" \
+  `# ↑ #398 v2: 127.0.0.1 binding when chepherd-net is active (agents use container DNS).` \
+  `# 0.0.0.0 binding when falling back to slirp4netns (agents need to reach the host loopback` \
+  `# via 10.0.2.2; #398 v1 caveat about kernel-level isolation still applies but this is the` \
+  `# best we can do without CNI). v0.9.4 Option C drops this mapping entirely.` \
+  "${AGENT_NETWORK_ENV[@]}" \
+  `# ↑ #403 P0: propagate the chepherd-net-vs-fallback choice to the runtime so agentNetworkMode()` \
+  `# and the MCP URL default match what scripts/start.sh actually achieved. Without this, the` \
+  `# runtime might pick chepherd-net for agents while chepherd itself fell back to slirp4netns,` \
+  `# and agent spawns would error out trying to attach to a non-existent network.` \
   -v "${STATE_DIR}:/home/chepherd/.local/state/chepherd:rw" \
   "${CLAUDE_MOUNTS[@]}" \
   -v "${REPOS_DIR}:/home/chepherd/repos:rw" \
