@@ -56,6 +56,7 @@ var (
 	runFlagMCPListen             string
 	runFlagFederationRegistryURL string // #225 row C1 — hosted peer registry
 	runFlagFederationPublicURL   string // #225 row C1 — this chepherd's public URL for announcements
+	runFlagIOgridEndpoint        string // #318 (#225 row E1) — iogrid recipe-dispatch endpoint URL
 	runFlagScrumMasterName       string // #225 row F4 — name for the auto-spawned Scrum Master (back-compat default: "shepherd")
 )
 
@@ -93,6 +94,8 @@ func init() {
 	// reverse-proxy + DNS-name setups).
 	runCmd.Flags().StringVar(&runFlagFederationRegistryURL, "federation-registry-url", "",
 		"hosted peer registry URL (empty = disabled). Peer discovery POSTs /announce + GETs /peers here.")
+	runCmd.Flags().StringVar(&runFlagIOgridEndpoint, "iogrid-endpoint", "",
+		"iogrid recipe-dispatch endpoint URL — empty disables the iogrid extension on agent-card.json. When set, peers can discover this chepherd's iogrid surface via /.well-known/agent-card.json's x-iogrid block.")
 	runCmd.Flags().StringVar(&runFlagFederationPublicURL, "federation-public-url", "",
 		"this chepherd's public URL announced to peers (default: derived from --listen).")
 	runCmd.Flags().StringVar(&runFlagScrumMasterName, "scrummaster-name", "shepherd",
@@ -490,6 +493,7 @@ func newAgentCard(listenAddr string) *a2a.AgentCard {
 			"oidc":     {Type: "openIdConnect"},
 		},
 		XChepherdP2P: a2a.DefaultExtension(),
+		XIOgrid:      iogridExtension(),
 	}
 }
 
@@ -604,4 +608,21 @@ func pokeShepherd(sess *session.Session, body string) {
 	_, _ = sess.Write([]byte(body))
 	time.Sleep(120 * time.Millisecond)
 	_, _ = sess.Write([]byte("\r"))
+}
+
+
+// iogridExtension returns the AgentCard's x-iogrid extension shape.
+// Returns nil when --iogrid-endpoint is unset (extension omitted from
+// the marshalled agent-card.json). When set, defaults are populated
+// via a2a.DefaultIOgridExtension() and the Endpoint URL is taken from
+// the operator flag.
+//
+// Refs #318 (#225 row E1).
+func iogridExtension() *a2a.IOgridExtension {
+	if runFlagIOgridEndpoint == "" {
+		return nil
+	}
+	ext := a2a.DefaultIOgridExtension()
+	ext.Endpoint = runFlagIOgridEndpoint
+	return ext
 }

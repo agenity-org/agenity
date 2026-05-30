@@ -39,6 +39,13 @@ type AgentCard struct {
 	// A2A clients ignore unknown extensions; chepherd-aware clients
 	// negotiate WebRTC P2P via this block. Plumbing arrives in S5.
 	XChepherdP2P *ChepherdP2PExtension `json:"x-chepherd-p2p,omitempty"`
+
+	// XIOgrid is the chepherd-defined extension advertising the iogrid
+	// recipe-dispatch endpoint. Populated by cmd/run.go when the
+	// --iogrid-endpoint flag is set. Vanilla A2A clients ignore;
+	// chepherd-aware iogrid catalogues can discover a peer that
+	// accepts recipes via this block. Refs #318 (#225 row E1).
+	XIOgrid *IOgridExtension `json:"x-iogrid,omitempty"`
 }
 
 // AgentCapabilities advertises which A2A features this agent supports.
