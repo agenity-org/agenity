@@ -91,26 +91,30 @@
       b: {
         kind: 'h', ratio: 0.68,
         a: {
-          kind: 'v', ratio: 0.78,
+          kind: 'v', ratio: 0.62,
+          // #361 — center column: terminal up top, then a 3-way
+          // horizontal band of federation / a2a-inbox / multi-host
+          // BELOW it so the v0.9.3 cross-instance surfaces are
+          // operator-visible on fresh /v0.9.3/ load.
           a: { kind: 'pane', id: 'p2', widget: 'terminal', config: {} },
-          b: { kind: 'pane', id: 'p3', widget: 'events', config: {} },
+          b: {
+            kind: 'h', ratio: 0.34,
+            a: { kind: 'pane', id: 'p_fed', widget: 'federation', config: {} },
+            b: {
+              kind: 'h', ratio: 0.5,
+              a: { kind: 'pane', id: 'p_a2a', widget: 'a2a-inbox', config: {} },
+              b: { kind: 'pane', id: 'p_mh', widget: 'multi-host', config: {} },
+            },
+          },
         },
         b: {
-          kind: 'v', ratio: 0.55,
+          kind: 'v', ratio: 0.5,
           a: { kind: 'pane', id: 'p4', widget: 'agent-details', config: {} },
           b: {
-            kind: 'v', ratio: 0.5,
+            kind: 'v', ratio: 0.55,
             a: { kind: 'pane', id: 'p5', widget: 'shepherd-assessment-card', config: {} },
-            b: {
-              kind: 'v', ratio: 0.33,
-              a: { kind: 'pane', id: 'p6', widget: 'inbox', config: {} },
-              b: {
-                kind: 'v', ratio: 0.5,
-                a: { kind: 'pane', id: 'p7', widget: 'federation', config: {} },
-                b: { kind: 'pane', id: 'p8', widget: 'a2a-inbox', config: {} },
-              },
-            },
-          }
+            b: { kind: 'pane', id: 'p6', widget: 'inbox', config: {} },
+          },
         },
       },
     };
