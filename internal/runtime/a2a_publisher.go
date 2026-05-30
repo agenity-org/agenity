@@ -25,6 +25,14 @@ func stripANSI(s string) string {
 	return ansiEscapeRE.ReplaceAllString(s, "")
 }
 
+// promptCursorUTF8 is the UTF-8 byte sequence for claude-code's
+// prompt cursor `❯` (U+276F HEAVY RIGHT-POINTING ANGLE QUOTATION
+// MARK ORNAMENT). #385 P1 uses its presence in the response buffer
+// as the gate for silence-finalize — its appearance marks the
+// boundary between claude-code's startup chrome (banner +
+// permission warning) and steady-state response.
+var promptCursorUTF8 = []byte{0xe2, 0x9d, 0xaf}
+
 // silenceWindow is the period of no PTY output that triggers the
 // "response complete" signal in pumpPTYToBroker. Configurable via
 // CHEPHERD_A2A_SILENCE_WINDOW_MS env var (default 1500ms). Shorter
@@ -165,6 +173,23 @@ func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Ta
 			// #379 P0 — silence window elapsed → response complete.
 			// Fire the completer (persists agent response + flips
 			// state) and the broker's done event, then exit.
+			//
+			// #385 P1 — gate silence-finalize on having observed
+			// claude-code's prompt cursor (❯, UTF-8 e2 9d af) at
+			// least once. The cursor marks the boundary between
+			// startup chrome and steady-state response; without
+			// this gate, the FIRST message-send to a freshly-
+			// spawned agent's completer fires during banner-paint
+			// silence and captures banner+permission-warning chrome
+			// instead of the actual reply. Subsequent messages
+			// work either way (cursor already in buf), so this is
+			// strictly the first-message-after-spawn surface.
+			// sub.Done + channel-close paths intentionally bypass
+			// this gate so fast-exiting agents finalize cleanly.
+			if !bytes.Contains(responseBuf.Bytes(), promptCursorUTF8) {
+				silenceTimer.Reset(silence)
+				continue
+			}
 			finalize()
 			return
 		case <-sub.Done:
