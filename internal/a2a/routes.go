@@ -38,6 +38,18 @@ func RegisterRoutes(mux *http.ServeMux, card *AgentCard, router *Router, authVal
 	}
 }
 
+// RegisterJWKS publishes the JWKS document at /.well-known/jwks.json
+// so peers can verify JWTs signed by this chepherd instance without
+// out-of-band public-key sharing (v0.9.3 #225 row B2). Caller supplies
+// the marshalled JSON (built in internal/auth via PublicJWK so this
+// package stays ECDSA-free). Empty body skips the endpoint.
+func RegisterJWKS(mux *http.ServeMux, jwksBody []byte) {
+	if len(jwksBody) == 0 {
+		return
+	}
+	mux.HandleFunc(JWKSPath, ServeJWKS(jwksBody))
+}
+
 // TokenValidator is the minimal seam between RegisterRoutes and an
 // AuthProvider. Defined here so internal/a2a doesn't import
 // internal/auth (cyclic dep — auth depends on persistence which
