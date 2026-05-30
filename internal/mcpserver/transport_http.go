@@ -80,12 +80,18 @@ func (s *Server) stopHTTP() {
 // JSON-RPC dispatch loop the legacy Unix-socket transport used. One frame
 // per message; ping/pong handled by gorilla.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	// #414 P0 — log every WS connection attempt so operator can grep
+	// for handshake failures / auth rejections / agent identity. The
+	// agent's `/mcp` only sees "-32000" or "disconnected"; the
+	// server-side log shows exactly which gate the request hit.
 	if code, msg := s.requireAuth(r); code != 0 {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp] WS auth REJECTED from %s: %s\n", r.RemoteAddr, msg)
 		http.Error(w, msg, code)
 		return
 	}
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp] WS upgrade FAILED from %s: %v\n", r.RemoteAddr, err)
 		http.Error(w, "ws upgrade failed", http.StatusBadRequest)
 		return
 	}
@@ -95,6 +101,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// initial $/chepherd/identify frame. Both are supported so existing
 	// bridge code works.
 	connAgent := r.URL.Query().Get("agent")
+	fmt.Fprintf(os.Stderr, "[chepherd-mcp] WS connected from %s (agent=%q)\n", r.RemoteAddr, connAgent)
 
 	c.SetReadLimit(4 * 1024 * 1024)
 	for {
@@ -136,6 +143,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if code, msg := s.requireAuth(r); code != 0 {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp] RPC auth REJECTED from %s: %s\n", r.RemoteAddr, msg)
 		http.Error(w, msg, code)
 		return
 	}
