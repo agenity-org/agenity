@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,11 +51,36 @@ func TestNewRunner_PodKindRequiresKubeconfig(t *testing.T) {
 
 func TestNewRunner_PodKindWithKubeconfig(t *testing.T) {
 	t.Parallel()
+	// Write a minimal kubeconfig — #352 D1.7 added kubeconfig discovery
+	// which requires the file to exist + parse cleanly.
+	dir := t.TempDir()
+	kcPath := filepath.Join(dir, "kubeconfig")
+	const minKubeconfig = `apiVersion: v1
+kind: Config
+current-context: test
+clusters:
+- name: test
+  cluster:
+    server: https://127.0.0.1:6443
+    insecure-skip-tls-verify: true
+contexts:
+- name: test
+  context:
+    cluster: test
+    user: test
+users:
+- name: test
+  user:
+    token: test-token
+`
+	if err := os.WriteFile(kcPath, []byte(minKubeconfig), 0600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
 	r, err := NewRunner(RunnerConfig{
 		Kind:           RunnerKindPod,
 		Store:          openTestStore(t),
 		StateDir:       t.TempDir(),
-		KubeconfigPath: filepath.Join(t.TempDir(), "kubeconfig"),
+		KubeconfigPath: kcPath,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner pod: %v", err)
