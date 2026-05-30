@@ -22,7 +22,7 @@
 </script>
 
 <div class="spider-card">
-  <h4>Shepherd assessment</h4>
+  <h4>Scrum Master assessment</h4>
   {#if !info}
     <p class="hint">No agent selected.</p>
   {:else if info.scorecard}
@@ -36,7 +36,7 @@
       <p class="note">{info.scorecard.note}</p>
     {/if}
   {:else}
-    <p class="hint">Shepherd assessing — first scorecard arrives within 60s.</p>
+    <p class="hint">Scrum Master assessing — first scorecard arrives within 60s.</p>
   {/if}
 </div>
 

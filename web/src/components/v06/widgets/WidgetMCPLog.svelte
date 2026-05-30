@@ -10,7 +10,7 @@
 
   const MCP_KINDS = new Set([
     'scorecard', 'verdict', 'note', 'alert_human', 'review_axis',
-    'prompt_poke', 'shepherd_handoff', 'shepherd_kickoff_retry',
+    'prompt_poke', 'shepherd_handoff', 'shepherd_kickoff_retry', // back-compat: legacy wire event kinds
     'template_applied', 'pause', 'unpause',
   ]);
 

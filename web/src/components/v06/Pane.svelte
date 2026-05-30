@@ -138,7 +138,7 @@
         <select class="agent-pick" value={node.config?.agent || selectedAgent || ''} on:change={pickPaneAgent} title="agent attached to this terminal">
           <option value="">(pick agent)</option>
           {#each (sessions || []) as s}
-            <option value={s.name}>{s.role === 'shepherd' ? '✻ ' : '● '}{s.name}</option>
+            <option value={s.name}>{['shepherd','scrummaster'].includes(s.role) ? '✻ ' : '● '}{s.name}</option>
           {/each}
         </select>
         {@const a = paneAgent()}

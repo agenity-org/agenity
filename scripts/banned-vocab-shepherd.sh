@@ -39,11 +39,21 @@ hits=$(git grep -nE '[Ss]hepherd' -- \
     'internal/prompts/*.md' \
     '*.astro' \
     'web/src/components/Dashboard.svelte' \
+    'web/src/components/v06/Pane.svelte' \
+    'web/src/components/v06/SpawnModal.svelte' \
+    'web/src/components/v06/SpawnWizard.svelte' \
     'web/src/components/v06/TemplatePicker.svelte' \
     'web/src/components/v06/Workspace.svelte' \
     'web/src/components/v06/TeamSettings.svelte' \
     'web/src/components/v06/AgentSettings.svelte' \
+    'web/src/components/v06/widgets/WidgetCanon.svelte' \
+    'web/src/components/v06/widgets/WidgetEvents.svelte' \
+    'web/src/components/v06/widgets/WidgetInbox.svelte' \
+    'web/src/components/v06/widgets/WidgetMCPLog.svelte' \
     'web/src/components/v06/widgets/WidgetSessionBoard.svelte' \
+    'web/src/components/v06/widgets/WidgetSessionList.svelte' \
+    'web/src/components/v06/widgets/WidgetSpider.svelte' \
+    'web/src/components/v06/widgets/WidgetTerminal.svelte' \
     || true)
 
 violations=""
