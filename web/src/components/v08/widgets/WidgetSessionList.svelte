@@ -62,19 +62,41 @@
       );
       out.push({ team: t, members });
     }
-    // Unaffiliated: agents with no membership, sorted ASC by name
+    // Unaffiliated: agents with no membership, sorted ASC by name.
+    // #421 P0 — split into "live unaffiliated" (running container, no
+    // team membership) and "orphan" (persisted-but-not-running session
+    // rows from prior bounces). Orphans look like real teammates if
+    // mixed with live unaffiliated agents — operator quote: "when I
+    // start agent, it also show some unaffiliated shadows as well I
+    // don't know that they are". Render orphans in their own collapsed
+    // section with a banner explaining what they are + pointing at
+    // the existing Clean-up-orphans button.
     const memberAgents = new Set((memberships || []).map(m => m.agent_name));
-    const unaffiliated = (sessions || [])
+    const unaffiliatedAll = (sessions || [])
       .filter(s => !memberAgents.has(s.name))
       .sort((a, b) => a.name.localeCompare(b.name));
-    if (unaffiliated.length) {
+    const liveUnaffiliated = unaffiliatedAll.filter(s => s && s.live !== false);
+    const orphanUnaffiliated = unaffiliatedAll.filter(s => s && s.live === false);
+    if (liveUnaffiliated.length) {
       out.push({
         team: { name: 'Unaffiliated', topology: 'mesh' },
-        members: unaffiliated.map(s => ({ agent_name: s.name, role: s.role })),
+        members: liveUnaffiliated.map(s => ({ agent_name: s.name, role: s.role })),
+      });
+    }
+    if (orphanUnaffiliated.length) {
+      out.push({
+        team: { name: 'Orphans', topology: 'cleanup', isOrphanGroup: true },
+        members: orphanUnaffiliated.map(s => ({ agent_name: s.name, role: s.role })),
       });
     }
     return out;
   });
+
+  // #421 P0 — collapsed-by-default state for the Orphans section.
+  // Operator can expand by clicking the team header; state is per-
+  // session-tab (not persisted across reloads) so a fresh page load
+  // keeps clutter hidden.
+  let orphansExpanded = $state(false);
 
   // #247 — multi-select substrate. `selectedAgent` (single string) is
   // preserved as the WORKSPACE-level focus prop (back-compat for every
@@ -398,11 +420,28 @@
 
 <div class="list">
   {#each tree as group (group.team.name)}
-    <section class="team">
-      <h3 class="team-head" onclick={() => openTeamSettings(group.team, group.members)} title="open team settings">
-        <span class="team-name">{group.team.name}</span>
-        <span class="team-meta">· {group.team.topology} · {group.members.length}</span>
-      </h3>
+    <section class="team" class:orphan-group={group.team.isOrphanGroup}>
+      {#if group.team.isOrphanGroup}
+        <!-- #421 P0 — orphan group: collapsed by default, banner
+             explains the rows, click team-head to expand. -->
+        <h3 class="team-head orphan-head"
+            onclick={() => orphansExpanded = !orphansExpanded}
+            title="Orphan session rows from prior chepherd bounces — click to expand">
+          <span class="team-name">{orphansExpanded ? '▾' : '▸'} {group.team.name}</span>
+          <span class="team-meta">· {group.members.length} {group.members.length === 1 ? 'row' : 'rows'} from prior bounces</span>
+        </h3>
+        {#if orphansExpanded}
+          <p class="orphan-banner">
+            These are session rows from prior chepherd bounces — their containers are gone but the records remain. Click <code>×</code> on a row to delete one, or <code>✕ Clean up orphans</code> at the top of this pane to delete all at once.
+          </p>
+        {/if}
+      {:else}
+        <h3 class="team-head" onclick={() => openTeamSettings(group.team, group.members)} title="open team settings">
+          <span class="team-name">{group.team.name}</span>
+          <span class="team-meta">· {group.team.topology} · {group.members.length}</span>
+        </h3>
+      {/if}
+      {#if !group.team.isOrphanGroup || orphansExpanded}
       <ul>
         {#each group.members as m (m.agent_name)}
           {@const agent = agentByName(m.agent_name)}
@@ -432,6 +471,7 @@
           {/if}
         {/each}
       </ul>
+      {/if}
     </section>
   {/each}
   {#if !tree.length}
@@ -467,6 +507,12 @@
   .team-head { cursor: pointer; }
   .team-head:hover { color: var(--accent); }
   .team-meta { color: var(--fg-faint); font-weight: normal; text-transform: none; letter-spacing: 0; }
+  /* #421 P0 — orphan group: muted color, expansion indicator, banner */
+  .orphan-group { opacity: 0.85; }
+  .orphan-head { color: var(--fg-faint); }
+  .orphan-head:hover { color: var(--warn, #d99); }
+  .orphan-banner { background: var(--bg-elev); border-left: 2px solid var(--warn, #d99); padding: 0.45rem 0.6rem; margin: 0.2rem 0.5rem 0.4rem; font-size: 0.78rem; color: var(--fg-muted); border-radius: 0 4px 4px 0; }
+  .orphan-banner code { background: var(--bg); padding: 0.05rem 0.3rem; border-radius: 3px; font-size: 0.74rem; color: var(--fg); }
   .team ul { list-style: none; padding: 0; margin: 0; }
   .team li { display: flex; align-items: center; gap: 0.45rem; padding: 0.4rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; border: 1px solid transparent; }
   .team li:hover { background: var(--bg-elev); border-color: var(--border); }
