@@ -53,12 +53,9 @@
   let vaultForm = $state({ provider: 'anthropic-api', label: '', env_var: '', value: '' });
   let vaultSaving = $state(false);
 
-  // #415 P0 — Per-session AgentCard. Pulls from #404 P0.1 endpoint so
-  // the Skills tab shows the actual chepherd skills + role capabilities
-  // the agent ships with, not just the stat sheet. Operator's complaint
-  // 2026-05-31: "🎮 Skills tab shows completely irrelevant content"
-  // because pre-#415 it ONLY showed stat sheet (context budget / model
-  // tier / etc). Now shows skills + capabilities ABOVE the stat sheet.
+  // #415 P0 — Per-session AgentCard. (Kept for backward compatibility +
+  // for the role-info copy below the matrix; the matrix itself uses the
+  // /api/v1/skills + /api/v1/agents/<id> data source per #423.)
   let agentCard = $state(null);
   async function loadAgentCard() {
     if (!agent?.name) return;
@@ -68,6 +65,88 @@
         agentCard = await r.json();
       }
     } catch {}
+  }
+
+  // #423 P0 — Discipline matrix data (mirrors SpawnWizard Stage3Skills
+  // data source so the two surfaces can't drift). Operator's complaint
+  // 2026-05-31: "you didn't get the requirement, the user is supposed
+  // to see the similar RACI like view during the wizard he saw in the
+  // skills." My #415 shipped hardcoded sections; this PR replaces them
+  // with the editable matrix.
+  //
+  // Single-agent view: 10 disciplines (rows) × 1 agent (column).
+  // Cells: ✓ = skill in agent.skills; · = not. Click flips + PATCHes
+  // /api/v1/agents/<agent_id> to persist.
+  let allSkills = $state([]);          // catalog of disciplines from /api/v1/skills
+  let agentEntity = $state(null);      // current agent record from /api/v1/agents/<id>
+  let savingCell = $state({});         // key=skillID → bool, dim cell while in-flight
+  let matrixLoadError = $state('');
+
+  async function loadDisciplineMatrix() {
+    if (!agent?.agent_id) {
+      matrixLoadError = 'agent has no agent_id — discipline matrix unavailable';
+      return;
+    }
+    matrixLoadError = '';
+    try {
+      const [skillsRes, agentRes] = await Promise.all([
+        fetch(`${API}/skills`),
+        fetch(`${API}/agents/${encodeURIComponent(agent.agent_id)}`),
+      ]);
+      if (skillsRes.ok) {
+        const sJ = await skillsRes.json();
+        const ss = Array.isArray(sJ) ? sJ : (sJ.skills || []);
+        // Same filter + sort as SpawnWizard Stage3Skills:65 — the 10
+        // read-only LEAN builtins, sorted by sort_order.
+        allSkills = ss.filter(s => s.read_only)
+          .sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999));
+      }
+      if (agentRes.ok) {
+        agentEntity = await agentRes.json();
+      }
+    } catch (e) {
+      matrixLoadError = 'Network error: ' + (e?.message || e);
+    }
+  }
+
+  function isSkillOn(skillID) {
+    const arr = agentEntity?.skills;
+    return Array.isArray(arr) && arr.includes(skillID);
+  }
+
+  async function toggleSkill(skillID) {
+    if (!agent?.agent_id || !agentEntity) return;
+    if (savingCell[skillID]) return;
+    savingCell = { ...savingCell, [skillID]: true };
+    const current = Array.isArray(agentEntity.skills) ? agentEntity.skills : [];
+    const next = current.includes(skillID)
+      ? current.filter(s => s !== skillID)
+      : [...current, skillID];
+    // Optimistic — UI updates immediately, server-side write is best-
+    // effort. On failure, revert.
+    const prevSkills = current;
+    agentEntity = { ...agentEntity, skills: next };
+    try {
+      const r = await fetch(`${API}/agents/${encodeURIComponent(agent.agent_id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: next }),
+      });
+      if (!r.ok) {
+        agentEntity = { ...agentEntity, skills: prevSkills };
+        const t = await r.text();
+        matrixLoadError = 'Save failed: ' + (t || `HTTP ${r.status}`);
+      } else {
+        // Replace agentEntity with the canonical server-returned record
+        // so any normalization (e.g. dedup) is reflected.
+        try { agentEntity = await r.json(); } catch {}
+      }
+    } catch (e) {
+      agentEntity = { ...agentEntity, skills: prevSkills };
+      matrixLoadError = 'Save failed: ' + (e?.message || e);
+    } finally {
+      savingCell = { ...savingCell, [skillID]: false };
+    }
   }
 
   onMount(() => {
@@ -86,6 +165,7 @@
     loadGlobalMD();
     loadVault();
     loadAgentCard();
+    loadDisciplineMatrix();
   });
 
   async function loadGlobalMD() {
@@ -302,40 +382,59 @@
           </div>
         </div>
       {:else if tab === 'skills'}
-        <!-- #415 P0 — chepherd skills + role capabilities from the
-             per-session AgentCard (#404 P0.1 endpoint). Pre-#415 this
-             tab only showed the stat sheet, which operator flagged as
-             "completely irrelevant" because the actual skill content
-             is the .claude/skills/*/SKILL.md set + the role-derived
-             capability mapping. -->
+        <!-- #423 P0 — Discipline matrix. Same source-of-truth as
+             SpawnWizard's Stage3Skills step (`/api/v1/skills` filtered
+             to read_only=true, sorted by sort_order). Single-agent
+             view = 1 column = the agent's role. Cells toggle the
+             agent.skills array via PATCH /api/v1/agents/<id>.
+             Replaces #415's hardcoded chepherd-skills + role-
+             capabilities sections (which operator flagged as wrong
+             shape: "the user is supposed to see the similar RACI
+             like view during the wizard he saw in the skills"). -->
         <section class="skills-section">
-          <h3 class="section-head">Chepherd skills shipped with this agent</h3>
-          <p class="hint">Skills are recipes the agent invokes via claude-code's <code>/skills</code> command. Read at spawn time from <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code>.</p>
-          {#if agentCard?.skills?.length}
-            <ul class="skill-list">
-              {#each agentCard.skills as skill}
-                <li><code>{skill}</code></li>
-              {/each}
-            </ul>
+          <h3 class="section-head">Discipline matrix · {agent?.name || ''}</h3>
+          <p class="hint">Click a cell to flip a discipline for this agent. Same matrix as the spawn wizard's Skills step — single column here because we're tuning one agent. Edits persist immediately to the agent's profile.</p>
+          {#if matrixLoadError}
+            <div class="err">{matrixLoadError}</div>
+          {/if}
+          {#if allSkills.length === 0}
+            <p class="empty">Loading discipline catalog…</p>
+          {:else if !agentEntity}
+            <p class="empty">Loading agent record…</p>
           {:else}
-            <p class="empty">No skills loaded — agent-card endpoint returned no skills, or the agent isn't running.</p>
+            <div class="grid-wrap">
+              <table class="skills-grid">
+                <thead>
+                  <tr>
+                    <th class="skill-th">discipline</th>
+                    <th class="role-th" title={agentEntity?.role_id || agent?.role || ''}>
+                      {agentEntity?.label || agent?.name || '—'}
+                      <span class="cnt">· {agentEntity?.role_id || agent?.role || '—'}</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each allSkills as sk (sk.id)}
+                    {@const on = isSkillOn(sk.id)}
+                    {@const saving = !!savingCell[sk.id]}
+                    <tr>
+                      <th class="skill-th" title={sk.description}>{sk.name}</th>
+                      <td
+                        class="cell"
+                        class:on
+                        class:saving
+                        on:click={() => toggleSkill(sk.id)}
+                        title={`${sk.name} (${on ? 'owned — click to remove' : 'click to add'})`}
+                      >{saving ? '⟳' : (on ? '✓' : '·')}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           {/if}
         </section>
         <section class="skills-section">
-          <h3 class="section-head">Role capabilities</h3>
-          <p class="hint">Capabilities advertised by this agent's role (<code>{agentCard?.role || agent?.role || '—'}</code>) — peer agents read these from <code>chepherd.get_peer_card</code> to know what to expect when interacting.</p>
-          {#if agentCard?.capabilities?.length}
-            <ul class="capability-list">
-              {#each agentCard.capabilities as cap}
-                <li><code>{cap}</code></li>
-              {/each}
-            </ul>
-          {:else}
-            <p class="empty">No capabilities — role may be unknown to the capability map. <code>general-purpose</code> is the default fallback.</p>
-          {/if}
-        </section>
-        <section class="skills-section">
-          <h3 class="section-head">Stat sheet · discipline matrix</h3>
+          <h3 class="section-head">Stat sheet</h3>
           <p class="hint">Per-agent stat sheet — defaults shipped per role; override only what you want. Save patches the runtime.</p>
         <div class="settings-grid">
           <label>Context budget<input type="number" min="0" step="10000" bind:value={skills.context_budget} /></label>
@@ -477,6 +576,27 @@
   .skill-list li, .capability-list li { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 0.18rem 0.5rem; font-size: 0.82rem; }
   .skill-list code, .capability-list code { background: transparent; padding: 0; color: var(--fg); }
   .empty { color: var(--fg-faint); font-size: 0.82rem; font-style: italic; }
+  /* #423 P0 — discipline matrix styles. Mirrored from
+     web/src/components/v09/Stage3Skills.svelte so the two surfaces
+     can't drift visually either. */
+  .grid-wrap { overflow-x: auto; padding: 0.2rem 0; }
+  .skills-grid { border-collapse: separate; border-spacing: 0; font-size: 0.84rem; width: 100%; table-layout: fixed; }
+  .skills-grid thead th { color: var(--fg-muted); font-weight: 600; padding: 0.4rem 0.55rem; text-align: center; border-bottom: 1px solid var(--border); }
+  .skills-grid .skill-th { text-align: left; color: var(--fg); padding-right: 0.7rem; font-weight: 500; width: 14rem; max-width: 14rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .skills-grid .role-th { color: var(--accent); min-width: 6rem; }
+  .skills-grid .cnt { color: var(--fg-faint); margin-left: 0.18rem; font-size: 0.72rem; }
+  .skills-grid .cell {
+    text-align: center; cursor: pointer; user-select: none;
+    padding: 0.32rem 0.55rem; min-width: 5rem;
+    color: var(--fg-faint); font-weight: 600;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background 80ms, color 80ms;
+  }
+  .skills-grid .cell:hover { background: rgba(135, 206, 235, 0.08); color: var(--fg); }
+  .skills-grid .cell.on { color: var(--accent); background: rgba(135,206,235,0.10); }
+  .skills-grid .cell.on:hover { background: rgba(135, 206, 235, 0.18); }
+  .skills-grid .cell.saving { opacity: 0.6; cursor: wait; }
+  .skills-grid tbody tr:hover { background: rgba(255,255,255,0.02); }
   label { display: block; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   input, select { width: 100%; padding: 0.4rem 0.55rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-family: ui-monospace, monospace; margin-top: 0.15rem; box-sizing: border-box; }
   pre.body { background: var(--bg-input); padding: 0.7rem; border-radius: 6px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; max-height: 50vh; }
