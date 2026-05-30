@@ -2046,11 +2046,16 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// becomes ws://chepherd:9090).
 	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
 	if mcpURL == "" {
-		gw := HostAddrForAgent()
-		if gw == "" {
-			gw = "127.0.0.1" // dev fallback; only works if container shares host net
-		}
-		mcpURL = "ws://" + gw + ":9090/mcp/ws"
+		// #369 — default to the Podman host-gateway DNS alias
+		// (--add-host host.containers.internal:host-gateway is set
+		// in the spawn argv). Works under slirp4netns + bridge +
+		// host network modes. Pre-#369 the default used
+		// HostAddrForAgent's outbound-IP heuristic which doesn't
+		// route back through slirp4netns NAT → claude banner showed
+		// '1 MCP server failed'. Operator can override via
+		// CHEPHERD_MCP_URL when chepherd is in-cluster (K8s Service
+		// DNS becomes ws://chepherd:9090).
+		mcpURL = "ws://host.containers.internal:9090/mcp/ws"
 	}
 	// Use the absolute path of the currently-running chepherd binary so
 	// the MCP-bridge subprocess matches the running runtime regardless
