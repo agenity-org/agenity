@@ -369,23 +369,36 @@ func extractAgentReplyText(history []map[string]any) string {
 	return ""
 }
 
-// ─── T3 — Two agents have a REAL A2A conversation ──────────────
+// ─── T3 — Live-claude A2A round-trip smoke test ─────────────────
 
-// TestT3_RealClaudePeerSummaryViaA2A pins the architect's PR2 walk
-// path verbatim:
+// TestT3_RealClaudePeerSummaryViaA2A — architect 2026-05-31 (post
+// #433 walk): narrowed scope from "peer-summary via orientation
+// skill" to "live-claude A2A round-trip". The 3-spawn + auto-dismiss
+// + network-fallback layers all VERIFIED on the architect's host;
+// only T3.C2 timed out because the orientation prompt + MCP tool
+// invocations + reply generation can take well past 90s.
 //
-//	1. Spawn 3-agent team (worker, reviewer, scrum-master)
-//	2. Send "Use team-orientation skill. List every peer + their
-//	   role + a short note on what they're doing."
-//	3. Assert response cites all 2 other peers by name + role
+// Architect's option-3 reshape:
+//   - Simpler prompt: "Reply with exactly one word: ready"
+//   - Larger timeout: 240s (defensive headroom on real claude's
+//     silence-finalize heuristic; see #387 caveat)
+//
+// The skill-actually-invoked + peer-name-cited + role-cited assertions
+// move to T5 (live status) + T6 (matrix persistence) where the time
+// budget for orientation-style replies is justified by the test goal.
+// T3 stays a "live-claude actually runs + A2A round-trips" smoke
+// test — proves the harness pipeline (spawn → boot → attach → send →
+// task lifecycle → reply extraction) is working end-to-end.
 //
 // Named assertions:
 //
 //	T3.C1 — message/send returns a working task ID
-//	T3.C2 — tasks/get transitions to 'completed' within 90s
+//	T3.C2 — tasks/get transitions to 'completed' within 240s
 //	T3.C3 — agent's response carries non-empty text
-//	T3.C4 — response mentions every other peer name in the team
-//	T3.C5 — response mentions each peer's role correctly
+//	T3.C4 — response contains 'ready' (claude followed the
+//	        instruction; proves not just any random text)
+//
+// (Former T3.C5 role-cited assertion lifts to T5/T6.)
 //
 // Failure messages cite assertion ID + the relevant excerpt of the
 // agent's actual reply so an architect review can diagnose the
@@ -442,15 +455,22 @@ func TestT3_RealClaudePeerSummaryViaA2A(t *testing.T) {
 	// summarize.
 	time.Sleep(3 * time.Second)
 
-	// T3.C1 — message/send returns a working task.
+	// T3.C1 — message/send returns a working task. Narrowed prompt
+	// per architect 2026-05-31: "Reply with exactly one word:
+	// ready". Keeps the test as a round-trip smoke; orientation
+	// skill exercising lives in T5+T6.
 	taskID, err := h.a2aSend(speakerSID,
-		"Use the team-orientation skill, then in one short paragraph list every other peer in your team by name + role + a brief note on what they do. Reply only with the summary; no extra preamble.")
+		"Reply with exactly one word: ready")
 	if err != nil {
 		t.Fatalf("T3.C1 FAIL: message/send: %v", err)
 	}
 
-	// T3.C2 — tasks/get reaches completed.
-	history, err := h.waitTaskCompleted(taskID, 90*time.Second)
+	// T3.C2 — tasks/get reaches completed. 240s budget gives real
+	// claude room to think + emit + silence-finalize on slow CPUs
+	// or first-conversation MCP warmups. Pre-tuning 90s was too
+	// tight; architect walk on host hit a 1m30s timeout even for a
+	// simple reply.
+	history, err := h.waitTaskCompleted(taskID, 240*time.Second)
 	if err != nil {
 		t.Fatalf("T3.C2 FAIL: %v", err)
 	}
@@ -461,24 +481,13 @@ func TestT3_RealClaudePeerSummaryViaA2A(t *testing.T) {
 		t.Fatalf("T3.C3 FAIL: agent reply was empty. History had %d messages.", len(history))
 	}
 
-	// T3.C4 — every other peer cited by name (case-insensitive
-	// since claude may render names with different capitalization).
+	// T3.C4 — response contains "ready" (case-insensitive). Proves
+	// claude actually followed the instruction rather than emitting
+	// random thinking text. The narrow prompt makes this a strong
+	// signal of "real conversation worked".
 	lowered := strings.ToLower(reply)
-	for _, peer := range []string{peerW, peerR} {
-		if !strings.Contains(lowered, strings.ToLower(peer)) {
-			t.Errorf("T3.C4 FAIL: response missing peer %q.\n---reply---\n%s", peer, reply)
-		}
-	}
-
-	// T3.C5 — roles cited per peer. claude-code reflects the
-	// briefing's role markup ("`worker`" / "`reviewer`" /
-	// "Worker" / "Reviewer"). Accept any reasonable
-	// capitalization/quoting.
-	if !strings.Contains(lowered, "worker") {
-		t.Errorf("T3.C5 FAIL: response doesn't mention 'worker' role.\n---reply---\n%s", reply)
-	}
-	if !strings.Contains(lowered, "reviewer") {
-		t.Errorf("T3.C5 FAIL: response doesn't mention 'reviewer' role.\n---reply---\n%s", reply)
+	if !strings.Contains(lowered, "ready") {
+		t.Errorf("T3.C4 FAIL: response missing 'ready' marker.\n---reply---\n%s", reply)
 	}
 }
 
