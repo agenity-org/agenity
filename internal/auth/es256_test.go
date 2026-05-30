@@ -7,7 +7,9 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,8 +64,24 @@ func TestVerifyJWS_RejectsTamperedSignature(t *testing.T) {
 	defer store.Close()
 	priv, _ := LoadOrCreateES256(context.Background(), store.AuthSecrets())
 	token, _ := SignJWS(priv, map[string]any{"sub": "x"})
-	// Flip the last char of the signature.
-	tampered := token[:len(token)-1] + "_"
+	// Tamper by decoding the signature segment, flipping a high-order
+	// byte, and re-encoding. Earlier "+_" / "+A" forms were flaky
+	// because 64-byte ES256 sigs base64url-encode such that only 4
+	// chars are valid as the LAST char (A/Q/g/w — coming from the
+	// last byte's low 2 bits), giving a 25% collision rate.
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token shape: %d parts", len(parts))
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("decode sig: %v", err)
+	}
+	sig[0] ^= 0xFF
+	tampered := parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString(sig)
+	if tampered == token {
+		t.Fatal("tamper logic produced unchanged token")
+	}
 	if _, err := VerifyJWS(&priv.PublicKey, tampered); err == nil {
 		t.Error("VerifyJWS accepted a tampered signature")
 	}
