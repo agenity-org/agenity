@@ -210,11 +210,57 @@ func buildPodManifest(ns string, spec SpawnSpec) map[string]any {
 		},
 		"spec": map[string]any{
 			"restartPolicy": "Never",
-			"containers": []map[string]any{{
-				"name": spec.AgentSlug, "image": agentImageFor(spec.AgentSlug),
-				"imagePullPolicy": "IfNotPresent", "workingDir": spec.Cwd,
-				"tty": true, "stdin": true, "stdinOnce": false,
-			}},
+			"containers": []map[string]any{
+				agentContainer(spec),
+				// #316 D6 — chepherd-mcp sidecar in every agent Pod. Shares
+				// the Pod's network namespace; reaches the control plane via
+				// the in-cluster Service DNS name. The agent container's
+				// process talks to the sidecar over localhost MCP socket.
+				mcpSidecarContainer(),
+			},
+		},
+	}
+}
+
+// agentContainer returns the agent's own container manifest section.
+// Split out so D6's sidecar addition keeps buildPodManifest readable.
+func agentContainer(spec SpawnSpec) map[string]any {
+	return map[string]any{
+		"name":            spec.AgentSlug,
+		"image":           agentImageFor(spec.AgentSlug),
+		"imagePullPolicy": "IfNotPresent",
+		"workingDir":      spec.Cwd,
+		"tty":             true,
+		"stdin":           true,
+		"stdinOnce":       false,
+		"env": []map[string]any{
+			{"name": "CHEPHERD_MCP_LISTEN", "value": "127.0.0.1:9090"},
+		},
+	}
+}
+
+// mcpSidecarContainer returns the chepherd-mcp sidecar manifest. Every
+// agent Pod gets it so the agent has access to chepherd's MCP tool
+// surface (spawn peer, send_to_session, set_scorecard, etc.) via a
+// localhost socket. The sidecar dials the chepherd control plane's
+// in-cluster Service for upstream relay.
+//
+// Refs #316 D6.
+func mcpSidecarContainer() map[string]any {
+	return map[string]any{
+		"name":            "chepherd-mcp",
+		"image":           "ghcr.io/chepherd/chepherd:0.9.3",
+		"imagePullPolicy": "IfNotPresent",
+		"args":            []string{"mcp", "--listen", "127.0.0.1:9090"},
+		"env": []map[string]any{
+			{"name": "CHEPHERD_CONTROL_PLANE_URL",
+				"value": "http://chepherd.chepherd.svc.cluster.local:80"},
+			{"name": "CHEPHERD_POD_NAME",
+				"valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.name"}}},
+		},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "50m", "memory": "64Mi"},
+			"limits":   map[string]any{"cpu": "200m", "memory": "256Mi"},
 		},
 	}
 }

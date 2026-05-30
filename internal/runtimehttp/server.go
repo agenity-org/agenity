@@ -95,6 +95,12 @@ type Server struct {
 	// A2A Task records for the dashboard's A2A Inbox tab (#225 row G2).
 	TaskStore persistence.TaskRepository
 
+	// SessionStore — #314 D4. Persisted-but-not-live session records
+	// so the dashboard's reconciler sees what's available even when
+	// the live runtime hasn't (yet) re-spawned them. Fixes the 5s 404
+	// loop where the dashboard kept attaching to "full-stack".
+	SessionStore persistence.SessionRepository
+
 	// #194 — Skill Library (10 LEAN builtins + user-defined CRUD).
 	skills *skills.Store
 
@@ -1018,10 +1024,72 @@ func sanitizeID(id string) string {
 	return b.String()
 }
 
+
+// listSessionsMerged combines live runtime sessions with persisted
+// session records from SessionStore so the dashboard sees the full
+// available-session set. Each entry includes a `live` boolean —
+// live==true means runtime has it in memory (attachable); live==false
+// means it was persisted previously but isn't currently spawned (the
+// dashboard should display "resumable", not auto-attach). #314 D4.
+func (s *Server) listSessionsMerged(ctx context.Context) []map[string]any {
+	var (
+		out       []map[string]any
+		liveNames = map[string]struct{}{}
+	)
+	if s.rt != nil {
+		live := s.rt.List()
+		out = make([]map[string]any, 0, len(live))
+		for _, info := range live {
+			liveNames[info.Name] = struct{}{}
+			out = append(out, infoToMap(info, true))
+		}
+	}
+	if s.SessionStore == nil {
+		return out
+	}
+	ids, err := s.SessionStore.List(ctx)
+	if err != nil {
+		return out
+	}
+	for _, id := range ids {
+		if _, alreadyLive := liveNames[id]; alreadyLive {
+			continue
+		}
+		state, err := s.SessionStore.Get(ctx, id)
+		if err != nil {
+			continue
+		}
+		out = append(out, map[string]any{
+			"name":  id,
+			"id":    id,
+			"live":  false,
+			"state": state,
+		})
+	}
+	return out
+}
+
+func infoToMap(info *runtime.SessionInfo, live bool) map[string]any {
+	return map[string]any{
+		"id":          info.ID,
+		"name":        info.Name,
+		"agent":       info.AgentSlug,
+		"agent_id":    info.AgentID,
+		"pvc_handle":  info.PVCHandle,
+		"team":        info.Team,
+		"role":        info.Role,
+		"cwd":         info.Cwd,
+		"created_at":  info.CreatedAt,
+		"paused":      info.Paused,
+		"shepherding": info.Shepherding,
+		"live":        live,
+	}
+}
+
 func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"sessions": s.rt.List()})
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": s.listSessionsMerged(r.Context())})
 	case http.MethodPost:
 		var req struct {
 			Name, Agent, Team, Role, Cwd, SystemPrompt string

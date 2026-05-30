@@ -1,0 +1,401 @@
+{{- /*
+  Observability stack — #225 row D5.
+  Deploys Grafana Alloy DaemonSet + minimal Loki/Mimir/Tempo
+  StatefulSets when .Values.observability.enabled.
+
+  Architecture per V0.9.2-ARCH §7:
+    - Alloy collects logs (chepherd + agent pods) + metrics +
+      traces via OpenTelemetry; one DaemonSet per node.
+    - Loki ingests logs (object-storage backend via SeaweedFS
+      when seaweedfs.enabled, else local PVC).
+    - Mimir ingests metrics (long-term TSDB).
+    - Tempo ingests traces (multi-tenant).
+
+  For dev / single-node setups, leave enabled: false — chepherd
+  emits OTel to stdout + the operator inspects via podman/kubectl
+  logs. Enable only when you have a dedicated observability node.
+*/}}
+{{- if .Values.observability.enabled }}
+---
+# Grafana Alloy collector — runs on every node, scrapes kube state
+# + tails Pod logs + receives OTel push from chepherd-mcp sidecar.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "chepherd.fullname" . }}-alloy
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-alloy
+spec:
+  selector:
+    matchLabels:
+      {{- include "chepherd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: observability-alloy
+  template:
+    metadata:
+      labels:
+        {{- include "chepherd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: observability-alloy
+    spec:
+      serviceAccountName: {{ include "chepherd.fullname" . }}-alloy
+      containers:
+        - name: alloy
+          image: "{{ .Values.observability.alloy.image }}"
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/var/lib/alloy/data
+          ports:
+            - containerPort: 12345
+              name: http-metrics
+            - containerPort: 4317
+              name: otlp-grpc
+              protocol: TCP
+            - containerPort: 4318
+              name: otlp-http
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+            - name: data
+              mountPath: /var/lib/alloy
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+          resources:
+            {{- toYaml .Values.observability.alloy.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "chepherd.fullname" . }}-alloy
+        - name: data
+          emptyDir: {}
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "chepherd.fullname" . }}-alloy
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "chepherd.fullname" . }}-alloy
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, services, endpoints, pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "chepherd.fullname" . }}-alloy
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "chepherd.fullname" . }}-alloy
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "chepherd.fullname" . }}-alloy
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chepherd.fullname" . }}-alloy
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+data:
+  config.alloy: |
+    # Alloy pipeline (River DSL): tail Pod logs → Loki; OTel receiver
+    # for chepherd-mcp push → split logs to Loki + metrics to Mimir +
+    # traces to Tempo.
+    loki.write "default" {
+      endpoint { url = "http://{{ include "chepherd.fullname" . }}-loki:3100/loki/api/v1/push" }
+    }
+    prometheus.remote_write "default" {
+      endpoint { url = "http://{{ include "chepherd.fullname" . }}-mimir:9009/api/v1/push" }
+    }
+    otelcol.exporter.otlp "tempo" {
+      client { endpoint = "{{ include "chepherd.fullname" . }}-tempo:4317" tls { insecure = true } }
+    }
+    discovery.kubernetes "pods" {
+      role = "pod"
+    }
+    loki.source.kubernetes "pods" {
+      targets    = discovery.kubernetes.pods.targets
+      forward_to = [loki.write.default.receiver]
+    }
+    otelcol.receiver.otlp "default" {
+      grpc { endpoint = "0.0.0.0:4317" }
+      http { endpoint = "0.0.0.0:4318" }
+      output {
+        traces  = [otelcol.exporter.otlp.tempo.input]
+        metrics = [otelcol.processor.batch.metrics.input]
+        logs    = [otelcol.processor.batch.logs.input]
+      }
+    }
+    otelcol.processor.batch "metrics" { output { metrics = [otelcol.exporter.prometheus.default.input] } }
+    otelcol.processor.batch "logs"    { output { logs    = [otelcol.exporter.loki.default.input] } }
+    otelcol.exporter.prometheus "default" { forward_to = [prometheus.remote_write.default.receiver] }
+    otelcol.exporter.loki       "default" { forward_to = [loki.write.default.receiver] }
+---
+# Loki — log aggregation (3 components compressed into single-binary
+# mode for simplicity; HA mode is a v0.9.4 chart variant).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chepherd.fullname" . }}-loki
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-loki
+spec:
+  serviceName: {{ include "chepherd.fullname" . }}-loki
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "chepherd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: observability-loki
+  template:
+    metadata:
+      labels:
+        {{- include "chepherd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: observability-loki
+    spec:
+      containers:
+        - name: loki
+          image: "{{ .Values.observability.loki.image }}"
+          args: [-target=all, -config.file=/etc/loki/loki.yaml]
+          ports:
+            - containerPort: 3100
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /loki
+            - name: config
+              mountPath: /etc/loki
+          resources:
+            {{- toYaml .Values.observability.loki.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "chepherd.fullname" . }}-loki
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.observability.loki.storage }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chepherd.fullname" . }}-loki
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server: { http_listen_port: 3100 }
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        instance_addr: 127.0.0.1
+        kvstore: { store: inmemory }
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index: { prefix: index_, period: 24h }
+---
+# Mimir — TSDB metrics (single-binary mode).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chepherd.fullname" . }}-mimir
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-mimir
+spec:
+  serviceName: {{ include "chepherd.fullname" . }}-mimir
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "chepherd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: observability-mimir
+  template:
+    metadata:
+      labels:
+        {{- include "chepherd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: observability-mimir
+    spec:
+      containers:
+        - name: mimir
+          image: "{{ .Values.observability.mimir.image }}"
+          args: [-target=all, -config.file=/etc/mimir/config.yaml]
+          ports:
+            - containerPort: 9009
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/mimir
+          resources:
+            {{- toYaml .Values.observability.mimir.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "chepherd.fullname" . }}-mimir
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.observability.mimir.storage }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chepherd.fullname" . }}-mimir
+data:
+  config.yaml: |
+    multitenancy_enabled: false
+    blocks_storage:
+      backend: filesystem
+      filesystem: { dir: /data/blocks }
+    server: { http_listen_port: 9009 }
+---
+# Tempo — distributed traces (single-binary mode).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "chepherd.fullname" . }}-tempo
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-tempo
+spec:
+  serviceName: {{ include "chepherd.fullname" . }}-tempo
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "chepherd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: observability-tempo
+  template:
+    metadata:
+      labels:
+        {{- include "chepherd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: observability-tempo
+    spec:
+      containers:
+        - name: tempo
+          image: "{{ .Values.observability.tempo.image }}"
+          args: [-config.file=/etc/tempo/config.yaml]
+          ports:
+            - containerPort: 3200
+              name: http
+            - containerPort: 4317
+              name: otlp-grpc
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/tempo
+          resources:
+            {{- toYaml .Values.observability.tempo.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "chepherd.fullname" . }}-tempo
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.observability.tempo.storage }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "chepherd.fullname" . }}-tempo
+data:
+  config.yaml: |
+    server: { http_listen_port: 3200 }
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            grpc: { endpoint: 0.0.0.0:4317 }
+    storage:
+      trace:
+        backend: local
+        local: { path: /data/blocks }
+        wal: { path: /data/wal }
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chepherd.fullname" . }}-loki
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "chepherd.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-loki
+  ports:
+    - name: http
+      port: 3100
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chepherd.fullname" . }}-mimir
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "chepherd.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-mimir
+  ports:
+    - name: http
+      port: 9009
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chepherd.fullname" . }}-tempo
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "chepherd.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: observability-tempo
+  ports:
+    - name: http
+      port: 3200
+    - name: otlp-grpc
+      port: 4317
+{{- end }}

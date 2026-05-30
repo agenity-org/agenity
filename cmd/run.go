@@ -208,6 +208,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		rs.Profile = &prof
 		rs.AgentCardStore = store.AgentCards()
 		rs.TaskStore = store.Tasks()
+		rs.SessionStore = store.Sessions()
 
 		// #225 row C1 — federation peer registry. Boot Federation when
 		// `--federation-registry-url` is set; cmd/run.go derives the
