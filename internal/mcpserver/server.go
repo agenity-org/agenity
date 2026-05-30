@@ -266,7 +266,7 @@ func (s *Server) toolList() []map[string]any {
 				"lines": map[string]any{"type": "integer"},
 			},
 		}},
-		{"name": "chepherd.send_to_session", "description": "Write a message directly into a session's PTY stdin. Used by the shepherd to advise Adam (prefer @target relay for normal conversation). Args: name, body.", "inputSchema": map[string]any{
+		{"name": "chepherd.send_to_session", "description": "Write a message directly into a session's PTY stdin. Used by the Scrum Master to advise Adam (prefer @target relay for normal conversation). Args: name, body.", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"name", "body"},
 			"properties": map[string]any{
@@ -357,7 +357,7 @@ func (s *Server) toolList() []map[string]any {
 				"actor": map[string]any{"type": "string"},
 			},
 		}},
-		{"name": "chepherd.read_canon", "description": "Read the current canon (CLAUDE.md / team-specific rules) for a team. Returns the canon text. Shepherds should call this every tick to re-ground their judgment against the live canon (which can be edited mid-run via the dashboard's canon-viewer widget). Args: team.", "inputSchema": map[string]any{
+		{"name": "chepherd.read_canon", "description": "Read the current canon (CLAUDE.md / team-specific rules) for a team. Returns the canon text. Scrum Masters should call this every tick to re-ground their judgment against the live canon (which can be edited mid-run via the dashboard's canon-viewer widget). Args: team.", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"team"},
 			"properties": map[string]any{

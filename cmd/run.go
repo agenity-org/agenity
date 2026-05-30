@@ -56,6 +56,7 @@ var (
 	runFlagMCPListen             string
 	runFlagFederationRegistryURL string // #225 row C1 — hosted peer registry
 	runFlagFederationPublicURL   string // #225 row C1 — this chepherd's public URL for announcements
+	runFlagScrumMasterName       string // #225 row F4 — name for the auto-spawned Scrum Master (back-compat default: "shepherd")
 )
 
 var runCmd = &cobra.Command{
@@ -94,6 +95,8 @@ func init() {
 		"hosted peer registry URL (empty = disabled). Peer discovery POSTs /announce + GETs /peers here.")
 	runCmd.Flags().StringVar(&runFlagFederationPublicURL, "federation-public-url", "",
 		"this chepherd's public URL announced to peers (default: derived from --listen).")
+	runCmd.Flags().StringVar(&runFlagScrumMasterName, "scrummaster-name", "shepherd",
+		"name for the auto-spawned Scrum Master session (back-compat default: 'shepherd'; set to 'scrummaster' for canonical naming).")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -359,7 +362,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	_ = prompts.Worker // exposed via runtimehttp for explicit worker spawns w/ default prompt
 	if !runFlagNoShepherd {
 		_, shepSess, err := rt.Spawn(runtime.SpawnSpec{
-			Name:         "shepherd",
+			Name:         runFlagScrumMasterName,
 			AgentSlug:    runFlagAgent,
 			Team:         "default",
 			Role:         runtime.RoleShepherd,
@@ -529,14 +532,14 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 	// Event-driven: every new spawn (other than shepherd itself) triggers
 	// an immediate sweep so the operator sees shepherd react in real time.
 	rt.AddSpawnHook(func(_ *session.Session, name string) {
-		if name == "shepherd" {
+		if name == runFlagScrumMasterName {
 			return
 		}
 		// Give the new agent ~3s to print its initial pane content so
-		// shepherd's read_pane has something to actually observe.
+		// the Scrum Master's read_pane has something to actually observe.
 		go func(n string) {
 			time.Sleep(3 * time.Second)
-			live, _ := rt.Get("shepherd")
+			live, _ := rt.Get(runFlagScrumMasterName)
 			if live == nil || live != sess {
 				return
 			}
@@ -553,7 +556,7 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 	tick := time.NewTicker(60 * time.Second)
 	defer tick.Stop()
 	for range tick.C {
-		live, _ := rt.Get("shepherd")
+		live, _ := rt.Get(runFlagScrumMasterName)
 		if live == nil || live != sess {
 			return
 		}
@@ -569,11 +572,11 @@ func bootstrapShepherd(rt *runtime.Runtime, sess *session.Session) {
 			})
 			pokeShepherd(sess, "FINAL TICK before refresh: write a 5-line summary of the current state of your watch (workers + their latest scorecard + any open coaching threads + open questions) via chepherd.record_event(kind='shepherd_handoff', body='<summary>'). I'll spawn a replacement shepherd in 10s with this summary as its boot context.")
 			time.Sleep(15 * time.Second)
-			_ = rt.Stop("shepherd")
+			_ = rt.Stop(runFlagScrumMasterName)
 			time.Sleep(2 * time.Second)
 			// Respawn (skip cycle; new bootstrapShepherd starts its own loop)
 			_, newSess, err := rt.Spawn(runtime.SpawnSpec{
-				Name: "shepherd", AgentSlug: "claude-code", Team: "default",
+				Name: runFlagScrumMasterName, AgentSlug: "claude-code", Team: "default",
 				Role: runtime.RoleShepherd, Cwd: "/home/openova",
 				SystemPrompt: prompts.ScrumMaster,
 			})
