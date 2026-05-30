@@ -43,10 +43,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // ─── Live-claude harness extension ───────────────────────────────
@@ -121,28 +125,104 @@ func (h *e2eHarness) spawnRealClaude(name, team, role string) (string, error) {
 	return info.ID, nil
 }
 
-// waitClaudeBoot polls the chepherd binary's stderr for the per-agent
-// MCP-bridge-connected marker. Real claude-code's startup takes
-// ~5-15s + the MCP bridge re-dial sequence (#422) can add up to 15s
-// more in transient cases. 60s budget is generous; failures past it
-// usually indicate creds or image issues.
-func (h *e2eHarness) waitClaudeBoot(name string) error {
+// attachKeepAlive opens a WebSocket subscriber to
+// /api/v1/sessions/<name>/attach — the SAME surface the dashboard
+// pane uses. Without an active subscriber some live-claude paths
+// surfaced "session: closed" by the time the test sent its first
+// message; the architect's PR2 walk on host caught this and
+// recommended the dashboard-equivalent attach as the fix.
+//
+// The returned cleanup function closes the WebSocket; t.Cleanup
+// runs it automatically. The read pump drains incoming PTY chunks
+// into /dev/null so the server's outbound goroutine never blocks
+// on a full WS write buffer.
+func (h *e2eHarness) attachKeepAlive(name string) {
 	h.t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	u := url.URL{Scheme: "ws", Host: h.httpAddr,
+		Path: "/api/v1/sessions/" + name + "/attach"}
+	hdr := http.Header{}
+	if h.bootstrapTok != "" {
+		hdr.Set("Authorization", "Bearer "+h.bootstrapTok)
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	c, _, err := dialer.Dial(u.String(), hdr)
+	if err != nil {
+		h.t.Logf("attachKeepAlive(%q): WS dial failed: %v (test will continue; live-claude likely to fail with session:closed)", name, err)
+		return
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	}()
+	h.t.Cleanup(func() {
+		close(stop)
+		_ = c.Close()
+		wg.Wait()
+	})
+}
+
+// waitClaudeReady polls chepherd stderr for the per-session
+// auto-dismiss steady-state marker. Real claude-code first-run goes
+// through several prompts (trust-folder, bypass-permissions, MCP
+// approval). autoDismissClaudeFirstRunPrompts handles them
+// programmatically and prints "[chepherd-auto-dismiss] reached
+// steady state (24 idle ticks); exiting" once it's done. After
+// steady-state, claude-code sits at its conversation prompt
+// awaiting input — i.e. ready for A2A SendMessage delivery.
+//
+// Pre-fix the wait used a "briefing log emitted" marker which fires
+// SYNCHRONOUSLY during the spawn handler, way before claude-code
+// has even started — that's why the architect's host walk saw
+// "session: closed" on the first send: the test was racing claude's
+// boot. 180s budget matches autoDismissClaudeFirstRunPrompts'
+// deadline.
+//
+// NOTE: the steady-state log line isn't per-session-tagged, so this
+// helper waits for an OCCURRENCE count to advance. The caller must
+// pass the count of "steady state" lines observed BEFORE the spawn
+// for accurate disambiguation — there's no good alternative until
+// the auto-dismiss log gets a per-session tag (follow-up TBD).
+func (h *e2eHarness) waitClaudeReady(name string, baseSteadyCount int) error {
+	h.t.Helper()
+	deadline := time.Now().Add(180 * time.Second)
+	const marker = "[chepherd-auto-dismiss] reached steady state"
 	for time.Now().Before(deadline) {
 		stderr := h.ReadStderr()
-		if strings.Contains(stderr, "[chepherd-mcp-bridge] dial") && strings.Contains(stderr, name) {
+		// Detect session-already-exited early with a diagnostic so
+		// failures don't have to wait the full 180s for a useless
+		// "no marker found" message.
+		if strings.Contains(stderr, "[chepherd-stop] "+name) ||
+			strings.Contains(stderr, "[chepherd-spawn-pipeline] "+name+": ") &&
+				strings.Contains(stderr, "session ended") {
+			return fmt.Errorf("waitClaudeReady %q: session exited during boot — check stderr for crash reason", name)
+		}
+		if strings.Count(stderr, marker) > baseSteadyCount {
 			return nil
 		}
-		// Alternative: the per-spawn briefing log proves the agent
-		// container reached at least the materializeAgentBriefing
-		// step — sufficient for the A2A delivery target to exist.
-		if strings.Contains(stderr, "[chepherd-spawn-briefing] "+name) {
-			return nil
-		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("waitClaudeBoot %q: no boot marker in stderr after 60s; check `make agent-image` + host ~/.claude/.credentials.json", name)
+	return fmt.Errorf("waitClaudeReady %q: no auto-dismiss steady-state in 180s; agent may be wedged on an unhandled prompt", name)
+}
+
+// countAutoDismissSteadyState counts how many auto-dismiss
+// steady-state log lines have been printed so far. Used by
+// waitClaudeReady to disambiguate per-session boots in the
+// no-per-session-tag world.
+func (h *e2eHarness) countAutoDismissSteadyState() int {
+	return strings.Count(h.ReadStderr(),
+		"[chepherd-auto-dismiss] reached steady state")
 }
 
 // a2aSend POSTs message/send to chepherd's A2A /jsonrpc endpoint
@@ -320,26 +400,46 @@ func TestT3_RealClaudePeerSummaryViaA2A(t *testing.T) {
 	const peerW = "t3-peer-worker"
 	const peerR = "t3-peer-reviewer"
 
+	// Spawn each agent, then immediately open the dashboard-style
+	// WS attach + wait for auto-dismiss steady-state BEFORE the
+	// next spawn. Sequential boot keeps the steady-state log
+	// counter unambiguous (no per-session tag in the auto-dismiss
+	// log; sequencing is the simplest disambiguator). Architect's
+	// PR2-walk diagnosis: prior parallel-boot + no-attach path
+	// failed with "session: closed" because claude exited before
+	// we could send.
+	base := h.countAutoDismissSteadyState()
 	speakerSID, err := h.spawnRealClaude(speaker, team, "worker")
 	if err != nil {
 		t.Fatalf("T3 spawn speaker: %v", err)
 	}
+	h.attachKeepAlive(speaker)
+	if err := h.waitClaudeReady(speaker, base); err != nil {
+		t.Fatalf("T3 wait ready speaker: %v", err)
+	}
+
+	base = h.countAutoDismissSteadyState()
 	if _, err := h.spawnRealClaude(peerW, team, "worker"); err != nil {
 		t.Fatalf("T3 spawn peerW: %v", err)
 	}
+	h.attachKeepAlive(peerW)
+	if err := h.waitClaudeReady(peerW, base); err != nil {
+		t.Fatalf("T3 wait ready peerW: %v", err)
+	}
+
+	base = h.countAutoDismissSteadyState()
 	if _, err := h.spawnRealClaude(peerR, team, "reviewer"); err != nil {
 		t.Fatalf("T3 spawn peerR: %v", err)
 	}
-	// Wait for ALL three to reach boot — the team-event briefing
-	// regen needs every member registered so the speaker's
-	// CLAUDE.md lists peerW + peerR before we ask it to summarize.
-	for _, name := range []string{speaker, peerW, peerR} {
-		if err := h.waitClaudeBoot(name); err != nil {
-			t.Fatalf("T3 wait boot %q: %v", name, err)
-		}
+	h.attachKeepAlive(peerR)
+	if err := h.waitClaudeReady(peerR, base); err != nil {
+		t.Fatalf("T3 wait ready peerR: %v", err)
 	}
+
 	// Settle the 1s debounced briefing regen + give claude-code's
-	// MCP /skills surface a beat to populate.
+	// MCP /skills surface a beat to populate. The speaker's
+	// CLAUDE.md needs to list peerW + peerR before we ask it to
+	// summarize.
 	time.Sleep(3 * time.Second)
 
 	// T3.C1 — message/send returns a working task.
