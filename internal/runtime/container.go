@@ -71,15 +71,35 @@ type ContainerRuntime interface {
 // Order: Podman > Docker > BareExec. Caller must call SetInstanceUUID
 // on the result before any SpawnArgs / StopContainer / ListAgentContainers
 // invocation so the #270 instance-scoping holds.
+//
+// #383 P0 diagnostic: silently falling through to BareExec when
+// PodmanRuntime+DockerRuntime are both unavailable was the root
+// cause of operator-perceived "spawn pipeline broken" — agents got
+// fork/exec'd as `/usr/bin/claude` on the chepherd container (which
+// doesn't have it), with no surfacing of the fallback. The healthz
+// also reported `spawner:podman-sidecar` (hardcoded in
+// LocalRuntimeSpawner.Mode regardless of cr) which misled the
+// operator into bisecting unrelated PRs. We now emit a loud stderr
+// line on each fallback so the actual blocker (most often: missing
+// chepherd-agent:latest image — `make agent-image` needed) is
+// visible in chepherd's boot log instead of buried in a misleading
+// "claude not found" downstream error.
 func DetectRuntime() ContainerRuntime {
 	p := &PodmanRuntime{}
-	if p.Available() == nil {
+	if err := p.Available(); err == nil {
 		return p
+	} else {
+		fmt.Fprintf(os.Stderr, "[chepherd-runtime-detect] PodmanRuntime unavailable: %v\n", err)
 	}
 	d := &DockerRuntime{}
-	if d.Available() == nil {
+	if err := d.Available(); err == nil {
 		return d
+	} else {
+		fmt.Fprintf(os.Stderr, "[chepherd-runtime-detect] DockerRuntime unavailable: %v\n", err)
 	}
+	fmt.Fprintf(os.Stderr,
+		"[chepherd-runtime-detect] ⚠ FALLBACK to BareExecRuntime — agents will fork/exec on the chepherd host directly.\n"+
+			"[chepherd-runtime-detect]   This is almost certainly NOT what you want. Run `make agent-image` to build chepherd-agent:latest, then bounce chepherd. (#383 P0)\n")
 	return &BareExecRuntime{}
 }
 

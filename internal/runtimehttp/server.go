@@ -833,6 +833,20 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 		"sessions": len(s.rt.List()),
 		"ts":       time.Now().UTC(),
 	}
+	// #383 P0 — surface the ACTUAL container runtime in use ("podman" |
+	// "docker" | "bare"). The `profile.spawner` field below is
+	// hardcoded to "podman-sidecar" by LocalRuntimeSpawner regardless
+	// of whether the cr fell back to BareExec; that was misleading
+	// operators into bisecting unrelated PRs when an env-level image
+	// gap caused DetectRuntime to silently fallback to bare. The
+	// `container_runtime` field is the source of truth; if it shows
+	// "bare" in production, you've got a missing chepherd-agent image
+	// (run `make agent-image`).
+	if s.rt != nil {
+		if cr := s.rt.ContainerRuntime(); cr != nil {
+			resp["container_runtime"] = cr.Name()
+		}
+	}
 	// Deployment profile (#129) — operators + dashboard read this to
 	// know what spawner/auth/storage/tls is wired in.
 	if s.Profile != nil {
