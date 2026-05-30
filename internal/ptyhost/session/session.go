@@ -109,7 +109,13 @@ type Session struct {
 	subscribers map[*Subscriber]struct{}
 	closed      bool
 	done        chan struct{}
-	exitErr     error
+	// readDone is closed by readLoop when it has drained the PTY master
+	// and observed EOF/EIO. waitLoop waits on this (with a safety
+	// deadline) before closing the master so a fast-exiting child's
+	// tail output (#363) isn't lost to a race between cmd.Wait()
+	// returning and the readLoop scheduler waking up.
+	readDone chan struct{}
+	exitErr  error
 
 	// writeMu serializes all PTY stdin writes so operator keystrokes and
 	// shepherd/MCP injections never interleave at the byte level.
@@ -182,6 +188,7 @@ func New(id string, spec Spec) (*Session, error) {
 		ring:        NewRingBuffer(spec.RingBytes),
 		subscribers: make(map[*Subscriber]struct{}),
 		done:        make(chan struct{}),
+		readDone:    make(chan struct{}),
 	}
 
 	go s.readLoop()
@@ -195,6 +202,7 @@ func New(id string, spec Spec) (*Session, error) {
 // exits when the PTY is closed (typically: child exited and Wait()
 // returned).
 func (s *Session) readLoop() {
+	defer close(s.readDone)
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := s.ptyFile.Read(buf)
@@ -210,11 +218,31 @@ func (s *Session) readLoop() {
 	}
 }
 
-// waitLoop reaps the child process. When the child exits we close
-// the PTY (unblocks readLoop), mark the Session closed, and signal
-// all subscribers via Done.
+// waitLoop reaps the child process. When the child exits we wait for
+// the readLoop to drain remaining buffered bytes from the PTY master
+// (kernel auto-closes the slave on child exit → master Read returns
+// remaining bytes then EIO), close the master, mark the Session
+// closed, and signal all subscribers via Done.
+//
+// #363 — pre-fix waitLoop closed the master immediately after
+// cmd.Wait() returned, racing the readLoop's drain of buffered tail
+// output. Fast-exiting children ("printf marker; exit 42") could lose
+// the tail entirely because Read returned -1 on the freshly-closed fd
+// before the buffered bytes were delivered to the ring buffer.
+// CI flake at ~27% in the runtime suite under -race; deterministic
+// in PR #375's build.
 func (s *Session) waitLoop() {
 	err := s.cmd.Wait()
+	// Wait for readLoop to drain the PTY master naturally. The
+	// kernel closes the slave when the child process exits, which
+	// causes master Read to return remaining buffered bytes then
+	// EIO/EOF. Cap the wait at 2s as a safety net so a
+	// pathological PTY (e.g. detached child still holding slave
+	// open) can't hang the session reap.
+	select {
+	case <-s.readDone:
+	case <-time.After(2 * time.Second):
+	}
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
