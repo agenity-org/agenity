@@ -237,7 +237,7 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// left stale containers behind. --rm covers cleanup-on-exit;
 	// --replace covers reuse-after-prior-leak. Both are needed.
 	podArgs := append(podmanArgs(),
-		"run", "--rm", "--replace", "--interactive", "--tty",
+		"run", "--replace", "--interactive", "--tty",  // #363: --rm removed; corpses persist for podman inspect; --replace handles name reuse
 		// #270 — instance-scoped container name. The prefix carries
 		// this chepherd binary's UUID so a parallel chepherd binary
 		// on the same host can't clobber or reap these containers.
@@ -462,7 +462,7 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// Docker variant — same flags as Podman except no :U mount option
 	// (Docker handles UID remapping differently).
 	dockerArgs := []string{
-		"docker", "run", "--rm", "--interactive", "--tty",
+		"docker", "run", "--interactive", "--tty",  // #363: corpse persists
 		"--name", containerNamePrefix(r.instanceUUID) + agentName,
 		"--network", "bridge",
 		"-v", agentHomeDir + ":/home/agent:rw",
