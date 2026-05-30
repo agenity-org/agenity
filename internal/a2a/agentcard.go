@@ -95,5 +95,16 @@ func ServeAgentCard(card *AgentCard) http.Handler {
 	})
 }
 
-// AgentCardPath is the well-known path the A2A spec mandates.
+// AgentCardPath is the well-known path the A2A spec mandates (the
+// JSON-suffixed canonical form).
 const AgentCardPath = "/.well-known/agent-card.json"
+
+// AgentCardAliasPath is the suffix-less form that peer agents commonly
+// try first per the A2A discovery convention (mirrors how /.well-known/
+// host-meta is canonical but /.well-known/host-meta.json is often
+// added as an alias). Without this alias, a peer that follows the
+// shorter form lands on chepherd's SPA wildcard and gets the
+// marketing landing page HTML — opaque to A2A discovery.
+//
+// Refs #378 P1.
+const AgentCardAliasPath = "/.well-known/agent-card"
