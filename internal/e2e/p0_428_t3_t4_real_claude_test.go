@@ -78,9 +78,12 @@ func liveClaudeAvailable(t *testing.T) string {
 }
 
 // spawnRealClaude is SpawnAgent's live-claude sibling. Uses the
-// real "claude" agent slug + lets the production spawn pipeline
-// wire the OAuth bind-mount + bridge + auto-dismiss. No test-only
-// shortcuts (architect: "same pipeline operator uses").
+// real "claude-code" agent slug (the canonical name in the agent
+// catalog — see internal/agentcatalog; "claude" is not a registered
+// slug and Runtime.Spawn rejects it with "unknown agent slug") +
+// lets the production spawn pipeline wire the OAuth bind-mount +
+// bridge + auto-dismiss. No test-only shortcuts (architect: "same
+// pipeline operator uses").
 //
 // Returns the new session ID (info.id) which the A2A SendMessage
 // path uses as contextId.
@@ -88,7 +91,7 @@ func (h *e2eHarness) spawnRealClaude(name, team, role string) (string, error) {
 	h.t.Helper()
 	body, _ := json.Marshal(map[string]any{
 		"Name":  name,
-		"Agent": "claude",
+		"Agent": "claude-code",
 		"Team":  team,
 		"Role":  role,
 	})
