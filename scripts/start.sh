@@ -57,6 +57,20 @@ mkdir -p "${STATE_DIR}"
 # Stop any existing instance
 podman rm -f chepherd 2>/dev/null || true
 
+# #398 P0 v2 — chepherd-net podman network. Option A (bind 0.0.0.0:9090)
+# fixed the host side of the port-mapping but slirp4netns isolates
+# rootless containers from host loopback at the kernel level; agents
+# still got "Network is unreachable" connecting to 10.0.2.2:9090.
+# Option B per architect: create a shared user-defined podman network
+# both chepherd container and every agent container attach to. Agents
+# reach the MCP server via container-name DNS (ws://chepherd:9090/mcp/ws)
+# without any host-loopback gymnastics. Sets up cleanly for v0.9.4
+# Option C (full sibling-pod architecture).
+#
+# `podman network create` is idempotent via `|| true` — re-runs across
+# operator bounces don't error out if the network already exists.
+podman network create chepherd-net 2>/dev/null || true
+
 if [ -z "${NO_HOST_CLAUDE}" ] && [ ${#CLAUDE_MOUNTS[@]} -gt 0 ]; then
   echo "→ Starting chepherd (sibling-container architecture, host ~/.claude auto-detected)..."
 elif [ -n "${NO_HOST_CLAUDE}" ]; then
@@ -72,16 +86,18 @@ exec podman run \
   --name chepherd \
   --rm \
   --detach \
+  --network chepherd-net \
+  `# ↑ #398 P0 v2: chepherd attaches to chepherd-net so agent sibling containers (also attached)` \
+  `# can reach the MCP server via container-name DNS: ws://chepherd:9090/mcp/ws. Replaces the` \
+  `# Option A 0.0.0.0:9090 host-port binding which slirp4netns kernel-isolation blocked agents` \
+  `# from reaching despite the host-side bind succeeding. 9090 host-port mapping kept only for` \
+  `# operator-side curl debugging; agents use the in-network address.` \
   -e HOME=/home/chepherd \
   -p "127.0.0.1:${PORT}:8080" \
-  -p "0.0.0.0:9090:9090" \
-  `# ↑ #398 P0: 9090 MUST bind 0.0.0.0 so agent sibling containers can reach the MCP server.` \
-  `# Rootless slirp4netns containers reach the host via 10.0.2.2; a 127.0.0.1 binding excludes` \
-  `# that path → "network is unreachable" from inside the agent → MCP toolkit (chepherd.list_sessions,` \
-  `# send_to_session, alert_human) unavailable → #395/#396 briefing capability dark. Tradeoff: 9090 is` \
-  `# now reachable from any host-network interface; mitigated by the chepherd-host being the security` \
-  `# boundary in v0.9.x. v0.9.4 refactor (#398 Option C in body) moves MCP to a sibling container on` \
-  `# a dedicated chepherd-net so it's only reachable from agent containers + chepherd, not from host.` \
+  -p "127.0.0.1:9090:9090" \
+  `# ↑ #398 v2: back to 127.0.0.1-only for the host-port mapping. Agents reach chepherd via` \
+  `# chepherd-net (container-name DNS); this mapping is only for operator-side curl/debug from` \
+  `# the host. v0.9.4 Option C will drop this mapping entirely + put MCP in a sibling container.` \
   -v "${STATE_DIR}:/home/chepherd/.local/state/chepherd:rw" \
   "${CLAUDE_MOUNTS[@]}" \
   -v "${REPOS_DIR}:/home/chepherd/repos:rw" \

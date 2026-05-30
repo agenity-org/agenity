@@ -2084,16 +2084,27 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// becomes ws://chepherd:9090).
 	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
 	if mcpURL == "" {
-		// #369 — default to the Podman host-gateway DNS alias
-		// (--add-host host.containers.internal:host-gateway is set
-		// in the spawn argv). Works under slirp4netns + bridge +
-		// host network modes. Pre-#369 the default used
-		// HostAddrForAgent's outbound-IP heuristic which doesn't
-		// route back through slirp4netns NAT → claude banner showed
-		// '1 MCP server failed'. Operator can override via
-		// CHEPHERD_MCP_URL when chepherd is in-cluster (K8s Service
-		// DNS becomes ws://chepherd:9090).
-		mcpURL = "ws://host.containers.internal:9090/mcp/ws"
+		// #398 P0 v2 — default to chepherd-net container-name DNS.
+		// scripts/start.sh creates a user-defined podman network
+		// `chepherd-net` + attaches both the chepherd container and
+		// every agent container to it (via agentNetworkMode default).
+		// Agents resolve `chepherd` by name within the network — no
+		// host-loopback gymnastics, no slirp4netns kernel-isolation
+		// problem.
+		//
+		// Earlier defaults this overrode:
+		//   #369: ws://host.containers.internal:9090/mcp/ws (slirp4netns
+		//     could reach the host IP but kernel isolation later
+		//     blocked the back-connect — #398 surfaced this live)
+		//   pre-#369: HostAddrForAgent outbound-IP heuristic (didn't
+		//     route through slirp4netns NAT)
+		//
+		// Bare-host dev mode (chepherd not in chepherd-net): operator
+		// must set CHEPHERD_MCP_URL=ws://host.containers.internal:9090/mcp/ws
+		// AND CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns.
+		// K8s in-cluster: set CHEPHERD_MCP_URL=ws://chepherd:9090/mcp/ws
+		// (matches by coincidence; chepherd Service DNS).
+		mcpURL = "ws://chepherd:9090/mcp/ws"
 	}
 	// Use the absolute path of the currently-running chepherd binary so
 	// the MCP-bridge subprocess matches the running runtime regardless
