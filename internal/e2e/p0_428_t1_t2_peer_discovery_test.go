@@ -52,6 +52,7 @@ type e2eHarness struct {
 	t            *testing.T
 	binPath      string
 	stateDir     string
+	credPath     string // per-test synthetic claude credentials path, fed via CHEPHERD_CLAUDE_CREDS_PATH (#440 CI fix)
 	httpAddr     string
 	mcpAddr      string
 	logPath      string
@@ -202,7 +203,38 @@ func bootE2EHarness(t *testing.T) *e2eHarness {
 	//
 	// CHEPHERD_TEST_LIVE_CLAUDE is forwarded so the live-claude
 	// gate in liveClaudeAvailable() observes the operator's intent.
+	// Architect-confirmed CI fix 2026-05-31 (PR #440 first run):
+	// chepherd's materializeAgentSecrets refuses spawn when no
+	// Claude credential is available. Production hosts have
+	// ~/.claude/.credentials.json from a real `claude /login`; CI
+	// runners + fresh dev boxes don't. Without this seed step,
+	// every test would HTTP 500 at spawn.
+	//
+	// First-attempt fix (overrode HOME on the chepherd subprocess)
+	// broke podman's user-mode storage lookup — the spawn pipeline
+	// fell back to BareExec because podman couldn't find its
+	// ~/.config/containers/storage.conf under the fake HOME, which
+	// made AgentHomeDir return os.UserHomeDir() instead of the
+	// state-dir-rooted per-agent dir → CLAUDE.md briefing landed
+	// in the fake HOME, not where the test reads it from.
+	//
+	// Replacement: seed synthetic credentials into a per-test
+	// tempfile + point chepherd at it via the new
+	// CHEPHERD_CLAUDE_CREDS_PATH env override (added in
+	// internal/runtime/container.go hostClaudeCredentialsPath).
+	// HOME is left intact so podman keeps using the operator's real
+	// container storage. Tests still don't authenticate to
+	// Anthropic — synthetic token is meaningless to claude — but
+	// the spawn pipeline proceeds because the credentials FILE
+	// exists.
+	credPath := filepath.Join(t.TempDir(), "synthetic-claude-credentials.json")
+	syntheticCreds := `{"claudeAiOauth":{"accessToken":"e2e-test-token-not-real","refreshToken":"e2e-test-refresh","expiresAt":99999999999000,"scopes":["test"]}}`
+	if err := os.WriteFile(credPath, []byte(syntheticCreds), 0o600); err != nil {
+		t.Fatalf("seed synthetic credentials: write: %v", err)
+	}
+
 	cmd.Env = append(os.Environ(),
+		"CHEPHERD_CLAUDE_CREDS_PATH="+credPath,
 		"CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns",
 		fmt.Sprintf("CHEPHERD_MCP_URL=ws://host.containers.internal:%d/mcp/ws", mcpPort),
 	)
@@ -235,6 +267,7 @@ func bootE2EHarness(t *testing.T) *e2eHarness {
 
 	h := &e2eHarness{
 		t: t, binPath: binPath, stateDir: stateDir,
+		credPath: credPath,
 		httpAddr: httpAddr, mcpAddr: mcpAddr,
 		logPath: logFile.Name(), cmd: cmd,
 	}

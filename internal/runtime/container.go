@@ -644,7 +644,18 @@ func HostAddrForAgent() string {
 
 // hostClaudeCredentialsPath returns the path to the host's Claude credentials
 // file if it exists, or "" if not found. Used to pre-authenticate containers.
+//
+// Honors the CHEPHERD_CLAUDE_CREDS_PATH env override (#440 CI follow-up) so
+// the e2e harness can point at a synthetic credentials file without
+// clobbering the operator's real ~/.claude/.credentials.json or hijacking
+// HOME (which would break podman's user-mode storage lookup).
 func hostClaudeCredentialsPath() string {
+	if p := os.Getenv("CHEPHERD_CLAUDE_CREDS_PATH"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		return ""
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
