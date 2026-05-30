@@ -52,22 +52,22 @@ func TestP0_379_PumpCompletesTask_OnSilenceWindow(t *testing.T) {
 		completerResponse = response
 	}
 
-	go pumpPTYToBroker(pub, src, task, completer)
+	go pumpPTYToBroker(pub, src, task, completer, nil)
 	time.Sleep(15 * time.Millisecond) // let pump subscribe
 
-	// #389 P0 two-silence protocol: first silence marks banner-end,
-	// second silence finalizes. Push banner-stub, wait > silence
-	// (banner-end), push reply, wait > silence (finalize).
-	src.PushChunk([]byte("[banner]\n"))
-	time.Sleep(90 * time.Millisecond) // > silence window → first silence marks sendOffset
-	src.PushChunk([]byte("●alive\n"))
-	// Wait > silence window for second silence to finalize. Critically:
-	// we do NOT close src.sub.Done — completer must fire purely from
-	// two-silence detection.
+	// Include the prompt cursor (❯) so the #385 silence-finalize gate
+	// passes — without it, the pump would re-arm the silence timer
+	// instead of firing the completer (correct behavior for fresh-
+	// spawn-banner suppression, separately tested in p1_385).
+	src.PushChunk([]byte("❯ ●alive\n"))
+	// Wait > silence window for completer to fire. Critically: we do
+	// NOT close src.sub.Done here — that would mask a silence-window
+	// regression by routing through the sub.Done finalize fallback.
+	// The completer must fire purely from silence.
 	select {
 	case <-pub.done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("pump never published done from TWO-SILENCE protocol (regression: silence-finalise path broken)")
+		t.Fatal("pump never published done from SILENCE-WINDOW (regression: silence-finalise path broken)")
 	}
 
 	completerMu.Lock()
@@ -100,7 +100,7 @@ func TestP0_379_PumpCompletesTask_OnChannelClose(t *testing.T) {
 		completerMu.Unlock()
 	}
 
-	go pumpPTYToBroker(pub, src, task, completer)
+	go pumpPTYToBroker(pub, src, task, completer, nil)
 	time.Sleep(15 * time.Millisecond)
 	src.PushChunk([]byte("partial response"))
 	time.Sleep(15 * time.Millisecond)

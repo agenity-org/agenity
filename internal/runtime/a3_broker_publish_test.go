@@ -106,7 +106,7 @@ func TestPumpPTYToBroker_StatusThenChunkThenDone(t *testing.T) {
 	}
 	pub := newFakePublisher()
 
-	go pumpPTYToBroker(pub, src, task, nil)
+	go pumpPTYToBroker(pub, src, task, nil, nil)
 
 	// Give the goroutine a tick to subscribe + publish initial status.
 	time.Sleep(20 * time.Millisecond)
@@ -160,7 +160,7 @@ func TestPumpPTYToBroker_ChannelCloseAlsoTriggersDone(t *testing.T) {
 	src := newFakeSubscriberSource(8)
 	task := &a2a.Task{ID: "t2", ContextID: "c2", Kind: "task"}
 	pub := newFakePublisher()
-	go pumpPTYToBroker(pub, src, task, nil)
+	go pumpPTYToBroker(pub, src, task, nil, nil)
 	time.Sleep(20 * time.Millisecond)
 	close(src.sub.Ch)
 	select {
@@ -172,9 +172,9 @@ func TestPumpPTYToBroker_ChannelCloseAlsoTriggersDone(t *testing.T) {
 
 func TestPumpPTYToBroker_NilArgsNoOp(t *testing.T) {
 	t.Parallel()
-	pumpPTYToBroker(nil, nil, nil, nil)
+	pumpPTYToBroker(nil, nil, nil, nil, nil)
 	pub := newFakePublisher()
-	pumpPTYToBroker(pub, nil, nil, nil)
+	pumpPTYToBroker(pub, nil, nil, nil, nil)
 	if len(pub.Events()) != 0 {
 		t.Errorf("nil-source: events = %d, want 0", len(pub.Events()))
 	}
