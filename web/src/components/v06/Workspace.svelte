@@ -85,11 +85,11 @@
       if (selectedAgent && !sessions.find(s => s.name === selectedAgent)) {
         selectedAgent = null;
       }
-      // Auto-pick first non-shepherd worker when nothing is selected — so
+      // Auto-pick first non-Scrum-Master worker when nothing is selected — so
       // AgentDetails / terminal / prompt / skills widgets render real
       // content without requiring an extra click after opening the dashboard.
       if (!selectedAgent && sessions.length) {
-        const w = sessions.find(s => !s.exited && s.role !== 'shepherd')
+        const w = sessions.find(s => !s.exited && s.role !== 'shepherd' && s.role !== 'scrummaster' /* back-compat */)
               || sessions.find(s => !s.exited);
         if (w) selectedAgent = w.name;
       }

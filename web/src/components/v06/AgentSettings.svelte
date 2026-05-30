@@ -165,7 +165,7 @@
         </div>
         <div class="row"><button class="primary" on:click={saveSkills} disabled={skillsSaving}>{skillsSaving ? 'Saving…' : 'Save'}</button></div>
       {:else if tab === 'canon'}
-        <p class="hint">Team CLAUDE.md — every member reads this each tick (shepherd via <code>read_canon</code> MCP). Shared across the whole team.</p>
+        <p class="hint">Team CLAUDE.md — every member reads this each tick (the Scrum Master via <code>read_canon</code> MCP). Shared across the whole team.</p>
         {#if canonEditing}
           <textarea bind:value={canonDraft} rows="18"></textarea>
           <div class="row">
@@ -186,7 +186,7 @@
           </label>
           <label>Role
             <select bind:value={pickRole}>
-              {#each ['worker', 'shepherd', 'reviewer', 'tester', 'architect'] as r}<option value={r}>{r}</option>{/each}
+              {#each ['worker', 'shepherd', 'reviewer', 'tester', 'architect'] as r}<option value={r}>{r === 'shepherd' ? 'scrum master (legacy wire value)' : r}</option>{/each}
             </select>
           </label>
         </div>

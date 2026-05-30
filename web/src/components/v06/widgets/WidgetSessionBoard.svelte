@@ -58,7 +58,7 @@
     <tbody>
       {#each rows as r (r.name)}
         <tr class:selected={selectedAgent === r.name} on:click={() => selectAgent(r.name)}>
-          <td><span class="dot" class:shep={r.role === 'shepherd'}>{r.role === 'shepherd' ? '✻' : '●'}</span> {r.name}</td>
+          <td><span class="dot" class:scrummaster={['shepherd','scrummaster'].includes(r.role)}>{['shepherd','scrummaster'].includes(r.role) ? '✻' : '●'}</span> {r.name}</td>
           <td>{r.role}</td>
           <td>{r.team}</td>
           <td class="num">{r.score != null ? r.score.toFixed(1) : '—'}</td>
@@ -86,6 +86,6 @@
   tr.selected { background: var(--select-bg); }
   td { padding: 0.32rem 0.5rem; border-bottom: 1px solid var(--border); }
   .dot { color: var(--accent-2); }
-  .dot.shep { color: var(--accent); }
+  .dot.scrummaster { color: var(--accent); }
   .empty { text-align: center; color: var(--fg-faint); padding: 1rem; }
 </style>

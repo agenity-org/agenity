@@ -1,13 +1,15 @@
 <!--
-  chepherd v0.5.1 dashboard. Issue #79 wave 2.
+  chepherd v0.5.1 dashboard. Issue #79 wave 2 (#292 sweep).
   - Single top bar: brand + stats + Docs/Download/GitHub + "+ spawn".
   - 3-pane body fills viewport vertically: sessions list / xterm / details.
-  - Spawn modal: autocomplete folder input, auto-derived name, shepherd
-    is opt-in (off by default), default system prompt opt-in.
-  - Workers + Shepherds rendered as separate sections in the left list,
-    so the operator can see who shepherds whom at a glance.
+  - Spawn modal: autocomplete folder input, auto-derived name, Scrum
+    Master is opt-in (off by default), default system prompt opt-in.
+  - Workers + Scrum Masters rendered as separate sections in the left
+    list, so the operator can see who supervises whom at a glance.
   - Scorecard panel in the right column (stub for now: chepherd needs an
     analyzer goroutine to populate G/V/F/E — filed as follow-up).
+  - Role enum: still accepts wire string "shepherd" (legacy/back-compat)
+    AND "scrummaster" (canonical going forward) from the runtime.
 -->
 <script module>
   // SpiderChart — pure-SVG radar plot. Used inline by Dashboard for
@@ -67,9 +69,12 @@
   const API = '/api/v1';
   const AGENTS = ['claude-code', 'qwen-code', 'aider', 'opencode', 'cursor-agent', 'little-coder', 'sovereign-shell'];
 
-  // Worker/shepherd partition for the left pane.
-  let workers = $derived(sessions.filter(s => s.role !== 'shepherd'));
-  let shepherds = $derived(sessions.filter(s => s.role === 'shepherd'));
+  // Worker/Scrum-Master partition for the left pane. Role enum
+  // accepts both wire strings for back-compat (#292): legacy
+  // back-compat: "shepherd" (legacy) + canonical "scrummaster".
+  const SCRUM_MASTER_ROLES = ['shepherd', 'scrummaster'];
+  let workers = $derived(sessions.filter(s => !SCRUM_MASTER_ROLES.includes(s.role)));
+  let scrumMasters = $derived(sessions.filter(s => SCRUM_MASTER_ROLES.includes(s.role)));
 
   async function refreshSessions() {
     try {
@@ -340,8 +345,8 @@
     if (seconds < 3600) return Math.floor(seconds/60) + 'm';
     return Math.floor(seconds/3600) + 'h ' + Math.floor((seconds%3600)/60) + 'm';
   }
-  // Convert shepherd's 5-axis scorecard into spider-chart input.
-  // Shepherd writes real scores via chepherd.set_scorecard MCP (not
+  // Convert the Scrum Master's 5-axis scorecard into spider-chart input.
+  // The Scrum Master writes real scores via chepherd.set_scorecard MCP (not
   // synthetic activity proxies). G=Goal clarity, V=Velocity, F=Focus,
   // E=End-state proximity, D=Discipline (CLAUDE.md compliance).
   function scorecardAxesFor(sc) {
@@ -440,7 +445,7 @@
     <div class="stats">
       {sessions.length} session{sessions.length === 1 ? '' : 's'} ·
       {workers.length} worker{workers.length === 1 ? '' : 's'} ·
-      {shepherds.length} shepherd{shepherds.length === 1 ? '' : 's'}
+      {scrumMasters.length} Scrum Master{scrumMasters.length === 1 ? '' : 's'}
       {#if !connected}<span class="warn">· runtime offline</span>{/if}
     </div>
     <nav class="links">
@@ -455,7 +460,7 @@
   </header>
 
   <div class="body">
-    <!-- Left: Workers + Shepherds + Inbox -->
+    <!-- Left: Workers + Scrum Masters + Inbox -->
     <aside class="left">
       <section>
         <h2>Workers <span class="count">({workers.length})</span></h2>
@@ -477,12 +482,12 @@
       </section>
 
       <section style="margin-top: 1.2rem;">
-        <h2>Shepherds <span class="count">({shepherds.length})</span></h2>
+        <h2>Scrum Masters <span class="count">({scrumMasters.length})</span></h2>
         <ul class="session-list">
-          {#each shepherds as s (s.id)}
+          {#each scrumMasters as s (s.id)}
             <li class:selected={selectedName === s.name} class:paused={s.paused} on:click={() => attachTo(s.name)}>
               <div class="row1">
-                <span class="dot shepherd">✻</span>
+                <span class="dot scrummaster">✻</span>
                 <span class="name">{s.name}</span>
                 {#if s.paused}<span class="badge">paused</span>{/if}
               </div>
@@ -494,8 +499,8 @@
               </div>
             </li>
           {/each}
-          {#if shepherds.length === 0}
-            <li class="empty">No shepherds. Spawn a shepherd to watch your workers (opt-in).</li>
+          {#if scrumMasters.length === 0}
+            <li class="empty">No Scrum Masters. Spawn one to watch your workers (opt-in).</li>
           {/if}
         </ul>
       </section>
@@ -528,7 +533,7 @@
       <div class="title">
         <div class="title-left">
           {#if selectedName}
-            <span class="dot" class:shepherd={selectedInfo?.role==='shepherd'}>{selectedInfo?.role==='shepherd' ? '✻' : '●'}</span>
+            <span class="dot" class:scrummaster={SCRUM_MASTER_ROLES.includes(selectedInfo?.role)}>{SCRUM_MASTER_ROLES.includes(selectedInfo?.role) ? '✻' : '●'}</span>
             <span class="title-name">{selectedName}</span>
             <span class="subtitle">— live attach via WebSocket</span>
           {:else}
@@ -549,7 +554,7 @@
       <div class="term" bind:this={termContainer}></div>
     </section>
 
-    <!-- Right: 4 cards (Identity / Location / Process / Shepherd) — dense inline rows -->
+    <!-- Right: 4 cards (Identity / Location / Process / Scrum Master) — dense inline rows -->
     <aside class="right">
       {#if selectedInfo}
         <!-- Card 1: Identity -->
@@ -558,7 +563,7 @@
           <div class="kv">
             <span class="k">name</span><span class="v"><code>{selectedInfo.name}</code></span>
             <span class="k">agent</span><span class="v">{selectedInfo.agent}</span>
-            <span class="k">role</span><span class="v"><span class="role-pill" class:shepherd={selectedInfo.role==='shepherd'}>{selectedInfo.role}</span></span>
+            <span class="k">role</span><span class="v"><span class="role-pill" class:scrummaster={SCRUM_MASTER_ROLES.includes(selectedInfo.role)}>{selectedInfo.role}</span></span>
             <span class="k">team</span><span class="v">{selectedInfo.team}</span>
             {#if selectedInfo.shepherding && selectedInfo.shepherding.length}
               <span class="k">watching</span><span class="v">{selectedInfo.shepherding.join(', ')}</span>
@@ -604,9 +609,9 @@
           </div>
         </section>
 
-        <!-- Card 4: Shepherd assessment (scorecard + verdicts) -->
+        <!-- Card 4: Scrum Master assessment (scorecard + verdicts) -->
         <section class="card">
-          <h3>Shepherd assessment</h3>
+          <h3>Scrum Master assessment</h3>
           {#if selectedInfo.scorecard}
             <SpiderChart axes={scorecardAxesFor(selectedInfo.scorecard)} />
             <div class="kv" style="margin-top:0.6rem;">
@@ -626,13 +631,13 @@
               <p class="score-note">{selectedInfo.scorecard.note}</p>
             {/if}
           {:else}
-            <p class="hint">Shepherd is assessing — first scorecard arrives on the next tick (≤60s).</p>
+            <p class="hint">The Scrum Master is assessing — first scorecard arrives on the next tick (≤60s).</p>
           {/if}
         </section>
       {:else}
         <section class="card">
           <h3>Details</h3>
-          <p class="hint">Pick a session on the left to see identity, location, process telemetry, and shepherd assessment.</p>
+          <p class="hint">Pick a session on the left to see identity, location, process telemetry, and Scrum Master assessment.</p>
         </section>
       {/if}
     </aside>
@@ -720,14 +725,14 @@
             <span>Role</span>
             <select bind:value={spawnForm.role}>
               <option value="worker">worker</option>
-              <option value="shepherd">shepherd (opt-in 4-eyes)</option>
+              <option value="shepherd">Scrum Master (opt-in 4-eyes)</option>
             </select>
           </label>
           <label class="check" title="When ON (default): the agent is told it's running inside chepherd and given the chepherd MCP tools so it can spawn peers, talk to other agents via @target, and alert you. When OFF: vanilla agent, no chepherd awareness — pure single-session usage.">
             <input type="checkbox" bind:checked={spawnForm.use_default_prompt} />
             <span>
               Make the agent chepherd-aware
-              <em class="check-hint">— knows about peers, can use MCP tools, observed by shepherd (recommended)</em>
+              <em class="check-hint">— knows about peers, can use MCP tools, observed by the Scrum Master (recommended)</em>
             </span>
           </label>
         </div>
@@ -781,7 +786,7 @@
     --fg-muted: #aaa;
     --fg-faint: #666;
     --accent: #ffa500;        /* chepherd orange */
-    --accent-2: #87ceeb;      /* shepherd blue */
+    --accent-2: #87ceeb;      /* Scrum Master blue (#292 — legacy class name was .shepherd) */
     --danger: #ff6b6b;
     --select-bg: #1a2530;
     --select-border: #5f9ea0;
@@ -879,7 +884,7 @@
   .row1 { display: flex; align-items: center; gap: 0.4rem; }
   .row1 .dot { font-size: 0.95rem; }
   .row1 .dot.worker { color: var(--accent-2); }
-  .row1 .dot.shepherd { color: var(--accent); }
+  .row1 .dot.scrummaster { color: var(--accent); }
   .row1 .name { font-weight: 600; flex: 1; }
   .row2 { font-size: 0.8rem; color: var(--fg-muted); margin-top: 0.2rem; padding-left: 1.3rem; }
   .badge { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: var(--border-strong); color: var(--fg-muted); }
@@ -904,7 +909,7 @@
   .center .title-left { display: flex; align-items: center; min-width: 0; overflow: hidden; }
   .center .title-name { font-weight: 600; }
   .center .title .dot { color: var(--accent-2); margin-right: 0.4rem; }
-  .center .title .dot.shepherd { color: var(--accent); }
+  .center .title .dot.scrummaster { color: var(--accent); }
   .center .title .subtitle { color: var(--fg-muted); font-size: 0.82rem; margin-left: 0.5rem; white-space: nowrap; }
   .center .title-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
   .center .title-actions button { font-size: 0.82rem; padding: 0.32rem 0.7rem; }
@@ -924,7 +929,7 @@
   .right dd code { font-size: 0.85rem; color: var(--accent-2); }
   .right dd code.cwd { font-size: 0.78rem; word-break: break-all; color: var(--accent-2); }
   .role-pill { display: inline-block; padding: 0.05rem 0.5rem; border-radius: 9px; font-size: 0.74rem; background: var(--accent-2); color: #000; font-weight: 600; }
-  .role-pill.shepherd { background: var(--accent); color: #000; }
+  .role-pill.scrummaster { background: var(--accent); color: #000; }
 
   /* Dense key:value grid — replaces flat <dl> with inline label-value rows.
      Each row is 2 columns: label (auto, capped) | value (1fr).

@@ -101,7 +101,7 @@
           <label>Team name<input bind:value={renameDraft} /></label>
           <label>Topology
             <select bind:value={topologyDraft}>
-              <option value="hub">hub (shepherd in the middle)</option>
+              <option value="hub">hub (Scrum Master in the middle)</option>
               <option value="mesh">mesh (peer-to-peer)</option>
               <option value="custom">custom</option>
             </select>
