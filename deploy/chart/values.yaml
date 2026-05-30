@@ -1,0 +1,108 @@
+# Default values for chepherd. Override via `helm install -f my-values.yaml`.
+#
+# This chart deploys the chepherd control plane as a single replica
+# StatefulSet (single SQLite-backed instance; HA backed by postgres is
+# a future v0.9.4 chart variant). Agent spawning uses chepherd's
+# PodRunner against the cluster's own k8s API, so the chart's
+# ServiceAccount gets per-namespace Pod create/exec/delete RBAC.
+#
+# Refs #225 row D2.
+
+image:
+  # Operators with a private registry: override repository + pullPolicy.
+  repository: ghcr.io/chepherd/chepherd
+  tag: ""            # default: appVersion from Chart.yaml
+  pullPolicy: IfNotPresent
+  pullSecrets: []    # imagePullSecrets list ([{name: my-secret}])
+
+# chepherd run flags. See `chepherd run --help` for the full surface.
+chepherd:
+  # listen address inside the container (Service maps :80 → this port)
+  listenPort: 8080
+  # MCP HTTP/WS listen address inside the container
+  mcpListenPort: 9090
+  # auto-spawn a Scrum Master session on boot
+  scrumMaster:
+    enabled: true
+    # back-compat default for operators using legacy @shepherd relay
+    name: shepherd
+  # federation (#225 rows C1-C3) — empty disables
+  federation:
+    registryURL: ""
+    publicURL: ""
+
+# Persistence — SQLite file lives here; agent state dirs hang off it.
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: ""   # empty = cluster default
+  accessModes:
+    - ReadWriteOnce
+
+# Service exposure. ClusterIP suits in-cluster federation peers;
+# LoadBalancer or Ingress for operator dashboard access.
+service:
+  type: ClusterIP
+  webPort: 80        # external port mapped to chepherd.listenPort
+  mcpPort: 9090
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: chepherd.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ServiceAccount + RBAC scoped to the chart's namespace so chepherd's
+# PodRunner can spawn agent pods. Disable when running ProcessRunner
+# (rootless podman sibling) — that mode doesn't need cluster RBAC.
+serviceAccount:
+  create: true
+  name: ""
+rbac:
+  # Pod create/exec/delete inside the chart namespace for agent spawning.
+  agentSpawn: true
+
+# Resource requests/limits — chepherd itself is small; agent pods get
+# their own resource sizing per their CRD spec.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+# Probes — /healthz endpoint shape pinned by chepherd's HTTP server.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 15
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+# Node/pod placement
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podSecurityContext:
+  fsGroup: 1000
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL

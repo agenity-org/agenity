@@ -1,0 +1,37 @@
+chepherd {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}"
+in namespace "{{ .Release.Namespace }}".
+
+To access the dashboard:
+
+  kubectl --namespace {{ .Release.Namespace }} \
+    port-forward svc/{{ include "chepherd.fullname" . }} \
+    8080:{{ .Values.service.webPort }}
+
+Then open: http://localhost:8080
+
+To verify the A2A endpoint is alive:
+
+  curl -s http://localhost:8080/.well-known/agent-card.json | jq '{
+    protocolVersion,
+    name,
+    version,
+    methods: .skills | length
+  }'
+
+To verify JWKS publication (#225 row B2 + #296):
+
+  curl -s http://localhost:8080/.well-known/jwks.json | jq '.keys[0].kty'
+  # Expected: "EC"
+
+For agent spawning:
+{{- if .Values.rbac.agentSpawn }}
+  Per-namespace Pod create/exec/delete RBAC is in place. PodRunner
+  will spawn agent pods in {{ .Release.Namespace }} using the
+  '{{ include "chepherd.serviceAccountName" . }}' ServiceAccount.
+{{- else }}
+  RBAC disabled; chepherd will use ProcessRunner (rootless podman
+  sibling) — works only in environments where podman is available
+  alongside the chepherd process.
+{{- end }}
+
+Configure further via `helm upgrade --set ...` or a values.yaml override.

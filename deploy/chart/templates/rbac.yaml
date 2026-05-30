@@ -1,0 +1,40 @@
+{{- if and .Values.serviceAccount.create .Values.rbac.agentSpawn -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "chepherd.fullname" . }}-agent-spawn
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+rules:
+  # PodRunner: spawn / exec / delete agent pods in this namespace
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log", "pods/attach"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
+  # PodRunner attaches a PVC per agent for /workspace
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "get", "list", "delete"]
+  # Cross-pod environment via downwardAPI / secret mounts
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "create", "list", "patch", "update", "delete"]
+  # Event recording so the audit log lands in kube events too
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "chepherd.fullname" . }}-agent-spawn
+  labels:
+    {{- include "chepherd.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "chepherd.fullname" . }}-agent-spawn
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "chepherd.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

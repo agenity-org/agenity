@@ -1,0 +1,21 @@
+apiVersion: v2
+name: chepherd
+description: |
+  Chepherd — agent runtime + Scrum-Master supervisor + multi-agent
+  collaboration dashboard. This chart installs a standalone chepherd
+  control plane on Kubernetes (no OpenOva Sovereign required); use
+  blueprint/chart/ instead when chepherd ships AS a Blueprint into an
+  OpenOva Sovereign.
+type: application
+version: 0.9.3-0
+appVersion: 0.9.3
+keywords:
+  - chepherd
+  - agent-runtime
+  - multi-agent
+  - a2a-v1.0
+sources:
+  - https://github.com/chepherd/chepherd
+maintainers:
+  - name: chepherd
+home: https://chepherd.io
