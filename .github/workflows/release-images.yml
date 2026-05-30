@@ -1,0 +1,144 @@
+name: release-images
+
+# v0.9.3 #225 row H8 — release pipeline: signed + SBOM-attested
+# container images per docs/V0.9.2-ARCHITECTURE.md §security:
+#   - cosign signs the image with GitHub OIDC (keyless)
+#   - syft generates SPDX SBOM
+#   - trivy scans for CVEs (fail on HIGH/CRITICAL)
+#   - grype double-scans for vulnerabilities
+#   - cosign attaches SBOM as in-toto attestation
+#
+# Runs on every push to main (latest tag) + on tag pushes (semver tag).
+# Pulls credentials from GitHub OIDC — no static cosign key in secrets.
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write    # push to ghcr.io
+  id-token: write    # for cosign keyless signing via GitHub OIDC
+
+jobs:
+  build-sign-attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set image tag
+        id: tag
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Lowercase repo name (ghcr requires lowercase)
+        id: repo
+        run: |
+          echo "name=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildah
+        uses: redhat-actions/buildah-build@v2
+        id: build
+        with:
+          image: ${{ steps.repo.outputs.name }}
+          tags: ${{ steps.tag.outputs.tag }}
+          containerfiles: ./Containerfile
+          build-args: |
+            VERSION=${{ steps.tag.outputs.tag }}
+            COMMIT=${{ github.sha }}
+            BUILDDATE=${{ github.event.head_commit.timestamp }}
+
+      - name: Login to GHCR
+        uses: redhat-actions/podman-login@v1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        id: push
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build.outputs.image }}
+          tags: ${{ steps.build.outputs.tags }}
+          registry: ${{ env.REGISTRY }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Sign image with cosign (keyless via GitHub OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign sign --yes "${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}"
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0.17.7
+
+      - name: Generate SBOM (SPDX-JSON)
+        run: |
+          syft "${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}" \
+            -o spdx-json \
+            > chepherd-sbom.spdx.json
+
+      - name: Attach SBOM as cosign attestation
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign attest --yes \
+            --predicate chepherd-sbom.spdx.json \
+            --type spdx \
+            "${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}"
+
+      - name: Upload SBOM artifact (also keep alongside the workflow run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: chepherd-sbom-${{ steps.tag.outputs.tag }}
+          path: chepherd-sbom.spdx.json
+          retention-days: 90
+
+      - name: Trivy vulnerability scan (HIGH/CRITICAL gate)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+          format: 'table'
+
+      - name: Grype vulnerability scan (HIGH/CRITICAL gate)
+        uses: anchore/scan-action@v5
+        id: grype
+        with:
+          image: ${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}
+          severity-cutoff: high
+          fail-build: true
+          only-fixed: true
+
+      - name: Print release summary
+        run: |
+          echo "## Release: chepherd:${{ steps.tag.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`${{ steps.push.outputs.registry-path }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Digest: \`${{ steps.push.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Signed with cosign (keyless via GitHub OIDC) — verify:" >> "$GITHUB_STEP_SUMMARY"
+          echo "  \`cosign verify --certificate-identity-regexp='^https://github.com/${{ github.repository }}/.*' --certificate-oidc-issuer='https://token.actions.githubusercontent.com' ${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SBOM attached as in-toto SPDX attestation — pull:" >> "$GITHUB_STEP_SUMMARY"
+          echo "  \`cosign download attestation ${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Trivy + Grype CVE scan: PASS (no HIGH/CRITICAL with fix available)" >> "$GITHUB_STEP_SUMMARY"
