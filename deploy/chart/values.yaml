@@ -6,7 +6,7 @@
 # PodRunner against the cluster's own k8s API, so the chart's
 # ServiceAccount gets per-namespace Pod create/exec/delete RBAC.
 #
-# Refs #225 row D2 #225 row D7 (SeaweedFS).
+# Refs #225 row D2 #225 row D7 (SeaweedFS) #225 row D5 (Observability).
 
 image:
   # Operators with a private registry: override repository + pullPolicy.
@@ -108,14 +108,6 @@ securityContext:
       - ALL
 
 # SeaweedFS storage backend (#225 row D7).
-# When enabled, the chart deploys a co-located SeaweedFS cluster
-# (1 master, 1 volume server, 1 filer) and points chepherd at it
-# via S3 API. Provides hot/warm/cold tiering for artifacts +
-# vault blobs + claude session jsonls per V0.9.2-ARCHITECTURE §7.
-#
-# Operators with an existing S3-compatible store (AWS S3, MinIO,
-# Wasabi) keep enabled: false + set storage.s3.* fields instead so
-# chepherd talks to their bucket directly.
 seaweedfs:
   enabled: false
   image:
@@ -146,8 +138,6 @@ seaweedfs:
         memory: 512Mi
       limits:
         memory: 4Gi
-    # Tier-cold: when set, volumes older than maxAgeDays are moved
-    # to the configured S3 backend (typically cheaper object storage).
     tier:
       enabled: false
       maxAgeDays: 30
@@ -165,17 +155,55 @@ seaweedfs:
 
 # chepherd storage backend selection. Defaults to local PVC.
 # When seaweedfs.enabled OR external S3 is configured, chepherd
-# uses S3 for artifacts + vault blobs + session jsonls (large/
-# append-mostly data); chepherd.db (SQLite metadata) stays on
-# PVC so transactional reads remain fast.
+# uses S3 for artifacts + vault blobs + session jsonls.
 storage:
-  # 'pvc' = local PVC (current default); 's3' = SeaweedFS or external S3.
   backend: pvc
   s3:
-    endpoint: ""           # e.g. http://<release>-seaweedfs-filer:8333
+    endpoint: ""
     region: us-east-1
     bucket: chepherd-blobs
-    # K8s Secret with keys: accessKey, secretKey. When seaweedfs.enabled,
-    # leave empty — chart provisions a Secret named "<release>-seaweedfs-s3".
     credentialsSecret: ""
-    pathStyle: true        # true for SeaweedFS + MinIO; false for AWS S3
+    pathStyle: true
+
+# Observability stack (#225 row D5).
+# When enabled, deploys Alloy DaemonSet (logs/metrics/traces
+# collector) + Loki/Mimir/Tempo single-binary StatefulSets per
+# V0.9.2-ARCH §7. OTel push from chepherd-mcp goes to Alloy on
+# 4317 (gRPC) / 4318 (HTTP).
+observability:
+  enabled: false
+  alloy:
+    image: "grafana/alloy:v1.4.2"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+  loki:
+    image: "grafana/loki:3.2.1"
+    storage: 20Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+  mimir:
+    image: "grafana/mimir:2.14.2"
+    storage: 20Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+  tempo:
+    image: "grafana/tempo:2.6.1"
+    storage: 20Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
