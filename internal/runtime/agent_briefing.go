@@ -49,12 +49,25 @@ func materializeAgentBriefing(spec SpawnSpec, agentHomeDir string, peers []PeerB
 		fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: mkdir skills: %v\n", spec.Name, err)
 		return
 	}
-	for name, body := range renderSkillSet(spec) {
-		if err := os.WriteFile(filepath.Join(skillsDir, name), []byte(body), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: write skill %s: %v\n", spec.Name, name, err)
+	// #396 P0 REOPENED — claude-code v2.1+ expects subdirectory-per-
+	// skill format: ~/.claude/skills/<skill-name>/SKILL.md, not flat
+	// ~/.claude/skills/<skill-name>.md. Operator's /skills still
+	// returned "No skills found" after the original #396 close
+	// because we shipped the flat-file format. Architect-confirmed
+	// via claude-code release notes. Each skill becomes its own
+	// directory; SKILL.md inside is what claude-code's /skills
+	// surface reads.
+	for skillName, body := range renderSkillSet(spec) {
+		skillDir := filepath.Join(skillsDir, skillName)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: mkdir skill %s: %v\n", spec.Name, skillName, err)
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: write skill %s/SKILL.md: %v\n", spec.Name, skillName, err)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: wrote skills/ (#396 P0)\n", spec.Name)
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: wrote skills/<name>/SKILL.md (#396 P0 reopened — subdir format)\n", spec.Name)
 }
 
 // PeerBrief is the minimal per-peer summary materializeAgentBriefing
@@ -157,7 +170,7 @@ func roleGuidance(role string) string {
 // workflow.
 func renderSkillSet(spec SpawnSpec) map[string]string {
 	out := map[string]string{
-		"team-orientation.md": `---
+		"team-orientation": `---
 name: team-orientation
 description: Orient yourself to the chepherd team you're spawned into — who are your peers, what's their role, how do you reach them
 ---
@@ -177,7 +190,7 @@ Use this skill any time you need to refresh your understanding of the team you'r
 
 A one-line summary of "who is in this team and what each is doing right now" suitable for reporting to the operator or a peer.
 `,
-		"peer-message.md": `---
+		"peer-message": `---
 name: peer-message
 description: Send a message to a peer agent (route via MCP, not @-text)
 ---
@@ -202,7 +215,7 @@ Send a message to another chepherd agent in your team.
 - Telling a worker their PR landed clean / failed CI
 - Coordinating handoffs between phases of multi-agent work
 `,
-		"operator-escalation.md": `---
+		"operator-escalation": `---
 name: operator-escalation
 description: Escalate to the human operator when peers can't resolve the blocker autonomously
 ---
@@ -238,7 +251,7 @@ Use this skill SPARINGLY. The operator is the ultimate authority, but you're exp
 	if roleName == "" {
 		roleName = "worker"
 	}
-	out["role-"+roleName+".md"] = fmt.Sprintf(`---
+	out["role-"+roleName] = fmt.Sprintf(`---
 name: role-%s
 description: Your role-specific operating mode for the %s team
 ---
