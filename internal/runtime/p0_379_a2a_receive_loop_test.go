@@ -55,7 +55,11 @@ func TestP0_379_PumpCompletesTask_OnSilenceWindow(t *testing.T) {
 	go pumpPTYToBroker(pub, src, task, completer)
 	time.Sleep(15 * time.Millisecond) // let pump subscribe
 
-	src.PushChunk([]byte("●alive\n"))
+	// Include the prompt cursor (❯) so the #385 silence-finalize gate
+	// passes — without it, the pump would re-arm the silence timer
+	// instead of firing the completer (correct behavior for fresh-
+	// spawn-banner suppression, separately tested in p1_385).
+	src.PushChunk([]byte("❯ ●alive\n"))
 	// Wait > silence window for completer to fire. Critically: we do
 	// NOT close src.sub.Done here — that would mask a silence-window
 	// regression by routing through the sub.Done finalize fallback.
