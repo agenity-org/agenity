@@ -46,7 +46,8 @@ import (
 //
 // Refs #208.
 type A2ADeliverer struct {
-	rt *Runtime
+	rt     *Runtime
+	broker brokerPublisher // #225 row A3 — set via SetBroker; nil disables publishing
 }
 
 // NewA2ADeliverer wraps a Runtime as an a2a.Deliverer.
@@ -84,7 +85,14 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	if _, err := sess.Write(submitSeq); err != nil {
 		return d.failedTask(msg, "PTY submit: "+err.Error()), err
 	}
-	return d.workingTask(msg), nil
+	task := d.workingTask(msg)
+	// #225 row A3 — pump PTY output through the broker so SSE
+	// subscribers see streaming task progress. No-op when broker
+	// is unset (back-compat for tests + pre-A3 deployments).
+	if d.broker != nil {
+		go pumpPTYToBroker(d.broker, sess, task)
+	}
+	return task, nil
 }
 
 // submitSequenceFor returns the flavor's submit byte sequence; falls
