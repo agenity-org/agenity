@@ -322,6 +322,16 @@ type Runtime struct {
 	teams       map[string]*Team       // by name
 	memberships map[string]*Membership // by composite key "agent_name|team_name"
 
+	// #404 P0.3 — team-event bus. emitTeamEvent pushes onto teamEvents;
+	// teamEventLoop reads + fans out PTY notifications + scheduled
+	// briefing regens. regenTimers debounces per-session regen at 1s
+	// (cancel + reschedule on burst events). regenMu protects
+	// regenTimers separately from r.mu so a long-running regen doesn't
+	// block the rest of the runtime.
+	teamEvents  chan teamEvent
+	regenTimers map[string]*time.Timer
+	regenMu     sync.Mutex
+
 	// Per-axis review records (v0.6-C council pattern). Keyed by target
 	// agent name; inner map keyed by axis (G|V|F|E|D|custom).
 	axisReviews map[string]map[string]*AxisReview
@@ -679,6 +689,10 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		r.sessionsRepo = store.Sessions()
 	}
 	r.cond = sync.NewCond(&r.mu)
+	// #404 P0.3 — team-event bus + fan-out goroutine. After this
+	// emitTeamEvent is safe to call; pre-this calls are no-ops (the
+	// channel is nil, emitTeamEvent's nil-check drops the event).
+	r.startTeamEventLoop()
 	return r, nil
 }
 
@@ -962,6 +976,20 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		Body: fmt.Sprintf("agent %q spawned (%s, team=%s, role=%s)", spec.Name, spec.AgentSlug, spec.Team, spec.Role),
 		Meta: map[string]any{"name": spec.Name, "agent_slug": spec.AgentSlug, "team": spec.Team, "role": string(spec.Role), "cwd": spec.Cwd},
 	})
+	// #404 P0.3 — emit a team-join event so every other peer in the
+	// same team gets a [chepherd team-event] PTY notification + a
+	// debounced briefing regen (1s). Without this, alpha (spawned
+	// first) never learns about beta (spawned later) — exactly the
+	// peer-awareness gap operator filed #404 against.
+	r.mu.Lock()
+	r.emitTeamEvent(teamEvent{
+		Kind:    TeamEventJoin,
+		Agent:   spec.Name,
+		Team:    spec.Team,
+		NewRole: string(spec.Role),
+		At:      time.Now().UTC(),
+	})
+	r.mu.Unlock()
 	r.broadcast()
 	return info, s, nil
 }
@@ -1510,9 +1538,29 @@ func (r *Runtime) Stop(name string) error {
 		return fmt.Errorf("runtime.Stop: unknown session %q", name)
 	}
 	s := r.sessions[id]
+	// #404 P0.3 — snapshot team + role BEFORE we delete info so we can
+	// emit a leave event with the right fields after the mutex
+	// unlock. The event must fire AFTER the registry mutation so peer
+	// fan-out + briefing regen reflect post-leave state.
+	var leaveTeam string
+	var leaveRole string
+	if info := r.info[id]; info != nil {
+		leaveTeam = info.Team
+		leaveRole = string(info.Role)
+	}
 	delete(r.sessions, id)
 	delete(r.byName, name)
 	delete(r.info, id)
+	// Emit BEFORE unlock so the event ordering is deterministic with
+	// respect to peers' subsequent rt.Get() calls — they'd see the
+	// session already gone.
+	r.emitTeamEvent(teamEvent{
+		Kind:    TeamEventLeave,
+		Agent:   name,
+		Team:    leaveTeam,
+		OldRole: leaveRole,
+		At:      time.Now().UTC(),
+	})
 	r.mu.Unlock()
 	fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: removed from registry (session id %s)\n", name, id)
 	if s != nil {
@@ -2576,6 +2624,24 @@ func (r *Runtime) JoinTeam(agentName, teamName string, role MembershipRole, brie
 		}
 	}
 	key := agentName + "|" + teamName
+	// #404 P0.3 — detect role-change vs first-join so the event carries
+	// the right kind. Without this, JoinTeam-as-role-change would emit a
+	// "join" event + re-paste the welcome notification on every role
+	// update.
+	var evKind TeamEventKind
+	var oldRole MembershipRole
+	if existing, ok := r.memberships[key]; ok {
+		if existing.Role == role {
+			// No-op update — still return the existing membership but
+			// don't emit a noisy event.
+			r.cond.Broadcast()
+			return existing, nil
+		}
+		evKind = TeamEventRoleChange
+		oldRole = existing.Role
+	} else {
+		evKind = TeamEventJoin
+	}
 	m := &Membership{
 		AgentName:     agentName,
 		TeamName:      teamName,
@@ -2584,6 +2650,14 @@ func (r *Runtime) JoinTeam(agentName, teamName string, role MembershipRole, brie
 		JoinedAt:      time.Now().UTC(),
 	}
 	r.memberships[key] = m
+	r.emitTeamEvent(teamEvent{
+		Kind:    evKind,
+		Agent:   agentName,
+		Team:    teamName,
+		OldRole: string(oldRole),
+		NewRole: string(role),
+		At:      time.Now().UTC(),
+	})
 	r.cond.Broadcast()
 	return m, nil
 }
@@ -2662,10 +2736,18 @@ func (r *Runtime) LeaveTeam(agentName, teamName string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := agentName + "|" + teamName
-	if _, ok := r.memberships[key]; !ok {
+	existing, ok := r.memberships[key]
+	if !ok {
 		return false
 	}
 	delete(r.memberships, key)
+	r.emitTeamEvent(teamEvent{
+		Kind:    TeamEventLeave,
+		Agent:   agentName,
+		Team:    teamName,
+		OldRole: string(existing.Role),
+		At:      time.Now().UTC(),
+	})
 	r.cond.Broadcast()
 	return true
 }
