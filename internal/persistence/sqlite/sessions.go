@@ -65,13 +65,15 @@ func (r *SessionRepository) Save(ctx context.Context, sessionID string, state ma
 	if err != nil {
 		return fmt.Errorf("sqlite sessions Save %q marshal: %w", sessionID, err)
 	}
+	uuidStr, _ := state["claude_uuid"].(string)
 	_, err = r.db.ExecContext(ctx,
-		`INSERT INTO sessions (session_id, state_json, updated_at)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO sessions (session_id, state_json, claude_session_uuid, updated_at)
+		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT(session_id) DO UPDATE SET
 		     state_json = excluded.state_json,
+		     claude_session_uuid = excluded.claude_session_uuid,
 		     updated_at = excluded.updated_at`,
-		sessionID, string(body), time.Now().UTC(),
+		sessionID, string(body), uuidStr, time.Now().UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("sqlite sessions Save %q: %w", sessionID, err)
@@ -115,4 +117,54 @@ func (r *SessionRepository) List(ctx context.Context) ([]string, error) {
 }
 
 // Verify SessionRepository implements the interface.
+// ResumableSessions returns sessions with a non-empty
+// claude_session_uuid column whose state JSON doesn't mark them
+// exited. #350 D4 boot-time auto-resume scan.
+func (r *SessionRepository) ResumableSessions(ctx context.Context) ([]persistence.ResumableSession, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT session_id, COALESCE(claude_session_uuid, ''), state_json
+		 FROM sessions
+		 WHERE claude_session_uuid != ''`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite sessions ResumableSessions: %w", err)
+	}
+	defer rows.Close()
+	var out []persistence.ResumableSession
+	for rows.Next() {
+		var (
+			id, uuidStr, raw string
+		)
+		if err := rows.Scan(&id, &uuidStr, &raw); err != nil {
+			return nil, err
+		}
+		state := map[string]any{}
+		if len(raw) > 0 {
+			_ = json.Unmarshal([]byte(raw), &state)
+		}
+		if exited, _ := state["exited"].(bool); exited {
+			continue
+		}
+		name, _ := state["name"].(string)
+		if name == "" {
+			name = id
+		}
+		agent, _ := state["agent"].(string)
+		if agent == "" {
+			agent, _ = state["agent_slug"].(string)
+		}
+		team, _ := state["team"].(string)
+		cwd, _ := state["cwd"].(string)
+		out = append(out, persistence.ResumableSession{
+			SessionID:         id,
+			Name:              name,
+			AgentSlug:         agent,
+			Team:              team,
+			Cwd:               cwd,
+			ClaudeSessionUUID: uuidStr,
+		})
+	}
+	return out, rows.Err()
+}
+
 var _ persistence.SessionRepository = (*SessionRepository)(nil)

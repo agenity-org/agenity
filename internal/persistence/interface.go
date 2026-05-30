@@ -62,6 +62,24 @@ type SessionRepository interface {
 	Save(ctx context.Context, sessionID string, state map[string]any) error
 	Delete(ctx context.Context, sessionID string) error
 	List(ctx context.Context) ([]string, error)
+
+	// ResumableSessions returns sessions that have a non-empty
+	// claude_session_uuid + are NOT marked exited in their state. Used
+	// by runtime.NewWithStore for the #350 D4 boot-time auto-resume
+	// scan: each returned ResumableSession is spawned with
+	// --resume <ClaudeSessionUUID>.
+	ResumableSessions(ctx context.Context) ([]ResumableSession, error)
+}
+
+// ResumableSession is the minimal payload runtime needs to re-spawn
+// a persisted session after a chepherd restart (#350 D4).
+type ResumableSession struct {
+	SessionID         string
+	Name              string // @-handle for the spawn's user-facing name
+	AgentSlug         string // "claude-code" | "qwen-code" | ...
+	Team              string
+	Cwd               string
+	ClaudeSessionUUID string // value passed to the agent's --resume flag
 }
 
 // ─── 2. SkillRepository ───────────────────────────────────────────

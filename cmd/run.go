@@ -405,6 +405,20 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// "default" tribe so 4-eyes coverage is on by default; pass
 	// --no-shepherd to opt out (or stop it from the dashboard).
 	_ = prompts.Worker // exposed via runtimehttp for explicit worker spawns w/ default prompt
+		// #350 D4 auto-resume: query persisted sessions w/ claude_session_uuid
+	// + Spawn each with --resume <uuid>. Operator's pre-restart state
+	// continues seamlessly post-restart. No-op when no persistence wired.
+	if resumable, err := rt.ResumableSessions(context.Background()); err == nil {
+		for _, spec := range resumable {
+			if _, _, err := rt.Spawn(spec); err != nil {
+				fmt.Fprintf(os.Stderr, "warn: D4 auto-resume %q failed (continuing): %v\n", spec.Name, err)
+			} else {
+				fmt.Printf("✓ Auto-resumed session %q (claude UUID prefix %s…)\n",
+					spec.Name, firstN(spec.AgentArgs[1], 8))
+			}
+		}
+	}
+
 	if !runFlagNoShepherd {
 		_, shepSess, err := rt.Spawn(runtime.SpawnSpec{
 			Name:         runFlagScrumMasterName,
@@ -660,4 +674,12 @@ func iogridExtension() *a2a.IOgridExtension {
 	ext := a2a.DefaultIOgridExtension()
 	ext.Endpoint = runFlagIOgridEndpoint
 	return ext
+}
+
+// firstN returns the first n runes of s, or s when shorter.
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
