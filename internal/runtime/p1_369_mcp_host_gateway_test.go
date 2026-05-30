@@ -1,32 +1,32 @@
-// internal/runtime/p1_369_mcp_host_gateway_test.go — pins #369 P1:
-// (a) PodmanRuntime.SpawnArgs emits --add-host host.containers.internal:host-gateway
-// (b) The agent's mcpURL default is ws://host.containers.internal:9090/mcp/ws
-//     so claude-code's MCP bridge subprocess can dial chepherd via Podman's
-//     host-gateway DNS shim from inside slirp4netns / bridge / host network.
+// internal/runtime/p1_369_mcp_host_gateway_test.go — pins #372 P0
+// regression: SpawnArgs MUST NOT emit --add-host
+// host.containers.internal:host-gateway because Podman rejects the
+// literal "host-gateway" with "invalid IP address in add-host" exit 125.
+// Podman 4.x+ auto-provides the host.containers.internal DNS entry
+// under slirp4netns + bridge modes.
 //
-// Refs #369 P1 #365 #225.
+// This test was inverted from its original #369 form (which asserted
+// PRESENCE) after #372 surfaced the Podman incompatibility.
+//
+// Refs #372 P0 #369 #370 (reverted by #372).
 package runtime
 
 import (
 	"testing"
 )
 
-func TestP1_369_SpawnArgs_AddsHostGatewayShim(t *testing.T) {
+func TestP0_372_SpawnArgs_NoAddHostHostGateway(t *testing.T) {
 	t.Parallel()
 	r := &PodmanRuntime{}
-	argv, _ := r.SpawnArgs("agent-369", "/tmp/home", "/tmp/secrets", "/tmp/cwd",
+	argv, _ := r.SpawnArgs("agent-372", "/tmp/home", "/tmp/secrets", "/tmp/cwd",
 		[]string{"claude"}, nil)
-	// Find --add-host immediately followed by host.containers.internal:host-gateway
 	for i, a := range argv {
 		if a == "--add-host" {
-			if i+1 >= len(argv) {
-				t.Fatal("--add-host has no value")
+			if i+1 < len(argv) && argv[i+1] == "host.containers.internal:host-gateway" {
+				t.Errorf("--add-host host.containers.internal:host-gateway present in argv; "+
+					"Podman rejects 'host-gateway' literal with exit 125. "+
+					"Rely on Podman's auto-injected host.containers.internal under slirp4netns/bridge.")
 			}
-			if argv[i+1] != "host.containers.internal:host-gateway" {
-				t.Errorf("--add-host value = %q, want host.containers.internal:host-gateway", argv[i+1])
-			}
-			return
 		}
 	}
-	t.Error("--add-host flag absent from argv — agent will fail to resolve host.containers.internal")
 }

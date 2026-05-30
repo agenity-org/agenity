@@ -252,14 +252,19 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		// per-pod network isolation) override via the CHEPHERD_CONTAINER_NETWORK
 		// env var.
 		"--network", agentNetworkMode(),
-		// #369 — host-gateway DNS shim so the agent can dial
-		// ws://host.containers.internal:9090/mcp/ws to reach the
-		// chepherd-mcp listener on the host's bridge gateway. Works
-		// across slirp4netns + bridge network modes. cmd/mcp.go's
-		// fallback URL has used this hostname since v0.8; the runtime
-		// just needs to advertise the alias via --add-host so DNS
-		// resolution works inside the agent's netns.
-		"--add-host", "host.containers.internal:host-gateway",
+		// #372 P0 — DROP explicit --add-host. Podman 4.x+ provides
+		// host.containers.internal DNS resolution automatically under
+		// slirp4netns + bridge. My #370 added an explicit
+		// "--add-host host.containers.internal:host-gateway" that
+		// Podman REJECTS with "Error: invalid IP address in add-host:
+		// host-gateway" → exit 125 → container dies before claude
+		// starts. host-gateway is a Docker convention; Podman's
+		// equivalent is the auto-injected entry under
+		// slirp4netns/bridge modes.
+		// Operators on Podman versions older than 4.x OR Docker who
+		// need an explicit shim can set CHEPHERD_MCP_URL to a
+		// direct IP override (e.g. CHEPHERD_MCP_URL=ws://10.0.2.2:9090/mcp/ws
+		// for slirp4netns gateway).
 		// Per-agent persistent home (claude session files, config).
 		"-v", hostHome+":/home/agent:rw,U",
 		// Working repo — read/write. Source is the host path; the
