@@ -2190,12 +2190,25 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 			}
 		}
 	}
-	if payload == "" {
-		// Host-fallback so single-user installs without a vault entry
-		// keep working — preserves the v0.5–v0.7 behavior.
-		if hostSrc := hostClaudeCredentialsPath(); hostSrc != "" {
-			if b, err := os.ReadFile(hostSrc); err == nil {
-				payload = string(b)
+	// #369 P0 — compare vault payload vs host's ~/.claude/.credentials.json
+	// by expiresAt; pick whichever is fresher. Operators who refresh on
+	// the host (interactive claude-code use) would otherwise spawn agents
+	// with the 13H-stale vault snapshot → claude 401 → 'Please run /login'
+	// → operator can't use the agent. Picking the fresher source preserves
+	// the existing v0.5–v0.7 host-fallback semantics AND handles the
+	// refreshed-on-host-but-stale-in-vault case the architect surfaced.
+	if hostSrc := hostClaudeCredentialsPath(); hostSrc != "" {
+		if b, err := os.ReadFile(hostSrc); err == nil {
+			hostPayload := string(b)
+			hostExp := claudeCredsExpiresAt(hostPayload)
+			vaultExp := claudeCredsExpiresAt(payload) // 0 if payload empty
+			if hostExp > vaultExp {
+				if payload != "" {
+					fmt.Fprintf(os.Stderr,
+						"[chepherd-spawn-secrets] %s: vault payload stale (expiresAt %d) < host (%d); preferring host (#369 P0)\n",
+						spec.Name, vaultExp, hostExp)
+				}
+				payload = hostPayload
 				src = "host-fallback:" + hostSrc
 			}
 		}
@@ -2707,6 +2720,23 @@ const claudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 
 var claudeOAuthTokenEndpointOverride string
+
+
+// claudeCredsExpiresAt extracts the expiresAt epoch-ms from a
+// credentials.json payload. Returns 0 on any parse failure (caller
+// treats as 'unknown / oldest possible' → host source preferred).
+// Refs #369 P0.
+func claudeCredsExpiresAt(payload string) int64 {
+	var doc struct {
+		ClaudeAiOauth struct {
+			ExpiresAt int64 `json:"expiresAt"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
+		return 0
+	}
+	return doc.ClaudeAiOauth.ExpiresAt
+}
 
 // refreshClaudeOAuthIfNeeded inspects a credentials.json payload (the
 // JSON shape claude-code writes to ~/.claude/.credentials.json). If
