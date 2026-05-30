@@ -252,6 +252,14 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		// per-pod network isolation) override via the CHEPHERD_CONTAINER_NETWORK
 		// env var.
 		"--network", agentNetworkMode(),
+		// #369 — host-gateway DNS shim so the agent can dial
+		// ws://host.containers.internal:9090/mcp/ws to reach the
+		// chepherd-mcp listener on the host's bridge gateway. Works
+		// across slirp4netns + bridge network modes. cmd/mcp.go's
+		// fallback URL has used this hostname since v0.8; the runtime
+		// just needs to advertise the alias via --add-host so DNS
+		// resolution works inside the agent's netns.
+		"--add-host", "host.containers.internal:host-gateway",
 		// Per-agent persistent home (claude session files, config).
 		"-v", hostHome+":/home/agent:rw,U",
 		// Working repo — read/write. Source is the host path; the
