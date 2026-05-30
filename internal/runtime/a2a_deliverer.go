@@ -95,6 +95,47 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
 	}
+	task := d.workingTask(msg)
+	// #225 row A4 — persist the Task row so GetTask/ListTasks see it.
+	d.persistTask(ctx, msg, task, "message/send")
+	// #225 row A3 — pump PTY output through the broker so SSE
+	// subscribers see streaming task progress. No-op when broker
+	// is unset (back-compat for tests + pre-A3 deployments).
+	//
+	// #379 P0 — pumpPTYToBroker also drives the A2A RECEIVE loop:
+	// silence-window detect → persist agent message in history →
+	// flip State to "completed".
+	//
+	// #387 P0 — pump MUST subscribe BEFORE we write the user's
+	// message so the byte-offset send-mark splits banner (pre-send)
+	// from response (post-send). Pre-#387 we wrote the message
+	// first, then spawned pump — but claude-code's input-box redraw
+	// emits cursor bytes into the response window, defeating #385's
+	// cursor-gate. Order:
+	//
+	//   1. Create mark
+	//   2. Spawn pump; pump subscribes; pump signals mark.Subscribed
+	//   3. We wait for Subscribed
+	//   4. Write user's message + submit sequence
+	//   5. Call mark.MarkSendNow() — pump records sendOffset
+	//   6. Silence-finalize slices buf[sendOffset:] for the gate +
+	//      the completer's response text
+	var mark *pumpSendMark
+	if d.broker != nil || d.taskStore != nil {
+		mark = newPumpSendMark()
+		completer := d.taskCompleter()
+		go pumpPTYToBroker(d.broker, sess, task, completer, mark)
+		// Brief bound so a slow Subscribe doesn't wedge Deliver. In
+		// practice subscribe is microseconds; 1s is paranoid.
+		select {
+		case <-mark.Subscribed:
+		case <-time.After(1 * time.Second):
+			// Pump didn't subscribe in time. Continue without
+			// marking — degrades to pre-#387 behavior (full-buffer
+			// cursor gate, may capture banner chrome on first
+			// message). Better than blocking the entire Deliver.
+		}
+	}
 	if _, err := sess.Write([]byte(text)); err != nil {
 		failed := d.failedTask(msg, "PTY write: "+err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
@@ -108,28 +149,12 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
 	}
-	task := d.workingTask(msg)
-	// #225 row A4 — persist the Task row so GetTask/ListTasks see it.
-	d.persistTask(ctx, msg, task, "message/send")
-	// #225 row A3 — pump PTY output through the broker so SSE
-	// subscribers see streaming task progress. No-op when broker
-	// is unset (back-compat for tests + pre-A3 deployments).
-	//
-	// #379 P0 — pump also drives the A2A RECEIVE loop: detect
-	// response complete, persist agent message in history, flip
-	// State to "completed".
-	//
-	// #389 P0 — pump uses the TWO-SILENCE PROTOCOL internally to
-	// distinguish banner/echo from response WITHOUT requiring
-	// any coordination with Deliver. The mark-based coordination
-	// from #387 had a fundamental timing race (Deliver's MarkSendNow
-	// fired before banner chunks landed, sendOffset=0, banner
-	// contaminated response). Two-silence observes the boundary
-	// from inside the pump goroutine — race-impossible because
-	// silence by definition only follows content.
-	if d.broker != nil || d.taskStore != nil {
-		completer := d.taskCompleter()
-		go pumpPTYToBroker(d.broker, sess, task, completer)
+	// #387 P0 — mark the send boundary AFTER both writes land. The
+	// pump's responseBuf may already contain banner chunks at this
+	// point; sendOffset captures the current length so silence-
+	// finalize only sees response bytes (post-send).
+	if mark != nil {
+		mark.MarkSendNow()
 	}
 	return task, nil
 }
