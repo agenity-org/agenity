@@ -232,3 +232,37 @@ tls:
   # ClientAuth=RequireAndVerifyClientCert against this CA bundle.
   # Leave empty for server-side-only TLS.
   clientCASecret: ""
+
+# Multi-tenant isolation (#225 row D3).
+# Each Org gets its own:
+#   - vCluster (K8s API isolation via virtual control plane)
+#   - NATS account (event-spine ACL isolation)
+#   - Cilium NetworkPolicy (default-deny inter-Org pod traffic)
+#
+# Empty orgs list disables (single shared namespace mode for dev).
+# Production deploys configure 1+ Orgs here OR via a controller
+# that reconciles Orgs from an external source-of-truth.
+multitenancy:
+  enabled: false
+  vcluster:
+    enabled: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+    persistence:
+      size: 5Gi
+  nats:
+    enabled: true
+  cilium:
+    enabled: true
+  # List of Orgs. Each maps to one chepherd-org-<name> Namespace +
+  # vCluster + NATS account + NetworkPolicy.
+  # Example:
+  #   orgs:
+  #     - name: foundrylab
+  #       natsPassword: ""  # empty → auto-generated
+  #     - name: dynolabs
+  orgs: []
