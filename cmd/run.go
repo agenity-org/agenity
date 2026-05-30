@@ -55,8 +55,9 @@ var (
 	runFlagListen                string
 	runFlagWebDir                string
 	runFlagMCPListen             string
-	runFlagFederationRegistryURL string // #225 row C1 — hosted peer registry
-	runFlagFederationPublicURL   string // #225 row C1 — this chepherd's public URL for announcements
+	runFlagFederationRegistryURL    string // #225 row C1 — hosted peer registry
+	runFlagFederationPublicURL      string // #225 row C1 — this chepherd's public URL for announcements
+	runFlagFederationOutboundBearer string // #225 §DoD walk — shared bearer for FederatedDeliverer outbound POST
 	runFlagIOgridEndpoint        string
 	runFlagKeychainBackend       string // #322 H6.1 — keychain backend (default = auto)
 	runFlagOpenBaoAddr           string // #322 H6.1 — OpenBao server URL
@@ -108,6 +109,8 @@ func init() {
 		"iogrid recipe-dispatch endpoint URL — empty disables the iogrid extension on agent-card.json. When set, peers can discover this chepherd's iogrid surface via /.well-known/agent-card.json's x-iogrid block.")
 	runCmd.Flags().StringVar(&runFlagFederationPublicURL, "federation-public-url", "",
 		"this chepherd's public URL announced to peers (default: derived from --listen).")
+	runCmd.Flags().StringVar(&runFlagFederationOutboundBearer, "federation-outbound-bearer", "",
+		"shared bearer token sent on every cross-instance SendMessage POST (use B3 trust-list + ES256 JWT in production; this flag is the §DoD walk-friendly bootstrap path).")
 	runCmd.Flags().StringVar(&runFlagScrumMasterName, "scrummaster-name", "shepherd",
 		"name for the auto-spawned Scrum Master session (back-compat default: 'shepherd'; set to 'scrummaster' for canonical naming).")
 	rootCmd.AddCommand(runCmd)
@@ -274,12 +277,15 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		var routedDeliverer a2a.Deliverer = a2aDeliverer
 		if store.AgentCards() != nil {
 			routedDeliverer = &federation.FederatedDeliverer{
-				Local:   a2aDeliverer,
-				Cards:   store.AgentCards(),
-				SelfSID: rt.InstanceUUID(),
-				// OutboundBearer left empty in v0.9.3 first cut — B3
-				// per-peer JWT signing layers on top without changing
-				// the wrapping shape here.
+				Local:          a2aDeliverer,
+				Cards:          store.AgentCards(),
+				SelfSID:        rt.InstanceUUID(),
+				OutboundBearer: runFlagFederationOutboundBearer,
+				// In production: B3 TrustListValidator on peer side
+				// accepts ES256-signed JWTs minted by this instance's
+				// #225 B2 keypair. The OutboundBearer flag supports a
+				// shared-secret bootstrap mode for the §DoD walk +
+				// pre-trust-list deploys.
 			}
 		}
 		if err := a2aRouter.WireDeliverer(routedDeliverer); err != nil {
