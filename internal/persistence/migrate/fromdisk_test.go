@@ -196,7 +196,19 @@ func (s *minimalStore) PushConfigs() persistence.PushNotificationConfigRepositor
 }
 func (s *minimalStore) AgentCards() persistence.AgentCardRepository { return stubAgentCards{} }
 func (s *minimalStore) Accounts() persistence.AccountRepository     { return stubAccounts{} }
+func (s *minimalStore) Artifacts() persistence.ArtifactRepository   { return stubArtifacts{} }
 func (s *minimalStore) Close() error                                { return nil }
+
+type stubArtifacts struct{}
+
+func (stubArtifacts) Get(_ context.Context, _ string) (*persistence.Artifact, error) {
+	return nil, nil
+}
+func (stubArtifacts) List(_ context.Context, _ string) ([]*persistence.Artifact, error) {
+	return nil, nil
+}
+func (stubArtifacts) Save(_ context.Context, _ *persistence.Artifact) error { return nil }
+func (stubArtifacts) Delete(_ context.Context, _ string) error              { return nil }
 
 func newMinimalStore() *minimalStore {
 	return &minimalStore{
