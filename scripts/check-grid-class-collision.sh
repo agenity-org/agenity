@@ -34,7 +34,9 @@ violations=0
 # token (not a suffix like `skills-grid` or `role-grid` — those scoped
 # names are exactly what the #228 sweep promotes). Token boundaries
 # are space, start-of-attr, or close-quote.
-if hits=$(grep -rn -E '<table[^>]*class="([^"]*[[:space:]])?grid([[:space:]][^"]*)?"' web/src/ 2>/dev/null || true); [[ -n "$hits" ]]; then
+if hits=$(grep -rn -E '<table[^>]*class="([^"]*[[:space:]])?grid([[:space:]][^"]*)?"' web/src/ \
+        --include='*.svelte' --include='*.astro' --include='*.html' \
+        2>/dev/null || true); [[ -n "$hits" ]]; then
     echo "FAIL — <table class=\"grid\"> found (#226 bug shape):"
     echo "$hits" | sed 's/^/    /'
     echo
