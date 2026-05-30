@@ -44,6 +44,7 @@ type Store interface {
 	Events() EventRepository
 	Grants() RBACGrantRepository
 	Tasks() TaskRepository
+	Artifacts() ArtifactRepository
 	PushConfigs() PushNotificationConfigRepository
 	AgentCards() AgentCardRepository
 	Accounts() AccountRepository
@@ -306,6 +307,30 @@ type PushNotificationConfig struct {
 	SigningKey []byte // HMAC signing secret for outbound webhook
 	Filters    []string
 	CreatedAt  time.Time
+}
+
+// ─── 11b. ArtifactRepository ──────────────────────────────────────
+// NEW in v0.9.3 #225 row H3. Persists A2A Artifacts emitted by Tasks
+// (one Task → zero-or-more Artifacts). Distinct from Task.OutputBlob
+// which is a serialized SendMessageResult snapshot; Artifacts are
+// individually addressable, FK'd to the Task (CASCADE on Task delete),
+// and survive a TaskRepository.Save that updates output_blob without
+// replaying the artifact stream.
+
+type ArtifactRepository interface {
+	Get(ctx context.Context, artifactID string) (*Artifact, error)
+	List(ctx context.Context, taskID string) ([]*Artifact, error)
+	Save(ctx context.Context, artifact *Artifact) error
+	Delete(ctx context.Context, artifactID string) error
+}
+
+type Artifact struct {
+	ID        string    // A2A artifactId (UUIDv7 by convention)
+	TaskID    string    // FK → Task.ID
+	Name      string    // optional human-readable name
+	Parts     []byte    // serialized []a2a.Part JSON
+	Metadata  []byte    // serialized map[string]any caller metadata
+	CreatedAt time.Time
 }
 
 // ─── 12. AgentCardRepository ──────────────────────────────────────
