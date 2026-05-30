@@ -1,20 +1,17 @@
 // internal/runtime/spawn_auth_env_test.go — pins the post-#227
-// invariant: Runtime.agentAuthEnv returns nil for every slug. The
-// claude-code credential channel is the per-spawn file mount
-// (/run/secrets/claude-credentials) which carries the full refreshable
-// OAuth pair; injecting a static access_token via env pins a snapshot
-// that can't auto-refresh and 401s on expiry. PR #221 originally
-// injected `CLAUDE_CODE_OAUTH_TOKEN=<vault.accessToken>` — operator-
-// reported 401s in #227 surfaced the wrong-layer fix and this PR
-// reverts it. The function infrastructure stays as a scaffold for
-// future flavors (qwen-code, aider, gemini-cli, opencode) whose
-// credentials genuinely need env-var delivery.
+// invariant for claude-code (file-mount canonical, env-injection
+// banned) AND the #225 row H1 contract for per-flavor auth env across
+// qwen-code, aider, gemini-cli. Future flavors append to the
+// per-flavor guards so the contract stays explicit — adding to
+// agentAuthEnvTable in runtime.go MUST be paired with a test here.
 //
-// Refs #208 #218 #221 #227.
+// Refs #208 #218 #221 #227 #225 row H1.
 package runtime
 
 import (
 	"errors"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -78,14 +75,15 @@ func TestRuntime_AgentAuthEnv_ClaudeCodeReturnsNil(t *testing.T) {
 	}
 }
 
-// TestRuntime_AgentAuthEnv_AllSlugsReturnNil — broad guard pinning
-// the post-#227 contract across every slug today. Future flavors
-// (qwen-code, aider, gemini-cli, opencode) may legitimately need env
-// injection, in which case this test ALSO needs updating — explicit
-// failure forces the deliberate decision rather than a silent slip-in.
+// TestRuntime_AgentAuthEnv_NoMatchingProvider — when the vault has no
+// entry for the slug's configured provider, agentAuthEnv returns nil
+// (CLI's own error surface tells the operator about missing creds).
+// Pinned post-#225 row H1: a vault carrying only claude-oauth (no
+// dashscope, no openai, no anthropic, no google) yields nil for every
+// non-claude-code slug too.
 //
-// Refs #208 #227.
-func TestRuntime_AgentAuthEnv_AllSlugsReturnNil(t *testing.T) {
+// Refs #208 #227 #225 row H1.
+func TestRuntime_AgentAuthEnv_NoMatchingProvider(t *testing.T) {
 	t.Parallel()
 	rt, err := New(t.TempDir())
 	if err != nil {
@@ -100,7 +98,7 @@ func TestRuntime_AgentAuthEnv_AllSlugsReturnNil(t *testing.T) {
 
 	for _, slug := range []string{"claude-code", "claude", "qwen-code", "aider", "gemini-cli", "opencode", "unknown-slug"} {
 		if got := rt.agentAuthEnv(slug); got != nil {
-			t.Errorf("agentAuthEnv(%q) = %v, want nil", slug, got)
+			t.Errorf("agentAuthEnv(%q) = %v, want nil (vault has only claude-oauth)", slug, got)
 		}
 	}
 }
@@ -120,5 +118,95 @@ func TestRuntime_AgentAuthEnv_NoVault(t *testing.T) {
 
 	if got := rt.agentAuthEnv("claude-code"); got != nil {
 		t.Errorf("nil vault: env = %v, want nil", got)
+	}
+	if got := rt.agentAuthEnv("qwen-code"); got != nil {
+		t.Errorf("nil vault: qwen-code env = %v, want nil", got)
+	}
+}
+
+// TestRuntime_AgentAuthEnv_QwenInjectsDashScope — #225 row H1 contract:
+// qwen-code with a dashscope-api vault entry gets DASHSCOPE_API_KEY=<value>.
+// Refs #225 row H1.
+func TestRuntime_AgentAuthEnv_QwenInjectsDashScope(t *testing.T) {
+	t.Parallel()
+	rt, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rt.SetVault(&fakeVault{creds: map[string]fakeCred{
+		"cred-1": {
+			meta:  VaultCredMeta{ID: "cred-1", Provider: "dashscope-api", Label: "operator-qwen"},
+			value: "sk-dashscope-FAKE-12345",
+		},
+	}})
+	got := rt.agentAuthEnv("qwen-code")
+	if len(got) != 1 || got[0] != "DASHSCOPE_API_KEY=sk-dashscope-FAKE-12345" {
+		t.Errorf("agentAuthEnv(qwen-code) = %v, want [DASHSCOPE_API_KEY=sk-dashscope-FAKE-12345]", got)
+	}
+}
+
+// TestRuntime_AgentAuthEnv_AiderBothChannels — aider gets both
+// ANTHROPIC_API_KEY and OPENAI_API_KEY when both vault providers
+// carry entries. aider's --model arg decides at request time which
+// it uses.
+// Refs #225 row H1.
+func TestRuntime_AgentAuthEnv_AiderBothChannels(t *testing.T) {
+	t.Parallel()
+	rt, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rt.SetVault(&fakeVault{creds: map[string]fakeCred{
+		"cred-1": {meta: VaultCredMeta{ID: "cred-1", Provider: "anthropic-api"}, value: "sk-ant-FAKE"},
+		"cred-2": {meta: VaultCredMeta{ID: "cred-2", Provider: "openai-api"}, value: "sk-oai-FAKE"},
+	}})
+	got := rt.agentAuthEnv("aider")
+	sort.Strings(got)
+	want := []string{"ANTHROPIC_API_KEY=sk-ant-FAKE", "OPENAI_API_KEY=sk-oai-FAKE"}
+	sort.Strings(want)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("agentAuthEnv(aider) = %v, want %v", got, want)
+	}
+}
+
+// TestRuntime_AgentAuthEnv_GeminiCLI — gemini-cli with a google-api
+// vault entry gets GOOGLE_API_KEY=<value>.
+// Refs #225 row H1.
+func TestRuntime_AgentAuthEnv_GeminiCLI(t *testing.T) {
+	t.Parallel()
+	rt, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rt.SetVault(&fakeVault{creds: map[string]fakeCred{
+		"cred-1": {meta: VaultCredMeta{ID: "cred-1", Provider: "google-api"}, value: "AIza-FAKE-12345"},
+	}})
+	got := rt.agentAuthEnv("gemini-cli")
+	if len(got) != 1 || got[0] != "GOOGLE_API_KEY=AIza-FAKE-12345" {
+		t.Errorf("agentAuthEnv(gemini-cli) = %v, want [GOOGLE_API_KEY=AIza-FAKE-12345]", got)
+	}
+}
+
+// TestRuntime_AgentAuthEnv_ClaudeCodeStillNilEvenWithVault — #227
+// regression gate persists post-H1: even when the vault has every
+// provider populated (including the ones non-claude flavors use),
+// claude-code returns nil because it's deliberately ABSENT from
+// agentAuthEnvTable.
+// Refs #225 row H1 #227.
+func TestRuntime_AgentAuthEnv_ClaudeCodeStillNilEvenWithVault(t *testing.T) {
+	t.Parallel()
+	rt, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rt.SetVault(&fakeVault{creds: map[string]fakeCred{
+		"cred-1": {meta: VaultCredMeta{ID: "cred-1", Provider: "claude-oauth"}, value: "tok"},
+		"cred-2": {meta: VaultCredMeta{ID: "cred-2", Provider: "anthropic-api"}, value: "sk-ant"},
+		"cred-3": {meta: VaultCredMeta{ID: "cred-3", Provider: "openai-api"}, value: "sk-oai"},
+		"cred-4": {meta: VaultCredMeta{ID: "cred-4", Provider: "dashscope-api"}, value: "sk-ds"},
+		"cred-5": {meta: VaultCredMeta{ID: "cred-5", Provider: "google-api"}, value: "AIza"},
+	}})
+	if got := rt.agentAuthEnv("claude-code"); got != nil {
+		t.Errorf("agentAuthEnv(claude-code) = %v, want nil (#227 file-mount contract — claude-code is absent from agentAuthEnvTable)", got)
 	}
 }

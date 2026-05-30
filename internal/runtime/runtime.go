@@ -491,14 +491,70 @@ func (r *Runtime) agentEnvOverlay() []string {
 // workflow (which has been running fine for hours on the same
 // credential) is preserved.
 //
-// Refs #208 #218 #221 #227.
+// Refs #208 #218 #221 #227 #225 row H1.
 func (r *Runtime) agentAuthEnv(slug string) []string {
-	// claude-code's credential lives in /run/secrets/claude-credentials,
-	// not in an env var. See doc comment above for the regression
-	// history. Other flavors return nil pending future provider
-	// mappings — wire them here when they land.
-	_ = slug
-	return nil
+	if r.vault == nil {
+		return nil
+	}
+	specs, ok := agentAuthEnvTable[slug]
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, s := range specs {
+		metas := r.vault.ListByProvider(s.vaultProvider)
+		if len(metas) == 0 {
+			continue
+		}
+		// Take the last entry — vault stores in insert order and we
+		// want the most-recently-added credential for the provider.
+		latest := metas[len(metas)-1]
+		val, err := r.vault.GetValue(latest.ID)
+		if err != nil || val == "" {
+			continue
+		}
+		out = append(out, s.envVar+"="+val)
+	}
+	return out
+}
+
+// agentAuthEnvSpec describes one env var to inject for an agent flavor
+// whose CLI reads credentials from process env. Keyed by slug in
+// agentAuthEnvTable; multiple entries per slug are allowed when the
+// CLI accepts more than one credential channel.
+//
+// Refs #225 row H1.
+type agentAuthEnvSpec struct {
+	envVar        string // env var name written into the spawned process
+	vaultProvider string // VaultCredMeta.Provider key to look up
+}
+
+// agentAuthEnvTable maps agent slug → ordered list of env-var specs.
+// **claude-code is deliberately absent** (#227 — file-mount is the
+// canonical credential channel; env injection pins a snapshot that
+// cannot auto-refresh and 401s on expiry).
+//
+// Adding a flavor: append a row here AND add a matching test in
+// spawn_auth_env_test.go so the per-flavor contract stays explicit.
+//
+// Refs #225 row H1.
+var agentAuthEnvTable = map[string][]agentAuthEnvSpec{
+	"qwen-code": {
+		// Alibaba DashScope key. qwen-code's CLI also reads
+		// OPENAI_API_KEY when configured against an OpenAI-compatible
+		// gateway (the bp-newapi path), so both channels are wired.
+		{envVar: "DASHSCOPE_API_KEY", vaultProvider: "dashscope-api"},
+		{envVar: "OPENAI_API_KEY", vaultProvider: "openai-api"},
+	},
+	"aider": {
+		// aider accepts Anthropic or OpenAI by env. Both wired; the
+		// --model flag (DefaultArgs) selects at request time.
+		{envVar: "ANTHROPIC_API_KEY", vaultProvider: "anthropic-api"},
+		{envVar: "OPENAI_API_KEY", vaultProvider: "openai-api"},
+	},
+	"gemini-cli": {
+		{envVar: "GOOGLE_API_KEY", vaultProvider: "google-api"},
+	},
 }
 
 // StateDir returns the root state directory for this runtime
