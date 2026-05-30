@@ -118,7 +118,8 @@
         <button on:click={() => moveAgent(t.name)}>→ {t.name} <small>({t.topology})</small></button>
       {/each}
       <div class="ctx-section">Change role</div>
-      {#each ['worker', 'shepherd', 'reviewer', 'tester'].filter(r => r !== ctxMenu.currentRole) as r /* back-compat wire values */}
+      <!-- back-compat wire values: 'shepherd' kept for legacy memberships, label rendered as 'scrummaster' -->
+      {#each ['worker', 'shepherd', 'reviewer', 'tester'].filter(r => r !== ctxMenu.currentRole) as r}
         <button on:click={() => changeRole(r)}>↔ {r}</button>
       {/each}
     </div>
