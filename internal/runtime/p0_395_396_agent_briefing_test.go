@@ -104,11 +104,15 @@ func TestP0_396_AgentSkills_DirectoryPopulated(t *testing.T) {
 	materializeAgentBriefing(spec, tmp, nil)
 
 	skillsDir := filepath.Join(tmp, ".claude", "skills")
+	// #396 P0 REOPENED — claude-code v2.1+ expects subdirectory-per-
+	// skill format. Each skill is `~/.claude/skills/<name>/SKILL.md`,
+	// NOT a flat .md file. Operator's /skills returned "No skills
+	// found" with the flat format despite the files existing on disk.
 	required := []string{
-		"team-orientation.md",
-		"peer-message.md",
-		"operator-escalation.md",
-		"role-worker.md",
+		"team-orientation/SKILL.md",
+		"peer-message/SKILL.md",
+		"operator-escalation/SKILL.md",
+		"role-worker/SKILL.md",
 	}
 	for _, name := range required {
 		p := filepath.Join(skillsDir, name)
@@ -154,7 +158,7 @@ func TestP0_396_RoleSkill_VariesByRole(t *testing.T) {
 			tmp := t.TempDir()
 			spec := SpawnSpec{Name: "agent-" + role, Role: Role(role), Team: "t", AgentSlug: "claude-code"}
 			materializeAgentBriefing(spec, tmp, nil)
-			body, err := os.ReadFile(filepath.Join(tmp, ".claude", "skills", "role-"+role+".md"))
+			body, err := os.ReadFile(filepath.Join(tmp, ".claude", "skills", "role-"+role, "SKILL.md"))
 			if err != nil {
 				t.Fatalf("read role skill: %v", err)
 			}
