@@ -53,6 +53,23 @@
   let vaultForm = $state({ provider: 'anthropic-api', label: '', env_var: '', value: '' });
   let vaultSaving = $state(false);
 
+  // #415 P0 — Per-session AgentCard. Pulls from #404 P0.1 endpoint so
+  // the Skills tab shows the actual chepherd skills + role capabilities
+  // the agent ships with, not just the stat sheet. Operator's complaint
+  // 2026-05-31: "🎮 Skills tab shows completely irrelevant content"
+  // because pre-#415 it ONLY showed stat sheet (context budget / model
+  // tier / etc). Now shows skills + capabilities ABOVE the stat sheet.
+  let agentCard = $state(null);
+  async function loadAgentCard() {
+    if (!agent?.name) return;
+    try {
+      const r = await fetch(`${API}/sessions/${encodeURIComponent(agent.name)}/agent-card`);
+      if (r.ok) {
+        agentCard = await r.json();
+      }
+    } catch {}
+  }
+
   onMount(() => {
     promptDraft = agent?.system_prompt || '';
     renameDraft = agent?.name || '';
@@ -68,6 +85,7 @@
     loadMemberships();
     loadGlobalMD();
     loadVault();
+    loadAgentCard();
   });
 
   async function loadGlobalMD() {
@@ -284,7 +302,41 @@
           </div>
         </div>
       {:else if tab === 'skills'}
-        <p class="hint">Per-agent stat sheet — defaults shipped per role; override only what you want. Save patches the runtime.</p>
+        <!-- #415 P0 — chepherd skills + role capabilities from the
+             per-session AgentCard (#404 P0.1 endpoint). Pre-#415 this
+             tab only showed the stat sheet, which operator flagged as
+             "completely irrelevant" because the actual skill content
+             is the .claude/skills/*/SKILL.md set + the role-derived
+             capability mapping. -->
+        <section class="skills-section">
+          <h3 class="section-head">Chepherd skills shipped with this agent</h3>
+          <p class="hint">Skills are recipes the agent invokes via claude-code's <code>/skills</code> command. Read at spawn time from <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code>.</p>
+          {#if agentCard?.skills?.length}
+            <ul class="skill-list">
+              {#each agentCard.skills as skill}
+                <li><code>{skill}</code></li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="empty">No skills loaded — agent-card endpoint returned no skills, or the agent isn't running.</p>
+          {/if}
+        </section>
+        <section class="skills-section">
+          <h3 class="section-head">Role capabilities</h3>
+          <p class="hint">Capabilities advertised by this agent's role (<code>{agentCard?.role || agent?.role || '—'}</code>) — peer agents read these from <code>chepherd.get_peer_card</code> to know what to expect when interacting.</p>
+          {#if agentCard?.capabilities?.length}
+            <ul class="capability-list">
+              {#each agentCard.capabilities as cap}
+                <li><code>{cap}</code></li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="empty">No capabilities — role may be unknown to the capability map. <code>general-purpose</code> is the default fallback.</p>
+          {/if}
+        </section>
+        <section class="skills-section">
+          <h3 class="section-head">Stat sheet · discipline matrix</h3>
+          <p class="hint">Per-agent stat sheet — defaults shipped per role; override only what you want. Save patches the runtime.</p>
         <div class="settings-grid">
           <label>Context budget<input type="number" min="0" step="10000" bind:value={skills.context_budget} /></label>
           <label>Model tier
@@ -311,6 +363,7 @@
           <button class="ghost" on:click={applyModel} disabled={!skills.model_tier || modelApplying} title="Send /model command to agent PTY — takes effect immediately for claude-code">{modelApplying ? 'Applying…' : '↪ Apply model now'}</button>
           <button class="primary" on:click={saveSkills} disabled={skillsSaving}>{skillsSaving ? 'Saving…' : 'Save'}</button>
         </div>
+        </section>
       {:else if tab === 'canon'}
         <p class="hint">Team CLAUDE.md — every member reads this each tick (chepherd via <code>read_canon</code> MCP). Shared across the whole team.</p>
         {#if canonEditing}
@@ -416,6 +469,14 @@
   .hint { color: var(--fg-muted); margin: 0 0 0.7rem 0; }
   textarea { width: 100%; padding: 0.55rem 0.7rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; resize: vertical; box-sizing: border-box; }
   .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.7rem; }
+  /* #415 P0 — Skills tab sections (skills + capabilities + stat sheet) */
+  .skills-section { margin-bottom: 1.1rem; }
+  .skills-section + .skills-section { border-top: 1px solid var(--border); padding-top: 0.9rem; }
+  .section-head { font-size: 0.85rem; font-weight: 600; color: var(--accent); margin: 0 0 0.25rem 0; text-transform: uppercase; letter-spacing: 0.04em; }
+  .skill-list, .capability-list { list-style: none; padding: 0; margin: 0.3rem 0 0; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .skill-list li, .capability-list li { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 0.18rem 0.5rem; font-size: 0.82rem; }
+  .skill-list code, .capability-list code { background: transparent; padding: 0; color: var(--fg); }
+  .empty { color: var(--fg-faint); font-size: 0.82rem; font-style: italic; }
   label { display: block; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   input, select { width: 100%; padding: 0.4rem 0.55rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; font-family: ui-monospace, monospace; margin-top: 0.15rem; box-sizing: border-box; }
   pre.body { background: var(--bg-input); padding: 0.7rem; border-radius: 6px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-word; max-height: 50vh; }
