@@ -4,7 +4,7 @@
 # having to bind-mount its own executable from the host (which doesn't
 # work in the sibling-container architecture — the host podman daemon
 # can't see paths inside the chepherd container).
-FROM golang:1.24-alpine AS chepherd-builder
+FROM golang:1.25-alpine AS chepherd-builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
@@ -55,7 +55,13 @@ RUN useradd -m -u 1000 -s /bin/bash agent \
 # chepherd at spawn time from its token vault; claude-code may refresh the
 # token in-place but the vault remains source of truth — chepherd captures
 # fresh tokens via PTY OAuth-URL detection (R5).
-COPY scripts/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
+# #367 P0 — COPY --chmod=755 sets the mode at COPY time, independent
+# of the host file's permissions, cache state, or any subsequent RUN
+# step. Defensive against the regression where the running image had
+# -rw-rw-r-- on /usr/local/bin/agent-entrypoint (OCI runtime permission
+# denied, exit_code 126). The RUN chmod +x below remains as
+# belt-and-suspenders.
+COPY --chmod=755 scripts/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
 # #273 — defensive removal of any leftover `chepherd-agent-entrypoint`
 # from older base-image layers. A previous build flow installed the
 # script under that name + the ENTRYPOINT was switched to
@@ -65,7 +71,9 @@ COPY scripts/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
 # stale `agent-entrypoint`. This RUN line guarantees the leftover is
 # gone on every fresh build.
 RUN chmod +x /usr/local/bin/agent-entrypoint \
- && rm -f /usr/local/bin/chepherd-agent-entrypoint
+ && rm -f /usr/local/bin/chepherd-agent-entrypoint \
+ && test -x /usr/local/bin/agent-entrypoint \
+    || { echo "#367 BUILD FAILURE: agent-entrypoint missing exec bit despite RUN chmod"; ls -la /usr/local/bin/agent-entrypoint; exit 1; }
 
 USER agent
 WORKDIR /home/agent
