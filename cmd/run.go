@@ -275,6 +275,12 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// -32004).
 		streamBroker := a2a.NewStreamBroker()
 		rs.StreamBroker = streamBroker
+		// #225 row A3 — wire the broker into the A2ADeliverer so
+		// PTY output for each delivered task flows through SSE
+		// subscribers. When SendStreamingMessage caller subscribes
+		// to the returned streamID, they see incremental artifact
+		// events as the agent's PTY produces output.
+		a2aDeliverer.SetBroker(streamBroker)
 		methodBodies := &a2a.MethodBodies{
 			Store:       store,
 			AgentCardFn: func() a2a.AgentCard { return *newAgentCard(runFlagListen) },
