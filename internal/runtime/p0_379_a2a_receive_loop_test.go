@@ -52,7 +52,7 @@ func TestP0_379_PumpCompletesTask_OnSilenceWindow(t *testing.T) {
 		completerResponse = response
 	}
 
-	go pumpPTYToBroker(pub, src, task, completer)
+	go pumpPTYToBroker(pub, src, task, completer, nil)
 	time.Sleep(15 * time.Millisecond) // let pump subscribe
 
 	// Include the prompt cursor (❯) so the #385 silence-finalize gate
@@ -100,7 +100,7 @@ func TestP0_379_PumpCompletesTask_OnChannelClose(t *testing.T) {
 		completerMu.Unlock()
 	}
 
-	go pumpPTYToBroker(pub, src, task, completer)
+	go pumpPTYToBroker(pub, src, task, completer, nil)
 	time.Sleep(15 * time.Millisecond)
 	src.PushChunk([]byte("partial response"))
 	time.Sleep(15 * time.Millisecond)
