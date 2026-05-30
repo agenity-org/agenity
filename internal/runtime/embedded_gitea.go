@@ -125,7 +125,7 @@ func EnsureEmbeddedGitea(stateDir, repoName string) (*EmbeddedGiteaInfo, error) 
 		"run", "-d",
 		"--name", giteaContainerName,
 		"--restart", "unless-stopped",
-		"--network", "bridge",
+		"--network", agentNetworkMode(),
 		"-v", dataDir+":/data:rw",
 		"-v", configDir+":/etc/gitea:rw",
 		// Default install-mode env per the Gitea image.
