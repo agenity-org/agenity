@@ -218,3 +218,22 @@ func TestSSEHandler_EmptyStreamID_Returns400(t *testing.T) {
 		t.Errorf("expected 400 for empty streamID, got %d", resp.StatusCode)
 	}
 }
+
+func TestServeJWKS_Returns200WithBody(t *testing.T) {
+	body := []byte(`{"keys":[{"kty":"EC","crv":"P-256"}]}`)
+	mux := http.NewServeMux()
+	mux.HandleFunc(JWKSPath, ServeJWKS(body))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + JWKSPath)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+}

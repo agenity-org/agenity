@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,6 +76,14 @@ type Server struct {
 	// ResubscribeTask. nil disables /a2a/stream/* + the streaming
 	// JSON-RPC methods return -32004.
 	StreamBroker *a2a.StreamBroker
+
+	// v0.9.3 #225 row B2 — ES256 signing-key lifecycle. JWKSBody is
+	// the marshalled JSON published at /.well-known/jwks.json; empty
+	// disables the endpoint. ES256Priv is the in-memory handle the
+	// runtime uses to sign outbound JWTs (B3 — peers verify via JWKS
+	// lookup against this body).
+	JWKSBody  []byte
+	ES256Priv *ecdsa.PrivateKey
 
 	// v0.9.3 #225 row C1 — federation orchestrator + cached agent-card
 	// store. Federation is nil when --federation-registry-url is empty;
@@ -218,6 +227,8 @@ func (s *Server) Handler() http.Handler {
 			validator = &authProviderValidator{provider: s.Auth}
 		}
 		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter, validator, s.StreamBroker)
+		// #225 row B2 — JWKS public-key publication.
+		a2a.RegisterJWKS(mux, s.JWKSBody)
 	}
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)

@@ -281,6 +281,23 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("a2a: register method bodies: %w", err)
 		}
 		rs.A2ARouter = a2aRouter
+		// v0.9.3 #225 row B2 — ES256 keypair lifecycle. Load (or mint
+		// on first boot) the instance's signing key from
+		// AuthSecretRepository + publish the public half at
+		// /.well-known/jwks.json so peers can verify inbound JWTs
+		// without out-of-band key sharing. Failure is non-fatal — when
+		// persistence is unreachable, JWKS endpoint stays unmounted
+		// and B3 per-peer JWT signing simply falls back to the
+		// unsigned bearer (the same path as today).
+		if priv, err := auth.LoadOrCreateES256(context.Background(), store.AuthSecrets()); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: es256: %v (JWKS endpoint disabled)\n", err)
+		} else if jwks, err := auth.PublicJWK(priv); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: es256 jwks marshal: %v\n", err)
+		} else {
+			rs.JWKSBody = jwks
+			rs.ES256Priv = priv
+			fmt.Printf("✓ ES256 signing key loaded; JWKS public at /.well-known/jwks.json (#225 B2)\n")
+		}
 		// Vault — open (or create) in the state directory
 		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: vault: %v (credential vault disabled)\n", err)
