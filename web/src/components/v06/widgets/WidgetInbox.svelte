@@ -26,7 +26,7 @@
     {/if}
   </h4>
   {#if !(inbox && inbox.length)}
-    <p class="hint">No messages. Shepherd writes here only for accomplishments / failures / stuck / questions.</p>
+    <p class="hint">No messages. The Scrum Master writes here only for accomplishments / failures / stuck / questions.</p>
   {/if}
   <ul>
     {#each (inbox || []).slice().reverse() as m (m.id)}

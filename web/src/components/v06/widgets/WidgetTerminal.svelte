@@ -15,12 +15,12 @@
 
   // Per-pane override: if node.config.agent is set, that wins; otherwise
   // fall back to the workspace-wide selectedAgent. If neither is set,
-  // auto-pick the first non-shepherd live agent so the operator never
+  // auto-pick the first non-Scrum-Master live agent so the operator never
   // sees an empty "(no agent)" state at first open.
   let myAgent = $derived.by(() => {
     if (node?.config?.agent) return node.config.agent;
     if (selectedAgent) return selectedAgent;
-    const candidate = (sessions || []).find(s => !s.exited && s.role !== 'shepherd')
+    const candidate = (sessions || []).find(s => !s.exited && s.role !== 'shepherd' && s.role !== 'scrummaster' /* back-compat */)
                    || (sessions || []).find(s => !s.exited)
                    || null;
     if (candidate && node) {

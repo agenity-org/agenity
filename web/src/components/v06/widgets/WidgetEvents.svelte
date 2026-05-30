@@ -20,7 +20,7 @@
       case 'exit': return 'k-exit';
       case 'scorecard': return 'k-score';
       case 'verdict': return 'k-verdict';
-      case 'shepherd_refresh': return 'k-shep';
+      case 'shepherd_refresh': return 'k-shep'; // back-compat: wire event kind
       case 'template_applied': return 'k-template';
       case 'note': return 'k-note';
       default: return '';

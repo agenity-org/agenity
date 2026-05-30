@@ -30,9 +30,9 @@
   let error = $state('');
 
   const SHAPES = [
-    { id: 'solo',             icon: '🧑',  title: 'Solo',            blurb: 'One agent, no shepherd. Quick exploration.' },
-    { id: 'solo-supervised',  icon: '👤',  title: 'Solo + Shepherd', blurb: 'One worker + one shepherd watching. The daily default.' },
-    { id: 'pair',             icon: '👥',  title: 'Pair',            blurb: 'Implementer + reviewer + shepherd. Code review built in.' },
+    { id: 'solo',             icon: '🧑',  title: 'Solo',            blurb: 'One agent, no Scrum Master. Quick exploration.' },
+    { id: 'solo-supervised',  icon: '👤',  title: 'Solo + Scrum Master', blurb: 'One worker + one Scrum Master watching. The daily default.' },
+    { id: 'pair',             icon: '👥',  title: 'Pair',            blurb: 'Implementer + reviewer + Scrum Master. Code review built in.' },
     { id: 'council',          icon: '🏛',  title: 'Council',         blurb: '5 agents: implementer + tester + 2 specialist reviewers + orchestrator. Heavy or risky work.' },
     { id: 'resurrect',        icon: '↻',   title: 'Resurrect a team', blurb: 'Bring back a previously-spawned team — each member resumes its last Claude session.' },
     { id: 'custom-yaml',      icon: '🛠',  title: 'Custom (YAML)',   blurb: 'Define your own team in catalog YAML — topology, members, prompts. Or fork an existing template to start from.' },
@@ -227,7 +227,7 @@
               <div class="meta">last active: {t.last_active ? new Date(t.last_active).toLocaleString() : '—'}</div>
               <ul class="m-list">
                 {#each (t.members||[]) as m}
-                  <li>{m.role === 'shepherd' ? '✻' : '●'} {m.name} <small>({m.role}{m.claude_uuid ? ' · ↻ ' + m.claude_uuid.slice(0,8) : ' · ⊕ fresh'})</small></li>
+                  <li>{['shepherd','scrummaster'].includes(m.role) ? '✻' : '●'} {m.name} <small>({m.role}{m.claude_uuid ? ' · ↻ ' + m.claude_uuid.slice(0,8) : ' · ⊕ fresh'})</small></li>
                 {/each}
               </ul>
             </button>
@@ -267,7 +267,7 @@
           <label>Topology
             <select bind:value={topology}>
               <option value="">(template default)</option>
-              <option value="hub">hub (shepherd in the middle)</option>
+              <option value="hub">hub (Scrum Master in the middle)</option>
               <option value="mesh">mesh (peer-to-peer)</option>
               <option value="custom">custom</option>
             </select>
@@ -282,7 +282,7 @@
           {#each ms as m}
             <div class="member-row">
               <div class="m-head">
-                <span class="icon" class:shepherd={m.role==='shepherd'}>{m.role==='shepherd' ? '✻' : '●'}</span>
+                <span class="icon" class:scrummaster={['shepherd','scrummaster'].includes(m.role)}>{['shepherd','scrummaster'].includes(m.role) ? '✻' : '●'}</span>
                 <span class="name">{m.name}</span>
                 <span class="role">· {m.role}</span>
               </div>
@@ -372,7 +372,7 @@
   .member-row { display: grid; grid-template-columns: 1fr 1.8fr; gap: 0.6rem; align-items: center; padding: 0.4rem 0.6rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
   .m-head { }
   .m-head .icon { color: var(--accent-2); margin-right: 0.4rem; }
-  .m-head .icon.shepherd { color: var(--accent); }
+  .m-head .icon.scrummaster { color: var(--accent); }
   .m-head .name { font-weight: 600; }
   .m-head .role { color: var(--fg-muted); }
   .member-row { grid-template-columns: 1fr 1.4fr; }

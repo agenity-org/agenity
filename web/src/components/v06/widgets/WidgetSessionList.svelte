@@ -1,6 +1,6 @@
 <!--
   WidgetSessionList — left-pane-style tree of teams → memberships → agents.
-  Click an agent to select. Group by team with shepherd icon distinct.
+  Click an agent to select. Group by team with Scrum Master icon distinct.
 -->
 <script>
   let { sessions, teams, memberships, selectedAgent, selectAgent } = $props();
@@ -94,7 +94,7 @@
                 on:click={() => selectAgent(agent.name)}
                 on:contextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
                 title="right-click for membership actions">
-              <span class="icon" class:shepherd={m.role === 'shepherd'}>{m.role === 'shepherd' ? '✻' : '●'}</span>
+              <span class="icon" class:scrummaster={['shepherd','scrummaster'].includes(m.role)}>{['shepherd','scrummaster'].includes(m.role) ? '✻' : '●'}</span>
               <span class="name">{agent.name}</span>
               {#if score != null}<span class="score">{score.toFixed(1)}</span>{/if}
               <span class="age">{ageString(agent.created_at)}</span>
@@ -118,7 +118,7 @@
         <button on:click={() => moveAgent(t.name)}>→ {t.name} <small>({t.topology})</small></button>
       {/each}
       <div class="ctx-section">Change role</div>
-      {#each ['worker', 'shepherd', 'reviewer', 'tester'].filter(r => r !== ctxMenu.currentRole) as r}
+      {#each ['worker', 'shepherd', 'reviewer', 'tester'].filter(r => r !== ctxMenu.currentRole) as r /* back-compat wire values */}
         <button on:click={() => changeRole(r)}>↔ {r}</button>
       {/each}
     </div>
@@ -137,7 +137,7 @@
   .team li:hover { background: var(--bg-elev); border-color: var(--border); }
   .team li.selected { background: var(--select-bg); border-color: var(--select-border); }
   .team li .icon { color: var(--accent-2); }
-  .team li .icon.shepherd { color: var(--accent); }
+  .team li .icon.scrummaster { color: var(--accent); }
   .team li .name { flex: 1; font-weight: 500; }
   .team li .score { background: var(--accent); color: #000; padding: 0.05rem 0.4rem; border-radius: 8px; font-size: 0.72rem; font-weight: 600; }
   .team li .age { color: var(--fg-faint); font-size: 0.74rem; }

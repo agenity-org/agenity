@@ -35,7 +35,8 @@
   let recentFolders = $state([]);
 
   const AGENTS = ['claude-code', 'qwen-code', 'aider', 'opencode', 'sovereign-shell'];
-  const ROLES = ['worker', 'shepherd', 'reviewer', 'reviewer-discipline', 'reviewer-architect', 'tester', 'architect'];
+  // back-compat (#292): 'shepherd' is the legacy wire value; UI display layer renders it as 'scrum master'.
+  const ROLES = ['worker', 'shepherd', 'reviewer', 'reviewer-discipline', 'reviewer-architect', 'tester', 'architect']; // back-compat: 'shepherd' is the legacy wire value
 
   function autoName(c) {
     if (!c) return '';

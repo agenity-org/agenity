@@ -1,5 +1,5 @@
 <!--
-  WidgetCanon — view + edit the per-team CLAUDE.md (canon). Shepherds
+  WidgetCanon — view + edit the per-team CLAUDE.md (canon). Scrum Masters
   re-read this each tick (chepherd.read_canon MCP tool), so editing here
   changes their next-tick context. Team is picked from a dropdown
   populated by /api/v1/teams.
@@ -68,7 +68,7 @@
   {:else if editing}
     <textarea class="area" rows="20" bind:value={draft}></textarea>
     {#if err}<div class="err">{err}</div>{/if}
-    <p class="hint">Edits are picked up by shepherds via <code>chepherd.read_canon</code> on their next tick (no restart needed).</p>
+    <p class="hint">Edits are picked up by Scrum Masters via <code>chepherd.read_canon</code> on their next tick (no restart needed).</p>
   {:else if loading}
     <p class="empty">Loading…</p>
   {:else if err}
