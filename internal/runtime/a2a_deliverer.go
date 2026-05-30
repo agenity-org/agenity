@@ -2,12 +2,15 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 )
 
@@ -44,15 +47,28 @@ import (
 // API constructs it from the same persistence.Store. See
 // docs/V0.9.2-ARCHITECTURE.md §3 operation modes.
 //
-// Refs #208.
+// Refs #208 #225 row A4 (persistence wiring).
 type A2ADeliverer struct {
-	rt     *Runtime
-	broker brokerPublisher // #225 row A3 — set via SetBroker; nil disables publishing
+	rt        *Runtime
+	broker    brokerPublisher            // #225 row A3 — set via SetBroker; nil disables publishing
+	taskStore persistence.TaskRepository // #225 row A4 — set via SetTaskStore; nil disables persistence
+	runnerSID string                     // #225 row A4 — chepherd-instance ID stamped on persisted Task rows
 }
 
 // NewA2ADeliverer wraps a Runtime as an a2a.Deliverer.
 func NewA2ADeliverer(rt *Runtime) *A2ADeliverer {
 	return &A2ADeliverer{rt: rt}
+}
+
+// SetTaskStore wires the TaskRepository so each Deliver call persists
+// the issued Task row. nil disables persistence (back-compat for tests
+// + pre-A4 deployments). runnerSID is stamped on every row so multi-
+// runner queries can scope by origin.
+//
+// Refs #225 row A4.
+func (d *A2ADeliverer) SetTaskStore(store persistence.TaskRepository, runnerSID string) {
+	d.taskStore = store
+	d.runnerSID = runnerSID
 }
 
 // Deliver routes msg into the target session's PTY and returns the
@@ -69,23 +85,32 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	// session handle.
 	sess, info := d.rt.GetByContextID(msg.ContextID)
 	if info == nil || sess == nil {
-		return d.failedTask(msg, "target session not found"),
-			fmt.Errorf("a2a.SendMessage: target session %q not found", msg.ContextID)
+		failed := d.failedTask(msg, "target session not found")
+		d.persistTask(ctx, msg, failed, "message/send")
+		return failed, fmt.Errorf("a2a.SendMessage: target session %q not found", msg.ContextID)
 	}
 	text, err := a2a.ExtractText(msg)
 	if err != nil {
-		return d.failedTask(msg, err.Error()), err
+		failed := d.failedTask(msg, err.Error())
+		d.persistTask(ctx, msg, failed, "message/send")
+		return failed, err
 	}
 	if _, err := sess.Write([]byte(text)); err != nil {
-		return d.failedTask(msg, "PTY write: "+err.Error()), err
+		failed := d.failedTask(msg, "PTY write: "+err.Error())
+		d.persistTask(ctx, msg, failed, "message/send")
+		return failed, err
 	}
 	// Submit via flavor-specific sequence (defaults to CR when no
 	// override). agentcatalog lookup keyed on the session's agent slug.
 	submitSeq := d.submitSequenceFor(info.AgentSlug)
 	if _, err := sess.Write(submitSeq); err != nil {
-		return d.failedTask(msg, "PTY submit: "+err.Error()), err
+		failed := d.failedTask(msg, "PTY submit: "+err.Error())
+		d.persistTask(ctx, msg, failed, "message/send")
+		return failed, err
 	}
 	task := d.workingTask(msg)
+	// #225 row A4 — persist the Task row so GetTask/ListTasks see it.
+	d.persistTask(ctx, msg, task, "message/send")
 	// #225 row A3 — pump PTY output through the broker so SSE
 	// subscribers see streaming task progress. No-op when broker
 	// is unset (back-compat for tests + pre-A3 deployments).
@@ -93,6 +118,32 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 		go pumpPTYToBroker(d.broker, sess, task)
 	}
 	return task, nil
+}
+
+// persistTask serialises Message + Task and writes to TaskRepository.
+// Error is swallowed: the Task return path is already committed to
+// the caller; failure to persist is a downstream observability gap,
+// not a delivery failure.
+//
+// Refs #225 row A4.
+func (d *A2ADeliverer) persistTask(ctx context.Context, msg a2a.Message, task *a2a.Task, method string) {
+	if d.taskStore == nil {
+		return
+	}
+	inputBlob, _ := json.Marshal(msg)
+	outputBlob, _ := json.Marshal(task)
+	now := time.Now().UTC()
+	rec := &persistence.Task{
+		ID:         task.ID,
+		RunnerSID:  d.runnerSID,
+		State:      string(task.Status.State),
+		Method:     method,
+		InputBlob:  inputBlob,
+		OutputBlob: outputBlob,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	_ = d.taskStore.Save(ctx, rec)
 }
 
 // submitSequenceFor returns the flavor's submit byte sequence; falls
