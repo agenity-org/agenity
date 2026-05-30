@@ -16,14 +16,8 @@ import (
 	"time"
 )
 
-// PodRunner implements Runner for K8s CRI Pods. Uses pure net/http
-// against the kube-apiserver via the in-cluster ServiceAccount mount
-// — no client-go transitive dep tree.
-//
-// Refs #312 (D1) #208.
 type PodRunner struct {
-	cfg RunnerConfig
-
+	cfg       RunnerConfig
 	mu        sync.RWMutex
 	token     string
 	namespace string
@@ -40,7 +34,7 @@ const (
 
 func newPodRunner(cfg RunnerConfig) (*PodRunner, error) {
 	r := &PodRunner{cfg: cfg}
-	if inClusterEnvProbe() {
+	if _, err := os.Stat(saTokenPath); err == nil {
 		if err := r.discover(); err != nil {
 			return nil, fmt.Errorf("PodRunner: in-cluster discovery: %w", err)
 		}
@@ -49,12 +43,7 @@ func newPodRunner(cfg RunnerConfig) (*PodRunner, error) {
 	if cfg.KubeconfigPath != "" {
 		return r, nil
 	}
-	return nil, errors.New("runtime.NewRunner: PodRunner requires either in-cluster ServiceAccount mount OR cfg.KubeconfigPath")
-}
-
-func inClusterEnvProbe() bool {
-	_, err := os.Stat(saTokenPath)
-	return err == nil
+	return nil, errors.New("runtime.NewRunner: PodRunner requires SA mount or KubeconfigPath")
 }
 
 func (r *PodRunner) discover() error {
@@ -62,53 +51,45 @@ func (r *PodRunner) discover() error {
 	defer r.mu.Unlock()
 	tokenB, err := os.ReadFile(saTokenPath)
 	if err != nil {
-		return fmt.Errorf("read SA token: %w", err)
+		return err
 	}
 	r.token = strings.TrimSpace(string(tokenB))
 	nsB, err := os.ReadFile(saNamespacePath)
 	if err != nil {
-		return fmt.Errorf("read SA namespace: %w", err)
+		return err
 	}
 	r.namespace = strings.TrimSpace(string(nsB))
 	caB, err := os.ReadFile(saCACertPath)
 	if err != nil {
-		return fmt.Errorf("read SA CA: %w", err)
+		return err
 	}
 	r.caPool = x509.NewCertPool()
 	if !r.caPool.AppendCertsFromPEM(caB) {
-		return errors.New("SA CA is not valid PEM")
+		return errors.New("CA invalid PEM")
 	}
 	r.apiHost = "https://kubernetes.default.svc"
-	r.httpC = &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: r.caPool},
-		},
-	}
+	r.httpC = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: r.caPool}}}
 	return nil
 }
 
 func (r *PodRunner) Spawn(ctx context.Context, spec SpawnSpec) (*SessionInfo, error) {
 	r.mu.RLock()
-	ns := r.namespace
-	token := r.token
+	ns, token := r.namespace, r.token
 	r.mu.RUnlock()
 	if token == "" {
-		return nil, errScaffoldPending("PodRunner.Spawn (kubeconfig-path mode pending D1.7)")
+		return nil, errScaffoldPending("PodRunner.Spawn (D1.7)")
 	}
 	if spec.Name == "" {
-		return nil, errors.New("PodRunner.Spawn: empty spec.Name")
+		return nil, errors.New("Spawn: empty Name")
 	}
 	if ns == "" {
-		return nil, errors.New("PodRunner.Spawn: namespace empty")
+		return nil, errors.New("Spawn: empty namespace")
 	}
-	manifest := buildPodManifest(ns, spec)
-	body, err := json.Marshal(manifest)
+	body, err := json.Marshal(buildPodManifest(ns, spec))
 	if err != nil {
-		return nil, fmt.Errorf("marshal manifest: %w", err)
+		return nil, err
 	}
-	endpoint := r.apiHost + "/api/v1/namespaces/" + ns + "/pods"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.apiHost+"/api/v1/namespaces/"+ns+"/pods", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -116,50 +97,39 @@ func (r *PodRunner) Spawn(ctx context.Context, spec SpawnSpec) (*SessionInfo, er
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.httpC.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("POST pod: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("kube-apiserver POST pod HTTP %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(respBody)))
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("POST pod HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	return &SessionInfo{
-		Name:      spec.Name,
-		AgentSlug: spec.AgentSlug,
-		Team:      spec.Team,
-		Role:      spec.Role,
-		Cwd:       spec.Cwd,
-		CreatedAt: time.Now().UTC(),
-	}, nil
+	return &SessionInfo{Name: spec.Name, AgentSlug: spec.AgentSlug, Team: spec.Team, Role: spec.Role, Cwd: spec.Cwd, CreatedAt: time.Now().UTC()}, nil
 }
 
 func (r *PodRunner) Get(ctx context.Context, sessionID string) (*SessionInfo, error) {
 	r.mu.RLock()
-	ns := r.namespace
-	token := r.token
+	ns, token := r.namespace, r.token
 	r.mu.RUnlock()
 	if token == "" {
-		return nil, errScaffoldPending("PodRunner.Get (kubeconfig-path mode pending D1.7)")
+		return nil, errScaffoldPending("PodRunner.Get (D1.7)")
 	}
-	endpoint := r.apiHost + "/api/v1/namespaces/" + ns + "/pods/" + sessionID
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.apiHost+"/api/v1/namespaces/"+ns+"/pods/"+sessionID, nil)
 	if err != nil {
 		return nil, err
 	}
 	r.signRequest(req)
 	resp, err := r.httpC.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET pod: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrSessionNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("kube-apiserver GET pod HTTP %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(respBody)))
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GET pod HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	var pod struct {
 		Metadata struct {
@@ -167,48 +137,40 @@ func (r *PodRunner) Get(ctx context.Context, sessionID string) (*SessionInfo, er
 			CreationTimestamp time.Time `json:"creationTimestamp"`
 			Labels            map[string]string
 		} `json:"metadata"`
-		Status struct {
-			Phase string `json:"phase"`
-		} `json:"status"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&pod); err != nil {
-		return nil, fmt.Errorf("decode pod: %w", err)
+		return nil, err
 	}
 	return &SessionInfo{
-		Name:      pod.Metadata.Name,
-		AgentSlug: pod.Metadata.Labels["chepherd.io/agent-slug"],
-		Team:     pod.Metadata.Labels["chepherd.io/team"],
-		Role:     Role(pod.Metadata.Labels["chepherd.io/role"]),
+		Name: pod.Metadata.Name, AgentSlug: pod.Metadata.Labels["chepherd.io/agent-slug"],
+		Team: pod.Metadata.Labels["chepherd.io/team"], Role: Role(pod.Metadata.Labels["chepherd.io/role"]),
 		CreatedAt: pod.Metadata.CreationTimestamp,
 	}, nil
 }
 
 func (r *PodRunner) Stop(ctx context.Context, sessionID string) error {
 	r.mu.RLock()
-	ns := r.namespace
-	token := r.token
+	ns, token := r.namespace, r.token
 	r.mu.RUnlock()
 	if token == "" {
-		return errScaffoldPending("PodRunner.Stop (kubeconfig-path mode pending D1.7)")
+		return errScaffoldPending("PodRunner.Stop (D1.7)")
 	}
-	endpoint := r.apiHost + "/api/v1/namespaces/" + ns + "/pods/" + sessionID
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, r.apiHost+"/api/v1/namespaces/"+ns+"/pods/"+sessionID, nil)
 	if err != nil {
 		return err
 	}
 	r.signRequest(req)
 	resp, err := r.httpC.Do(req)
 	if err != nil {
-		return fmt.Errorf("DELETE pod: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("kube-apiserver DELETE pod HTTP %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(respBody)))
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("DELETE pod HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return nil
 }
@@ -217,52 +179,42 @@ func (r *PodRunner) List(ctx context.Context) ([]*SessionInfo, error) {
 	return nil, errScaffoldPending("PodRunner.List (D1.3)")
 }
 func (r *PodRunner) Pause(ctx context.Context, sessionID string, paused bool) error {
-	return errScaffoldPending("PodRunner.Pause (D1.4 — no per-pod pause primitive)")
+	return errScaffoldPending("PodRunner.Pause (D1.4)")
 }
 func (r *PodRunner) Restart(ctx context.Context, sessionID string) error {
-	return errScaffoldPending("PodRunner.Restart (D1.5 — delete+respawn)")
+	return errScaffoldPending("PodRunner.Restart (D1.5)")
 }
 func (r *PodRunner) Rename(ctx context.Context, sessionID, newName string) error {
-	return errScaffoldPending("PodRunner.Rename (D1.6 — pods can't be renamed)")
+	return errScaffoldPending("PodRunner.Rename (D1.6)")
 }
 func (r *PodRunner) AttachIO(ctx context.Context, sessionID string) (io.ReadWriteCloser, error) {
-	return nil, errScaffoldPending("PodRunner.AttachIO (D1.2 — WebSocket SPDY upgrade)")
+	return nil, errScaffoldPending("PodRunner.AttachIO (D1.2)")
 }
 
 func (r *PodRunner) signRequest(req *http.Request) {
 	r.mu.RLock()
-	token := r.token
+	tok := r.token
 	r.mu.RUnlock()
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+tok)
 }
 
 func buildPodManifest(ns string, spec SpawnSpec) map[string]any {
 	return map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Pod",
+		"apiVersion": "v1", "kind": "Pod",
 		"metadata": map[string]any{
-			"name":      spec.Name,
-			"namespace": ns,
+			"name": spec.Name, "namespace": ns,
 			"labels": map[string]string{
-				"chepherd.io/agent-slug": spec.AgentSlug,
-				"chepherd.io/team":       spec.Team,
-				"chepherd.io/role":       string(spec.Role),
-				"chepherd.io/managed-by": "chepherd",
+				"chepherd.io/agent-slug": spec.AgentSlug, "chepherd.io/team": spec.Team,
+				"chepherd.io/role": string(spec.Role), "chepherd.io/managed-by": "chepherd",
 			},
 		},
 		"spec": map[string]any{
 			"restartPolicy": "Never",
-			"containers": []map[string]any{
-				{
-					"name":            spec.AgentSlug,
-					"image":           agentImageFor(spec.AgentSlug),
-					"imagePullPolicy": "IfNotPresent",
-					"workingDir":      spec.Cwd,
-					"tty":             true,
-					"stdin":           true,
-					"stdinOnce":       false,
-				},
-			},
+			"containers": []map[string]any{{
+				"name": spec.AgentSlug, "image": agentImageFor(spec.AgentSlug),
+				"imagePullPolicy": "IfNotPresent", "workingDir": spec.Cwd,
+				"tty": true, "stdin": true, "stdinOnce": false,
+			}},
 		},
 	}
 }
