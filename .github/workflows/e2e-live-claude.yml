@@ -1,0 +1,87 @@
+name: e2e-live-claude
+# #428 P0 — live-claude E2E test gate (T3, currently #436-blocked).
+#
+# This workflow is DOCUMENTATION-ONLY today. It exercises the same
+# T-suite as e2e-suite.yml but with CHEPHERD_TEST_LIVE_CLAUDE=1 set,
+# which un-skips T3. The premise:
+#   - The runner needs a host ~/.claude/.credentials.json with a
+#     valid Anthropic OAuth token.
+#   - T3 still fails today because of the #387 silence-finalize
+#     seam (see #436's full reproduction history).
+#
+# Why ship it anyway:
+#   1. Documents the env-gate contract in CI infrastructure — the
+#      gate isn't hidden in a test file, it's surfaced here for any
+#      operator who wants to re-enable T3 once #436 ships.
+#   2. Triggered manually only (workflow_dispatch) — never runs on
+#      PR / push so it can't quota-burn the operator's OAuth token
+#      by accident.
+#   3. When #436 ships, this workflow becomes a working gate by
+#      simply deleting the t.Skip(...) line in T3 + populating the
+#      CLAUDE_OAUTH_CREDENTIALS secret. No workflow changes needed.
+#
+# To enable a one-off run locally OR in CI today, see the operator
+# walk recipe in internal/e2e/p0_428_t3_t4_real_claude_test.go.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why are you running this? (audit trail)'
+        required: true
+        default: 'manual verification of T3 fix'
+
+jobs:
+  e2e-live-claude:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+
+      - name: Verify podman + slirp4netns available
+        run: |
+          podman --version
+          slirp4netns --version || true
+
+      - name: Build chepherd-agent:latest image
+        run: make agent-image
+
+      - name: Populate ~/.claude/.credentials.json from secret
+        # CLAUDE_OAUTH_CREDENTIALS holds the JSON shape produced by
+        # `claude /login` on the host (the same file the test
+        # harness reads via liveClaudeAvailable). Set this in the
+        # repo secrets when you want T3 to actually exercise real
+        # claude-code in CI. Missing-secret path is INTENTIONAL —
+        # liveClaudeAvailable will skip with the canonical message
+        # if the credentials file is absent, so the workflow turns
+        # into a no-op (NOT a fake-PASS).
+        env:
+          CREDS: ${{ secrets.CLAUDE_OAUTH_CREDENTIALS }}
+        run: |
+          if [ -z "$CREDS" ]; then
+            echo "CLAUDE_OAUTH_CREDENTIALS secret unset — T3 will SKIP via liveClaudeAvailable"
+            exit 0
+          fi
+          mkdir -p ~/.claude
+          echo "$CREDS" > ~/.claude/.credentials.json
+          chmod 0600 ~/.claude/.credentials.json
+
+      - name: Run #428 T-suite with live-claude gate ON
+        env:
+          CHEPHERD_TEST_LIVE_CLAUDE: '1'
+        # 600s timeout accommodates T3's ~3-4min runtime (3×
+        # sequential spawn + auto-dismiss + warmup-discard + real
+        # claude reply). When #436 lands the suite should be back
+        # under 5min total.
+        run: |
+          go test -run "TestT" -v -timeout=600s ./internal/e2e/...
