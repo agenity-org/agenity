@@ -42,6 +42,9 @@ func (r *miniSessionRepo) Save(ctx context.Context, id string, state map[string]
 }
 func (r *miniSessionRepo) Delete(ctx context.Context, id string) error { return nil }
 func (r *miniSessionRepo) List(ctx context.Context) ([]string, error)  { return nil, nil }
+func (r *miniSessionRepo) ResumableSessions(_ context.Context) ([]persistence.ResumableSession, error) {
+	return nil, nil
+}
 
 type miniSkillRepo struct{ saved map[string]*persistence.Skill }
 

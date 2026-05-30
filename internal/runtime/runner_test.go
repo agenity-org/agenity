@@ -118,29 +118,6 @@ func TestPodRunner_ScaffoldPending(t *testing.T) {
 	if !strings.Contains(err.Error(), "kubeconfig") {
 		t.Errorf("err = %v, want kubeconfig-related", err)
 	}
-	return
-	// Block below preserved-but-unreachable for git-history readability.
-	// The original sentinel-error assertions belong to a different
-	// universe; the new contract is the file-not-found surface above.
-	var r Runner
-	ctx := context.Background()
-	for _, call := range []struct {
-		name string
-		fn   func() error
-	}{
-		{"Spawn", func() error { _, e := r.Spawn(ctx, SpawnSpec{Name: "x"}); return e }},
-		{"Stop", func() error { return r.Stop(ctx, "x") }},
-		{"Get", func() error { _, e := r.Get(ctx, "x"); return e }},
-		{"List", func() error { _, e := r.List(ctx); return e }},
-		{"Pause", func() error { return r.Pause(ctx, "x", true) }},
-		{"Restart", func() error { return r.Restart(ctx, "x") }},
-		{"Rename", func() error { return r.Rename(ctx, "x", "y") }},
-		{"AttachIO", func() error { _, e := r.AttachIO(ctx, "x"); return e }},
-	} {
-		if err := call.fn(); err == nil || !strings.Contains(err.Error(), "scaffold pending") {
-			t.Errorf("%s: want 'scaffold pending' error, got %v", call.name, err)
-		}
-	}
 }
 
 // TestNewWithStore_UsesRepository verifies the v0.9.2 persistence
