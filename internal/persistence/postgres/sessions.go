@@ -116,3 +116,46 @@ func (r *SessionRepository) List(ctx context.Context) ([]string, error) {
 
 // Verify SessionRepository implements the interface.
 var _ persistence.SessionRepository = (*SessionRepository)(nil)
+
+// ResumableSessions — #350 D4 boot-time auto-resume scan (postgres mirror).
+func (r *SessionRepository) ResumableSessions(ctx context.Context) ([]persistence.ResumableSession, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT session_id, COALESCE(claude_session_uuid, ''), state_json::text
+		 FROM sessions
+		 WHERE claude_session_uuid != ''`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres sessions ResumableSessions: %w", err)
+	}
+	defer rows.Close()
+	var out []persistence.ResumableSession
+	for rows.Next() {
+		var id, uuidStr, raw string
+		if err := rows.Scan(&id, &uuidStr, &raw); err != nil {
+			return nil, err
+		}
+		state := map[string]any{}
+		if len(raw) > 0 {
+			_ = json.Unmarshal([]byte(raw), &state)
+		}
+		if exited, _ := state["exited"].(bool); exited {
+			continue
+		}
+		name, _ := state["name"].(string)
+		if name == "" {
+			name = id
+		}
+		agent, _ := state["agent"].(string)
+		team, _ := state["team"].(string)
+		cwd, _ := state["cwd"].(string)
+		out = append(out, persistence.ResumableSession{
+			SessionID:         id,
+			Name:              name,
+			AgentSlug:         agent,
+			Team:              team,
+			Cwd:               cwd,
+			ClaudeSessionUUID: uuidStr,
+		})
+	}
+	return out, rows.Err()
+}
