@@ -8,4 +8,9 @@
 
 Sovereign
 Stack[- ]Trio
-federation
+# `federation` was banned in v0.9.1 rebrand sweep when the prior concept
+# was deprecated. v0.9.3 row #225 (C1/C2/C3) re-introduces A2A federation
+# as the literal product feature: --federation-registry-url flag,
+# internal/federation package, FederatedDeliverer + HostedRegistryDiscoverer
+# types, /api/v1/peers cache + announce/poll lifecycle. Token un-banned
+# for v0.9.3 since the feature is shipped under exactly this name.
