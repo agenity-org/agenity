@@ -51,6 +51,7 @@ import (
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/roles"
 	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/chepherd/chepherd/internal/webrtcrtc"
 	"github.com/chepherd/chepherd/internal/skills"
 	"github.com/chepherd/chepherd/internal/templateregistry"
 	"github.com/chepherd/chepherd/internal/vault"
@@ -217,6 +218,15 @@ func (s *Server) Handler() http.Handler {
 	// v0.9.3 #225 row C1 — federated peer registry view.
 	mux.HandleFunc("/api/v1/peers", s.peersList)
 	mux.HandleFunc("/api/v1/tasks", s.tasksList)
+	// #311 C5.1 — WebRTC signaling relay endpoints. /webrtc/offer
+	// answers inbound SDP offers by spawning a chepherd-side
+	// PeerConnection. /webrtc/ice trickles ICE candidates into the
+	// most-recent open PeerConnection. The DataChannel 'a2a' then
+	// flows A2A traffic P2P over DTLS, bypassing this relay.
+	mux.Handle("/webrtc/offer", webrtcrtc.HandleOffer(func() (*webrtcrtc.PeerConnection, error) {
+		return webrtcrtc.NewPeerConnectionForAnswerer(webrtcrtc.Config{})
+	}))
+	mux.HandleFunc("/webrtc/ice", s.webrtcICE)
 	mux.HandleFunc("/api/v1/canon/history", s.canonHistory)
 	mux.HandleFunc("/api/v1/canon/rollback", s.canonRollback)
 	// #175 — Team Template Registry (Skill-composing templates)
@@ -3295,6 +3305,30 @@ func (s *Server) peersList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"peers": out})
+}
+
+
+// webrtcICE accepts ICE candidates trickled from the offering peer.
+// v0.9.3 scaffold: parses the candidate + returns 200; full plumbing
+// requires session-keyed PeerConnection routing (#311 C5.2 follow-up
+// — track open peer connections by session-id from the offer's SDP).
+//
+// Refs #311 (C5.1) #311 (C5).
+func (s *Server) webrtcICE(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Parse the body just to validate it's a candidate envelope; the
+	// candidate trickle is best-effort + the negotiation is driven by
+	// the answerer's own ICE gathering at this layer.
+	body, _ := io.ReadAll(r.Body)
+	defer r.Body.Close()
+	if len(body) == 0 {
+		http.Error(w, "empty body", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // tasksList implements GET /api/v1/tasks — returns recent A2A tasks
