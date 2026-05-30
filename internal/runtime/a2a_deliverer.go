@@ -114,10 +114,70 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	// #225 row A3 — pump PTY output through the broker so SSE
 	// subscribers see streaming task progress. No-op when broker
 	// is unset (back-compat for tests + pre-A3 deployments).
-	if d.broker != nil {
-		go pumpPTYToBroker(d.broker, sess, task)
+	//
+	// #379 P0 — pumpPTYToBroker also drives the A2A RECEIVE loop:
+	// it accumulates PTY chunks, detects "response complete" via a
+	// silence window, then persists the agent's response as a
+	// Message{role:"agent"} appended to the Task's history AND
+	// flips Task.State to "completed". Without this, the task row
+	// in taskStore stays at "working" forever — tasks/get returns
+	// "working", peer agents poll indefinitely, federation broken.
+	// Pre-#379 the SSE broker saw the artifact events but the
+	// persisted row did not, so the public A2A API was one-way.
+	if d.broker != nil || d.taskStore != nil {
+		completer := d.taskCompleter()
+		go pumpPTYToBroker(d.broker, sess, task, completer)
 	}
 	return task, nil
+}
+
+// taskCompleter returns the callback pumpPTYToBroker invokes once
+// per task when the silence window elapses (response complete). The
+// callback reads the Task row, appends a Message{role:"agent"} with
+// the agent's accumulated response, flips State to completed, and
+// Save()s. nil when taskStore is unset (tests).
+//
+// #379 P0 receive-loop fix.
+func (d *A2ADeliverer) taskCompleter() func(taskID, response string) {
+	if d.taskStore == nil {
+		return nil
+	}
+	return func(taskID, response string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rec, err := d.taskStore.Get(ctx, taskID)
+		if err != nil || rec == nil {
+			return // not persisted (shouldn't happen — Deliver persists first)
+		}
+		// Terminal states already final — don't re-write.
+		if rec.State == string(a2a.TaskStateCompleted) ||
+			rec.State == string(a2a.TaskStateFailed) ||
+			rec.State == string(a2a.TaskStateCanceled) {
+			return
+		}
+		agentMsg := a2a.Message{
+			Role: "agent",
+			Kind: "message",
+			Parts: []a2a.Part{
+				{Kind: "text", Text: stripANSI(response)},
+			},
+		}
+		// OutputBlob shape per a2a.decodeTask: {artifacts, history}.
+		// Preserve any prior history that was written.
+		var out struct {
+			Artifacts []a2a.Artifact `json:"artifacts,omitempty"`
+			History   []a2a.Message  `json:"history,omitempty"`
+		}
+		if len(rec.OutputBlob) > 0 {
+			_ = json.Unmarshal(rec.OutputBlob, &out)
+		}
+		out.History = append(out.History, agentMsg)
+		blob, _ := json.Marshal(out)
+		rec.OutputBlob = blob
+		rec.State = string(a2a.TaskStateCompleted)
+		rec.UpdatedAt = time.Now().UTC()
+		_ = d.taskStore.Save(ctx, rec)
+	}
 }
 
 // persistTask serialises Message + Task and writes to TaskRepository.
