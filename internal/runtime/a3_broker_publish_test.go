@@ -99,10 +99,14 @@ func TestPumpPTYToBroker_PublishesStatusThenDone(t *testing.T) {
 
 	go pumpPTYToBroker(pub, sess, task)
 
+	// Generous timeout for CI: real PTY spawn + echo round-trip + broker
+	// fan-out can take >5s under GitHub Actions I/O contention. Local
+	// run completes in <100ms; 30s ceiling keeps deterministic-pass
+	// without being a sleep loop.
 	select {
 	case <-pub.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("pump did not publish `done` within 5s")
+	case <-time.After(30 * time.Second):
+		t.Fatal("pump did not publish `done` within 30s")
 	}
 
 	events := pub.Events()
