@@ -54,6 +54,10 @@ var (
 //	Windows: file fallback (Win32 binding pending)
 //	other:   file fallback
 func Active() Backend {
+	// #322 H6.1 — explicit install bypasses the platform chain.
+	if override := activeOverride(); override != nil {
+		return override
+	}
 	once.Do(func() {
 		candidates := platformBackends()
 		for _, b := range candidates {

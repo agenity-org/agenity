@@ -35,6 +35,7 @@ import (
 	"github.com/chepherd/chepherd/internal/federation"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/chepherd/chepherd/internal/keychain"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
@@ -56,7 +57,10 @@ var (
 	runFlagMCPListen             string
 	runFlagFederationRegistryURL string // #225 row C1 — hosted peer registry
 	runFlagFederationPublicURL   string // #225 row C1 — this chepherd's public URL for announcements
-	runFlagIOgridEndpoint        string // #318 (#225 row E1) — iogrid recipe-dispatch endpoint URL
+	runFlagIOgridEndpoint        string
+	runFlagKeychainBackend       string // #322 H6.1 — keychain backend (default = auto)
+	runFlagOpenBaoAddr           string // #322 H6.1 — OpenBao server URL
+	runFlagOpenBaoTokenFile      string // #322 H6.1 — OpenBao auth token file // #318 (#225 row E1) — iogrid recipe-dispatch endpoint URL
 	runFlagScrumMasterName       string // #225 row F4 — name for the auto-spawned Scrum Master (back-compat default: "shepherd")
 )
 
@@ -94,6 +98,12 @@ func init() {
 	// reverse-proxy + DNS-name setups).
 	runCmd.Flags().StringVar(&runFlagFederationRegistryURL, "federation-registry-url", "",
 		"hosted peer registry URL (empty = disabled). Peer discovery POSTs /announce + GETs /peers here.")
+	runCmd.Flags().StringVar(&runFlagKeychainBackend, "keychain-backend", "",
+		"explicit keychain backend (empty = auto-select per platform: macos | secret-tool | file). Set to 'openbao' to use OpenBao HA backend.")
+	runCmd.Flags().StringVar(&runFlagOpenBaoAddr, "openbao-addr", "",
+		"OpenBao server URL (required when --keychain-backend=openbao).")
+	runCmd.Flags().StringVar(&runFlagOpenBaoTokenFile, "openbao-token-file", "",
+		"File path containing the OpenBao auth token (required when --keychain-backend=openbao).")
 	runCmd.Flags().StringVar(&runFlagIOgridEndpoint, "iogrid-endpoint", "",
 		"iogrid recipe-dispatch endpoint URL — empty disables the iogrid extension on agent-card.json. When set, peers can discover this chepherd's iogrid surface via /.well-known/agent-card.json's x-iogrid block.")
 	runCmd.Flags().StringVar(&runFlagFederationPublicURL, "federation-public-url", "",
@@ -104,6 +114,19 @@ func init() {
 }
 
 func runRunCmd(cmd *cobra.Command, args []string) error {
+	// #322 H6.1 — explicit keychain backend selection. When the
+	// operator passes --keychain-backend=openbao, install the OpenBao
+	// backend ahead of any subsystem that reads secrets via
+	// keychain.{Set,Get,Delete}. Empty flag → default platform chain.
+	if runFlagKeychainBackend == "openbao" {
+		bao, err := keychain.NewOpenBaoBackendFromFlags(
+			runFlagOpenBaoAddr, runFlagOpenBaoTokenFile, "secret")
+		if err != nil {
+			return fmt.Errorf("--keychain-backend=openbao: %w", err)
+		}
+		keychain.Install(bao)
+	}
+
 	stateDir := runFlagStateDir
 	if stateDir == "" {
 		home, _ := os.UserHomeDir()
