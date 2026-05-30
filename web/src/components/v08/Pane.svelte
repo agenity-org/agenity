@@ -12,6 +12,8 @@
   import WidgetSessionBoard from './widgets/WidgetSessionBoard.svelte';
   import WidgetCard from './widgets/WidgetCard.svelte';
   import WidgetInbox from './widgets/WidgetInbox.svelte';
+  import WidgetFederation from './widgets/WidgetFederation.svelte';
+  import WidgetA2AInbox from './widgets/WidgetA2AInbox.svelte';
   import WidgetEvents from './widgets/WidgetEvents.svelte';
   import WidgetSpider from './widgets/WidgetSpider.svelte';
   import WidgetAgentPrompt from './widgets/WidgetAgentPrompt.svelte';
@@ -252,6 +254,8 @@
     'kanban': '⊞ kanban',
     'accounts': '⚓ accounts',
     'role-matrix': '🎮 roles',
+    'federation': '⇄ federation',
+    'a2a-inbox': '◈ A2A inbox',
   };
 
   // Per-pane derived agent for the terminal widget header chips.
@@ -440,6 +444,10 @@
         <WidgetKanban agent={selectedAgentObject()} {sessions} />
       {:else if node.widget === 'accounts'}
         <WidgetAccounts />
+      {:else if node.widget === 'federation'}
+        <WidgetFederation />
+      {:else if node.widget === 'a2a-inbox'}
+        <WidgetA2AInbox />
       {:else if node.widget === 'role-matrix'}
         <WidgetRoleMatrix />
       {:else}

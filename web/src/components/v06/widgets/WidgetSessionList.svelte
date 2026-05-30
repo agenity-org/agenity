@@ -119,7 +119,7 @@
       {/each}
       <div class="ctx-section">Change role</div>
       <!-- back-compat wire values: 'shepherd' kept for legacy memberships, label rendered as 'scrummaster' -->
-      {#each ['worker', 'shepherd', 'reviewer', 'tester'].filter(r => r !== ctxMenu.currentRole) as r}
+      {#each ['worker', 'shepherd', 'reviewer', 'tester'].filter(r => r !== ctxMenu.currentRole) as r}<!-- back-compat: 'shepherd' is the legacy wire value -->
         <button on:click={() => changeRole(r)}>↔ {r}</button>
       {/each}
     </div>
