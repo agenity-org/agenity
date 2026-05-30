@@ -91,6 +91,9 @@ type Server struct {
 	// the /api/v1/peers endpoint to enumerate cached peers).
 	Federation     *federation.Federation
 	AgentCardStore persistence.AgentCardRepository
+	// TaskStore is wired when persistence is enabled; surfaces the
+	// A2A Task records for the dashboard's A2A Inbox tab (#225 row G2).
+	TaskStore persistence.TaskRepository
 
 	// #194 — Skill Library (10 LEAN builtins + user-defined CRUD).
 	skills *skills.Store
@@ -207,6 +210,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/canon", s.canonRoot)
 	// v0.9.3 #225 row C1 — federated peer registry view.
 	mux.HandleFunc("/api/v1/peers", s.peersList)
+	mux.HandleFunc("/api/v1/tasks", s.tasksList)
 	mux.HandleFunc("/api/v1/canon/history", s.canonHistory)
 	mux.HandleFunc("/api/v1/canon/rollback", s.canonRollback)
 	// #175 — Team Template Registry (Skill-composing templates)
@@ -3222,4 +3226,46 @@ func (s *Server) peersList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"peers": out})
+}
+
+// tasksList implements GET /api/v1/tasks — returns recent A2A tasks
+// from the TaskRepository for the dashboard's A2A Inbox tab (#225
+// row G2). Returns the most recent 50 tasks. Always an array
+// (possibly empty); never 503 when no TaskStore is wired.
+//
+// Refs #225 row G2.
+func (s *Server) tasksList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.TaskStore == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{}})
+		return
+	}
+	tasks, err := s.TaskStore.List(r.Context(), persistence.TaskListOpts{Limit: 50})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	type taskView struct {
+		ID        string    `json:"id"`
+		RunnerSID string    `json:"runnerSID"`
+		State     string    `json:"state"`
+		Method    string    `json:"method"`
+		CreatedAt time.Time `json:"createdAt"`
+		UpdatedAt time.Time `json:"updatedAt"`
+	}
+	out := make([]taskView, 0, len(tasks))
+	for _, task := range tasks {
+		out = append(out, taskView{
+			ID:        task.ID,
+			RunnerSID: task.RunnerSID,
+			State:     task.State,
+			Method:    task.Method,
+			CreatedAt: task.CreatedAt,
+			UpdatedAt: task.UpdatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": out})
 }

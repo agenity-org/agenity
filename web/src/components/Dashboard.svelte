@@ -31,6 +31,10 @@
   let selectedInfo = $state(null);
   let connected = $state(false);
   let inbox = $state([]);
+  // #225 row G1 — federation peers (cached agent cards) from /api/v1/peers
+  let peers = $state([]);
+  // #225 row G2 — recent A2A tasks from /api/v1/tasks (the A2A Inbox tab)
+  let a2aTasks = $state([]);
   let showSpawn = $state(false);
   let theme = $state('dark'); // 'dark' | 'light' — persisted in localStorage
 
@@ -97,6 +101,24 @@
       const data = await res.json();
       inbox = data.inbox || [];
     } catch {}
+  }
+
+  // #225 row G1 — refresh federation peers (cached agent cards)
+  async function refreshPeers() {
+    try {
+      const res = await fetch(`${API}/peers`);
+      const data = await res.json();
+      peers = data.peers || [];
+    } catch { peers = []; }
+  }
+
+  // #225 row G2 — refresh A2A tasks (Inbox tab)
+  async function refreshA2ATasks() {
+    try {
+      const res = await fetch(`${API}/tasks`);
+      const data = await res.json();
+      a2aTasks = data.tasks || [];
+    } catch { a2aTasks = []; }
   }
 
   async function loadAllFolders() {
@@ -430,8 +452,8 @@
       else applyTheme('dark');
     } catch { applyTheme('dark'); }
 
-    refreshSessions(); refreshInbox();
-    const interval = setInterval(() => { refreshSessions(); refreshInbox(); }, 2000);
+    refreshSessions(); refreshInbox(); refreshPeers(); refreshA2ATasks();
+    const interval = setInterval(() => { refreshSessions(); refreshInbox(); refreshPeers(); refreshA2ATasks(); }, 5000);
     const onResize = () => fitAddon && fitAddon.fit();
     window.addEventListener('resize', onResize);
     return () => { clearInterval(interval); window.removeEventListener('resize', onResize); };
@@ -526,6 +548,45 @@
           </ul>
         </section>
       {/if}
+
+      <!-- #225 row G1 — Federation Peers -->
+      <section style="margin-top: 1.2rem;" data-testid="federation-peers">
+        <h2>Federation <span class="count">({peers.length})</span></h2>
+        <ul class="session-list">
+          {#each peers.slice(0, 10) as p (p.sid)}
+            <li>
+              <div class="row1">
+                <span class="dot worker">⇄</span>
+                <span class="name">{p.name || p.sid}</span>
+              </div>
+              <div class="row2">synced {relTime(p.syncedAt)}</div>
+            </li>
+          {/each}
+          {#if peers.length === 0}
+            <li class="empty">No peers. Configure --federation-registry-url to discover other chepherd instances.</li>
+          {/if}
+        </ul>
+      </section>
+
+      <!-- #225 row G2 — A2A Inbox (recent tasks) -->
+      <section style="margin-top: 1.2rem;" data-testid="a2a-inbox">
+        <h2>A2A Inbox <span class="count">({a2aTasks.length})</span></h2>
+        <ul class="session-list">
+          {#each a2aTasks.slice(0, 10) as task (task.id)}
+            <li>
+              <div class="row1">
+                <span class="dot worker" title={task.state}>◈</span>
+                <span class="name">{task.method}</span>
+                <span class="badge">{task.state}</span>
+              </div>
+              <div class="row2">{task.id.slice(0, 12)}… · {relTime(task.updatedAt)}</div>
+            </li>
+          {/each}
+          {#if a2aTasks.length === 0}
+            <li class="empty">No A2A tasks yet. Tasks land here when peers send messages.</li>
+          {/if}
+        </ul>
+      </section>
     </aside>
 
     <!-- Center: xterm fills available height -->
