@@ -234,7 +234,24 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// AgentCard URL points at the canonical /jsonrpc surface so A2A
 		// clients can discover-then-call without out-of-band knowledge.
 		a2aRouter := a2a.NewRouter()
-		if err := a2aRouter.WireDeliverer(a2aDeliverer); err != nil {
+		// v0.9.3 #225 row C2 — wrap the local PTY Deliverer with the
+		// FederatedDeliverer so SendMessage with `@<peer-sid>/<rest>`
+		// ContextID forwards to the peer's /jsonrpc. Local fallback
+		// when no `@` prefix (or @<self-sid>/) preserves v0.9.2
+		// semantics. AgentCard cache (#225 row C1) provides the peer-
+		// URL resolution.
+		var routedDeliverer a2a.Deliverer = a2aDeliverer
+		if store.AgentCards() != nil {
+			routedDeliverer = &federation.FederatedDeliverer{
+				Local:   a2aDeliverer,
+				Cards:   store.AgentCards(),
+				SelfSID: rt.InstanceUUID(),
+				// OutboundBearer left empty in v0.9.3 first cut — B3
+				// per-peer JWT signing layers on top without changing
+				// the wrapping shape here.
+			}
+		}
+		if err := a2aRouter.WireDeliverer(routedDeliverer); err != nil {
 			return fmt.Errorf("a2a: wire deliverer: %w", err)
 		}
 		rs.A2ACard = newAgentCard(runFlagListen)
