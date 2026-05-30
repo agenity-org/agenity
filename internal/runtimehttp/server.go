@@ -1179,8 +1179,30 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 		sub = parts[1]
 	}
 
-	sess, info := s.rt.Get(name)
+	var (
+		sess *session.Session
+		info *runtime.SessionInfo
+	)
+	if s.rt != nil {
+		sess, info = s.rt.Get(name)
+	}
 	if sess == nil {
+		// #357 P0: distinguish persisted-but-not-live (410 Gone, can
+		// resume) from never-existed (404, definitive). The dashboard
+		// uses the distinction to stop the 5s WebSocket attach loop on
+		// stale-cache sessions + transition to a Resume UI.
+		if s.SessionStore != nil {
+			if state, err := s.SessionStore.Get(r.Context(), name); err == nil && len(state) > 0 {
+				writeJSON(w, http.StatusGone, map[string]any{
+					"error":     "session persisted but not running",
+					"canResume": true,
+					"name":      name,
+					"live":      false,
+					"state":     state,
+				})
+				return
+			}
+		}
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such session: " + name})
 		return
 	}
