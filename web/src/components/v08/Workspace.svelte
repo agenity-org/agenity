@@ -101,7 +101,15 @@
           b: {
             kind: 'v', ratio: 0.5,
             a: { kind: 'pane', id: 'p5', widget: 'shepherd-assessment-card', config: {} },
-            b: { kind: 'pane', id: 'p6', widget: 'inbox', config: {} },
+            b: {
+              kind: 'v', ratio: 0.33,
+              a: { kind: 'pane', id: 'p6', widget: 'inbox', config: {} },
+              b: {
+                kind: 'v', ratio: 0.5,
+                a: { kind: 'pane', id: 'p7', widget: 'federation', config: {} },
+                b: { kind: 'pane', id: 'p8', widget: 'a2a-inbox', config: {} },
+              },
+            },
           }
         },
       },
