@@ -1314,6 +1314,14 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case sub == "" && r.Method == http.MethodGet:
 		writeJSON(w, http.StatusOK, info)
+	case sub == "agent-card" && r.Method == http.MethodGet:
+		// #404 P0.1 — per-session AgentCard for peer-awareness. A spawned
+		// agent can call chepherd.get_peer_card(peerName) which fetches
+		// this endpoint to discover the peer's role, capabilities,
+		// skills, current state, scorecard. Sibling of the chepherd-
+		// instance-level /.well-known/agent-card.json (a2a discovery)
+		// but scoped to ONE session inside the team.
+		writeJSON(w, http.StatusOK, runtime.BuildPeerAgentCard(info))
 	case sub == "" && r.Method == http.MethodDelete:
 		_ = s.rt.Stop(name)
 		// #377 P0 TRIGGER layer: also delete the persistence row so the
