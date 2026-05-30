@@ -1,0 +1,127 @@
+{{- /*
+  Multi-tenant isolation — #225 row D3.
+  Three layers:
+    1. vCluster (per-Org K8s API isolation)
+    2. NATS JetStream accounts (per-Org event spine)
+    3. Cilium NetworkPolicy (per-Org pod-to-pod deny by default)
+
+  Each Org in .Values.multitenancy.orgs gets ALL three. Empty list
+  disables multitenancy entirely (single shared namespace mode).
+
+  vCluster CRDs (Cluster) are assumed installed cluster-wide via
+  the vCluster Helm chart — this template only emits the Cluster
+  resources per-Org. Operators install the prerequisite chart with:
+    helm install vcluster-operator vcluster/vcluster -n vcluster-system
+
+  NATS account CRDs (NscAccount or similar) likewise assume
+  nats-operator + jetstream are pre-installed. The fallback embedded
+  here uses plain Account ConfigMaps that nats.conf imports.
+*/}}
+{{- if .Values.multitenancy.enabled }}
+{{- range $org := .Values.multitenancy.orgs }}
+---
+# Org: {{ $org.name }} — vCluster
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chepherd-org-{{ $org.name }}
+  labels:
+    chepherd.openova.io/org: {{ $org.name }}
+    {{- include "chepherd.labels" $ | nindent 4 }}
+---
+{{- if $.Values.multitenancy.vcluster.enabled }}
+apiVersion: cluster.loft.sh/v1alpha1
+kind: VirtualCluster
+metadata:
+  name: {{ $org.name }}
+  namespace: chepherd-org-{{ $org.name }}
+spec:
+  controlPlane:
+    statefulSet:
+      resources:
+        requests:
+          cpu: {{ $.Values.multitenancy.vcluster.resources.requests.cpu | default "100m" }}
+          memory: {{ $.Values.multitenancy.vcluster.resources.requests.memory | default "256Mi" }}
+        limits:
+          memory: {{ $.Values.multitenancy.vcluster.resources.limits.memory | default "1Gi" }}
+      persistence:
+        volumeClaim:
+          enabled: true
+          size: {{ $.Values.multitenancy.vcluster.persistence.size | default "5Gi" }}
+  sync:
+    toHost:
+      pods: { enabled: true }
+      services: { enabled: true }
+      endpoints: { enabled: true }
+      configMaps: { enabled: true }
+      secrets: { enabled: true }
+{{- end }}
+---
+{{- if $.Values.multitenancy.nats.enabled }}
+# Org: {{ $org.name }} — NATS JetStream account
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chepherd-org-{{ $org.name }}-nats
+  namespace: chepherd-org-{{ $org.name }}
+  labels:
+    chepherd.openova.io/org: {{ $org.name }}
+data:
+  account.conf: |
+    # Per-Org NATS account — events isolated by allow/deny ACL.
+    # Operators using nats-operator can promote this to an NscAccount
+    # CRD for full multi-tenancy.
+    accounts: {
+      {{ $org.name }}: {
+        jetstream: enabled
+        users: [
+          { user: chepherd, password: "{{ $org.natsPassword | default (randAlphaNum 32) }}", permissions: {
+            publish: ["{{ $org.name }}.>"],
+            subscribe: ["{{ $org.name }}.>"]
+          }}
+        ]
+      }
+    }
+{{- end }}
+---
+{{- if $.Values.multitenancy.cilium.enabled }}
+# Org: {{ $org.name }} — Cilium NetworkPolicy (default deny + same-org allow)
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: org-isolation
+  namespace: chepherd-org-{{ $org.name }}
+spec:
+  endpointSelector:
+    matchLabels:
+      chepherd.openova.io/org: {{ $org.name }}
+  ingress:
+    # Allow ingress only from pods labeled with same org
+    - fromEndpoints:
+        - matchLabels:
+            chepherd.openova.io/org: {{ $org.name }}
+    # Plus from the chepherd-system namespace (control plane reaches all Orgs)
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $.Release.Namespace }}
+  egress:
+    # Allow egress to same-org pods + control plane + DNS
+    - toEndpoints:
+        - matchLabels:
+            chepherd.openova.io/org: {{ $org.name }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ $.Release.Namespace }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+{{- end }}
+{{- end }}
+{{- end }}
