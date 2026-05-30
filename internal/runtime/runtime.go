@@ -829,6 +829,7 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// Delegate to the configured AgentSpawner (#127). The local path
 	// returns argv ready for ptyhost to exec; future K8s paths return a
 	// PodName instead and the ptyhost streams from there.
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-pipeline] %s: spawner.Spawn ENTER (mode=%s argv=%v)\n", spec.Name, r.spawner.Mode(), argv)
 	artifact, err := r.spawner.Spawn(context.Background(), SpawnRequest{
 		Name:         spec.Name,
 		AgentHomeDir: agentHomeDir,
@@ -838,8 +839,10 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		Env:          env,
 	})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-pipeline] %s: spawner.Spawn FAILED: %v\n", spec.Name, err)
 		return nil, nil, fmt.Errorf("runtime.Spawn: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-pipeline] %s: spawner.Spawn OK (LocalArgv=%v)\n", spec.Name, artifact.LocalArgv)
 	if artifact.PodName != "" {
 		return nil, nil, fmt.Errorf("runtime.Spawn: PodName attach path not yet implemented (set CHEPHERD_SPAWNER=podman-sidecar)")
 	}
@@ -847,6 +850,7 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 
 	// Spawn the PTY child via ptyhost
 	id := newSessionID(spec.Name)
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-pipeline] %s: session.New ENTER (cmd=%v cwd=%s)\n", spec.Name, spawnArgv, spec.Cwd)
 	s, err := session.New(id, session.Spec{
 		Command:   spawnArgv,
 		Env:       spawnEnv,
@@ -854,8 +858,10 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		RingBytes: spec.RingBytes,
 	})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-pipeline] %s: session.New FAILED: %v\n", spec.Name, err)
 		return nil, nil, fmt.Errorf("runtime.Spawn: ptyhost: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-pipeline] %s: session.New OK (id=%s pid=%d)\n", spec.Name, id, s.PID())
 
 	// Resolve the effective stat sheet — operator override falls back to
 	// the per-role default when fields are zero-valued.

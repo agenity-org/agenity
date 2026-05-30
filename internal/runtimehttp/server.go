@@ -1069,21 +1069,22 @@ func (s *Server) listSessionsMerged(ctx context.Context) []map[string]any {
 	return out
 }
 
+// infoToMap returns a JSON-friendly representation of the full
+// SessionInfo struct + a `live` boolean. Uses json.Marshal of the
+// SessionInfo so every json-tagged field on the struct (pid, started,
+// container_runtime, system_prompt, stat_sheet, agent_home_dir,
+// github_url, branch, etc.) flows through to the dashboard.
+//
+// #356 P0: an earlier flattened-handcoded version of this helper
+// stripped pid + started + container_runtime, causing the dashboard's
+// WidgetAgentRuntime to display 'pid: —' and 'started: —' even when
+// the spawn succeeded.
 func infoToMap(info *runtime.SessionInfo, live bool) map[string]any {
-	return map[string]any{
-		"id":          info.ID,
-		"name":        info.Name,
-		"agent":       info.AgentSlug,
-		"agent_id":    info.AgentID,
-		"pvc_handle":  info.PVCHandle,
-		"team":        info.Team,
-		"role":        info.Role,
-		"cwd":         info.Cwd,
-		"created_at":  info.CreatedAt,
-		"paused":      info.Paused,
-		"shepherding": info.Shepherding,
-		"live":        live,
-	}
+	body, _ := json.Marshal(info)
+	out := map[string]any{}
+	_ = json.Unmarshal(body, &out)
+	out["live"] = live
+	return out
 }
 
 func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
