@@ -28,6 +28,7 @@ type Store struct {
 	events      *EventRepository
 	grants      *RBACGrantRepository
 	tasks       *TaskRepository
+	artifacts   *ArtifactRepository
 	pushConfigs *PushNotificationConfigRepository
 	agentCards  *AgentCardRepository
 	accounts    *AccountRepository
@@ -62,6 +63,7 @@ func NewStoreFromDB(db *sql.DB) *Store {
 		events:      NewEventRepository(db),
 		grants:      NewRBACGrantRepository(db),
 		tasks:       NewTaskRepository(db),
+		artifacts:   NewArtifactRepository(db),
 		pushConfigs: NewPushNotificationConfigRepository(db),
 		agentCards:  NewAgentCardRepository(db),
 		accounts:    NewAccountRepository(db),
@@ -77,7 +79,8 @@ func (s *Store) Templates() persistence.TemplateRepository     { return s.templa
 func (s *Store) AuthSecrets() persistence.AuthSecretRepository { return s.authSecrets }
 func (s *Store) Events() persistence.EventRepository           { return s.events }
 func (s *Store) Grants() persistence.RBACGrantRepository       { return s.grants }
-func (s *Store) Tasks() persistence.TaskRepository             { return s.tasks }
+func (s *Store) Tasks() persistence.TaskRepository         { return s.tasks }
+func (s *Store) Artifacts() persistence.ArtifactRepository { return s.artifacts }
 func (s *Store) PushConfigs() persistence.PushNotificationConfigRepository {
 	return s.pushConfigs
 }
