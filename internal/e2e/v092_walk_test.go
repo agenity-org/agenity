@@ -111,7 +111,7 @@ func TestV092Walk_EndToEnd(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	a2a.RegisterRoutes(mux, card, router, nil) // dev passthrough — no auth on e2e walk
+	a2a.RegisterRoutes(mux, card, router, nil, nil) // dev passthrough — no auth on e2e walk
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -242,7 +242,7 @@ func TestV092Walk_AgentCardServesCanonicalPath(t *testing.T) {
 	t.Parallel()
 	card := &a2a.AgentCard{ProtocolVersion: "1.0", Name: "x", URL: "http://x/", Version: "0.9.2"}
 	mux := http.NewServeMux()
-	a2a.RegisterRoutes(mux, card, a2a.NewRouter(), nil)
+	a2a.RegisterRoutes(mux, card, a2a.NewRouter(), nil, nil)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
