@@ -34,7 +34,7 @@ func TestPumpPTYToBroker_RealEcho(t *testing.T) {
 		Status: a2a.TaskStatus{State: a2a.TaskStateWorking},
 	}
 	pub := newFakePublisher()
-	go pumpPTYToBroker(pub, sess, task, nil, nil)
+	go pumpPTYToBroker(pub, sess, task, nil)
 
 	select {
 	case <-pub.done:
