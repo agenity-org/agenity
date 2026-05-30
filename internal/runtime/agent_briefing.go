@@ -99,9 +99,17 @@ func renderAgentClaudeMD(spec SpawnSpec, peers []PeerBrief) string {
 	}
 
 	fmt.Fprintf(&b, "## How to talk to peers\n\n")
-	fmt.Fprintf(&b, "Use the `chepherd.send_to_session` MCP tool with `name=<peer>` and `body=<message>`. The peer will see your message appear in their pane.\n\n")
+	fmt.Fprintf(&b, "claude-code surfaces chepherd's MCP tools to you AUTOMATICALLY when configured (you should see them listed when you run `/mcp` and they appear as available tool calls in your context).\n\n")
+	fmt.Fprintf(&b, "**Do NOT try to run them as bash commands** — they are NOT shell binaries. `chepherd.send_to_session` is not a path on `$PATH`. Invoke them as native tool calls the same way you'd call `Read` or `Bash` — they're tools, not subprocesses.\n\n")
+	fmt.Fprintf(&b, "Available MCP tools (call as native tools, never via Bash):\n")
+	fmt.Fprintf(&b, "- `chepherd.send_to_session(name, body)` — message a peer\n")
+	fmt.Fprintf(&b, "- `chepherd.list_sessions()` — enumerate current peers\n")
+	fmt.Fprintf(&b, "- `chepherd.get_peer_card(name)` — fetch a peer's capabilities (#404 P0.1)\n")
+	fmt.Fprintf(&b, "- `chepherd.peer_status(name)` — fetch a peer's live activity (#404 P0.2)\n")
+	fmt.Fprintf(&b, "- `chepherd.alert_human(kind, urgency, body)` — escalate to operator\n\n")
+	fmt.Fprintf(&b, "**If `/mcp` shows the chepherd server is DISCONNECTED, or you don't see these tools listed in your context** — STOP. That's a chepherd transport bug (#398 family). Report via the operator with: `\"[chepherd] /mcp not connected, can't reach peers\"`. Don't confabulate an explanation; don't pretend the tools work; don't fall back to bash. Just report the gap.\n\n")
 	fmt.Fprintf(&b, "Inbound peer messages arrive in your pane prefixed with `[@<sender>]`. Read those as you would a user message.\n\n")
-	fmt.Fprintf(&b, "DO NOT write `@<peer>: <message>` in your own output thinking it'll be routed — outbound MCP messages must use `chepherd.send_to_session`. Only INBOUND `@<me>` lines from peers surface in your pane.\n\n")
+	fmt.Fprintf(&b, "DO NOT write `@<peer>: <message>` in your own output thinking it'll be routed — outbound MCP messages must use the `chepherd.send_to_session` tool call. Only INBOUND `@<me>` lines from peers surface in your pane.\n\n")
 
 	fmt.Fprintf(&b, "## How to talk to the operator\n\n")
 	fmt.Fprintf(&b, "Use `chepherd.alert_human` MCP tool when you need human attention — they see it in the dashboard's inbox. Use sparingly: the human is the ultimate authority but you're expected to drive work autonomously between escalations.\n\n")
@@ -166,11 +174,15 @@ description: Orient yourself to the chepherd team you're spawned into — who ar
 
 Use this skill any time you need to refresh your understanding of the team you're in.
 
+## Pre-flight: confirm MCP is reachable
+
+` + "`chepherd.*`" + ` tools are claude-code native tool calls, NOT bash commands. Before invoking, run ` + "`/mcp`" + ` and confirm the ` + "`chepherd`" + ` server is connected + the tools are listed. If it shows disconnected, STOP — report ` + "`\"[chepherd] /mcp not connected, can't reach peers\"`" + ` to the operator instead of confabulating.
+
 ## Steps
 
-1. Call MCP tool ` + "`chepherd.list_sessions`" + ` (optionally with ` + "`team=\"" + spec.Team + "\"`" + ` to filter).
+1. Invoke MCP tool ` + "`chepherd.list_sessions`" + ` (as a native tool call, not as bash). Optional arg ` + "`team=\"" + spec.Team + "\"`" + ` to filter.
 2. Read the returned list to see peer names, roles, and team membership.
-3. For any peer whose pane you want to read, call ` + "`chepherd.read_pane`" + ` with their name.
+3. For any peer whose pane you want to read, invoke ` + "`chepherd.read_pane`" + ` with their name.
 4. Cross-reference against your CLAUDE.md (` + "`~/.claude/CLAUDE.md`" + `) for the canonical team-charter + your role's guidance.
 
 ## Output
@@ -186,10 +198,16 @@ description: Send a message to a peer agent (route via MCP, not @-text)
 
 Send a message to another chepherd agent in your team.
 
+## Pre-flight: MCP tool, not bash
+
+` + "`chepherd.send_to_session`" + ` is a NATIVE MCP TOOL CALL, not a shell binary. Don't try ` + "`Bash(chepherd.send_to_session ...)`" + ` — that fails with "command not found". Invoke it the way you'd call ` + "`Read`" + ` or ` + "`Edit`" + `.
+
+If ` + "`/mcp`" + ` shows the chepherd server disconnected, STOP. Report ` + "`\"[chepherd] /mcp not connected, can't reach peers\"`" + ` instead of falling back to bash or guessing.
+
 ## Steps
 
-1. Confirm the target peer exists: ` + "`chepherd.list_sessions`" + `, find a name that matches.
-2. Call ` + "`chepherd.send_to_session`" + ` with ` + "`name=<peer-name>`" + ` and ` + "`body=<your message>`" + `.
+1. Confirm the target peer exists by invoking ` + "`chepherd.list_sessions`" + ` (native tool call). Find a name that matches.
+2. Invoke ` + "`chepherd.send_to_session`" + ` with ` + "`name=<peer-name>`" + ` and ` + "`body=<your message>`" + `.
 3. The peer sees your message prefixed with ` + "`[@<your-name>]`" + ` in their pane.
 
 ## DO NOT
