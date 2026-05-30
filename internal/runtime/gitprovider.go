@@ -49,6 +49,14 @@ func gitProvidersPath(stateDir string) string {
 
 // LoadGitProviders reads all registered providers from state. Decrypts
 // each provider's TokenCipher into Token (in-memory cleartext only).
+//
+// #420 P0 — tries the stable seed-based key first; on decrypt failure
+// falls back to the legacy hostname:username key + transparently
+// re-encrypts under the stable key + persists. Without this, every
+// chepherd container bounce changed the derived key (hostname or
+// username drift) and silently zeroed every saved token → operator
+// hit "NO TOKEN — re-paste" on every wizard open + lost
+// "29m ago"-stamped tokens.
 func LoadGitProviders(stateDir string) ([]*GitProvider, error) {
 	b, err := os.ReadFile(gitProvidersPath(stateDir))
 	if os.IsNotExist(err) {
@@ -61,21 +69,38 @@ func LoadGitProviders(stateDir string) ([]*GitProvider, error) {
 	if err := json.Unmarshal(b, &providers); err != nil {
 		return nil, err
 	}
-	key, err := deriveProviderKey()
-	if err != nil {
-		return nil, err
-	}
+	stableKey, stableErr := deriveProviderKeyStable(stateDir)
+	legacyKey, legacyErr := deriveProviderKey()
+	var migrationNeeded bool
 	for _, p := range providers {
 		if p.TokenCipher == "" {
 			continue
 		}
-		plain, err := aesDecrypt(key, p.TokenCipher)
-		if err != nil {
-			// Don't fail the whole load — surface as missing token.
-			p.Token = ""
-			continue
+		if stableErr == nil {
+			if plain, err := aesDecrypt(stableKey, p.TokenCipher); err == nil {
+				p.Token = plain
+				continue
+			}
 		}
-		p.Token = plain
+		// Stable key didn't decrypt — try the legacy
+		// hostname:username key from pre-#420 saves.
+		if legacyErr == nil {
+			if plain, err := aesDecrypt(legacyKey, p.TokenCipher); err == nil {
+				p.Token = plain
+				migrationNeeded = true
+				continue
+			}
+		}
+		// Neither key worked. Surface as missing token rather than
+		// failing the whole load — same behavior as pre-#420 so
+		// operators with truly-corrupted entries still see the rest
+		// of their providers + can re-paste.
+		p.Token = ""
+	}
+	// One-shot migration: re-encrypt under the stable key so the
+	// next load + every subsequent container bounce is robust.
+	if migrationNeeded && stableErr == nil {
+		_ = SaveGitProviders(stateDir, providers)
 	}
 	return providers, nil
 }
@@ -83,10 +108,22 @@ func LoadGitProviders(stateDir string) ([]*GitProvider, error) {
 // SaveGitProviders writes the full provider list to state. Encrypts each
 // provider's Token before serialization; Token field itself has json:"-"
 // so plaintext NEVER reaches disk (#140).
+//
+// #420 P0 — uses the stable seed-based key (persisted to
+// <stateDir>/.provider-key-seed) so tokens survive chepherd container
+// bounces. Falls back to the legacy hostname:username key only if the
+// seed can't be created (e.g., read-only state-dir).
 func SaveGitProviders(stateDir string, providers []*GitProvider) error {
-	key, err := deriveProviderKey()
+	key, err := deriveProviderKeyStable(stateDir)
 	if err != nil {
-		return err
+		// Fallback to legacy key so we don't regress operators whose
+		// state-dir doesn't allow seed persistence. Their tokens will
+		// still drop on the next bounce — but at least they save.
+		var legacyErr error
+		key, legacyErr = deriveProviderKey()
+		if legacyErr != nil {
+			return fmt.Errorf("derive provider key: %v (legacy fallback also failed: %v)", err, legacyErr)
+		}
 	}
 	// Walk providers and refresh ciphertext from the live Token field.
 	for _, p := range providers {
@@ -108,8 +145,18 @@ func SaveGitProviders(stateDir string, providers []*GitProvider) error {
 }
 
 // deriveProviderKey returns a 32-byte AES key for git-providers.json
-// encryption. Same approach as vault.deriveKey for consistency; the
-// underlying low-entropy issue tracked separately as #141.
+// encryption derived from hostname:username.
+//
+// LEGACY: pre-#420 path. Retained for one-shot migration of providers
+// saved under this key — see LoadGitProviders fallback path. Don't
+// use for new saves; use deriveProviderKeyStable instead.
+//
+// The fatal flaw: hostname is container-bound. Every chepherd
+// container rebuild generates a new hostname (e.g.,
+// `b3f4e1ce2a91`), so the derived key changes + every saved token
+// fails to decrypt + UI shows "NO TOKEN — re-paste". Same trap for
+// $USER inside the container (typically `chepherd` but vulnerable
+// to env edits).
 func deriveProviderKey() ([]byte, error) {
 	hostname, _ := os.Hostname()
 	username := os.Getenv("USER")
@@ -118,6 +165,59 @@ func deriveProviderKey() ([]byte, error) {
 	}
 	salt := []byte("chepherd-providers-v1")
 	h := hkdf.New(sha256.New, []byte(hostname+":"+username), salt, []byte("chepherd-provider-token-key"))
+	k := make([]byte, 32)
+	if _, err := io.ReadFull(h, k); err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
+// providerKeySeedPath returns the on-disk path of the stable random
+// seed used to derive the git-provider encryption key. Stored in the
+// chepherd state-dir which IS bind-mounted across container
+// rebuilds, so the seed (and thus the key) survives.
+//
+// #420 P0.
+func providerKeySeedPath(stateDir string) string {
+	return filepath.Join(stateDir, ".provider-key-seed")
+}
+
+// deriveProviderKeyStable returns a 32-byte AES key derived from a
+// stable random seed persisted in the state-dir. The seed is
+// generated on first call (32 random bytes, 0600 perms). On
+// subsequent calls + after container bounces, the same seed is
+// read back + the same key is derived.
+//
+// Migration: tokens saved under the legacy hostname:username key
+// are auto-recovered on the next LoadGitProviders call (try stable
+// first, fall back to legacy, re-encrypt under stable, persist).
+//
+// #420 P0 — fixes "NO TOKEN — re-paste on the wizard" recurring on
+// every chepherd container bounce.
+func deriveProviderKeyStable(stateDir string) ([]byte, error) {
+	if stateDir == "" {
+		return nil, fmt.Errorf("deriveProviderKeyStable: empty stateDir")
+	}
+	seedPath := providerKeySeedPath(stateDir)
+	seed, err := os.ReadFile(seedPath)
+	if os.IsNotExist(err) {
+		seed = make([]byte, 32)
+		if _, err := rand.Read(seed); err != nil {
+			return nil, fmt.Errorf("deriveProviderKeyStable: generate seed: %w", err)
+		}
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			return nil, fmt.Errorf("deriveProviderKeyStable: mkdir stateDir: %w", err)
+		}
+		if err := os.WriteFile(seedPath, seed, 0o600); err != nil {
+			return nil, fmt.Errorf("deriveProviderKeyStable: write seed: %w", err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("deriveProviderKeyStable: read seed: %w", err)
+	} else if len(seed) < 32 {
+		return nil, fmt.Errorf("deriveProviderKeyStable: seed too short (%d bytes; corruption?)", len(seed))
+	}
+	salt := []byte("chepherd-providers-stable-v420")
+	h := hkdf.New(sha256.New, seed, salt, []byte("chepherd-provider-token-key"))
 	k := make([]byte, 32)
 	if _, err := io.ReadFull(h, k); err != nil {
 		return nil, err
