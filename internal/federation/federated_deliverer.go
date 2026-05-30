@@ -151,8 +151,16 @@ func (f *FederatedDeliverer) forward(ctx context.Context, peerURL string, msg a2
 	if err != nil {
 		return nil, fmt.Errorf("marshal envelope: %w", err)
 	}
+	// peerURL is from agent-card.json `url` field — per A2A v1.0 spec
+	// it IS the JSON-RPC endpoint URL (already ends in /jsonrpc).
+	// Defensive idempotent append: only add /jsonrpc when the peer URL
+	// doesn't already end there.
+	endpoint := peerURL
+	if !strings.HasSuffix(endpoint, "/jsonrpc") {
+		endpoint = strings.TrimRight(endpoint, "/") + "/jsonrpc"
+	}
 	req, err := http.NewRequestWithContext(fwdCtx, http.MethodPost,
-		peerURL+"/jsonrpc", bytes.NewReader(body))
+		endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
