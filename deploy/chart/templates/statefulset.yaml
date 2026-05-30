@@ -49,6 +49,14 @@ spec:
             {{- if .Values.chepherd.federation.publicURL }}
             - --federation-public-url={{ .Values.chepherd.federation.publicURL }}
             {{- end }}
+            {{- /* #225 row B4 deployment-side — mTLS server config */}}
+            {{- if .Values.tls.enabled }}
+            - --tls-cert-file=/etc/chepherd/tls/tls.crt
+            - --tls-key-file=/etc/chepherd/tls/tls.key
+            {{- if .Values.tls.clientCASecret }}
+            - --tls-client-ca-file=/etc/chepherd/tls/ca.crt
+            {{- end }}
+            {{- end }}
           env:
             - name: CHEPHERD_NAMESPACE
               valueFrom:
@@ -74,6 +82,31 @@ spec:
           volumeMounts:
             - name: state
               mountPath: /home/chepherd/.local/state/chepherd-v05
+            {{- if .Values.tls.enabled }}
+            - name: tls-server
+              mountPath: /etc/chepherd/tls
+              readOnly: true
+            {{- end }}
+      {{- if .Values.tls.enabled }}
+      volumes:
+        - name: tls-server
+          projected:
+            sources:
+              - secret:
+                  name: {{ .Values.tls.serverSecret }}
+                  items:
+                    - key: tls.crt
+                      path: tls.crt
+                    - key: tls.key
+                      path: tls.key
+              {{- if .Values.tls.clientCASecret }}
+              - secret:
+                  name: {{ .Values.tls.clientCASecret }}
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
