@@ -156,6 +156,17 @@ func bootE2EHarness(t *testing.T) *e2eHarness {
 	httpPort := freeTCPPort(t)
 	mcpPort := freeTCPPort(t)
 	httpAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+	// MCP listener must be reachable from inside agent containers.
+	// In production the chepherd-net podman network gives containers
+	// container-name DNS to `chepherd:9090`. In the e2e harness we
+	// can't always rely on chepherd-net being available (CI hosts +
+	// some operator hosts lack CNI plugins — architect's #432 walk
+	// caught this). Bind MCP on 0.0.0.0 (mcpListenAddr below) so
+	// slirp4netns containers can reach it via host.containers.internal,
+	// matching scripts/start.sh's #406 / #403 fallback path verbatim.
+	// Test-side calls use 127.0.0.1 (mcpAddr) which the 0.0.0.0 bind
+	// also accepts on Linux.
+	mcpListenAddr := fmt.Sprintf("0.0.0.0:%d", mcpPort)
 	mcpAddr := fmt.Sprintf("127.0.0.1:%d", mcpPort)
 	stateDir := newTestStateDir(t)
 
@@ -169,11 +180,32 @@ func bootE2EHarness(t *testing.T) *e2eHarness {
 		"--headless",
 		"--no-shepherd=true",
 		"--listen", httpAddr,
-		"--mcp-listen", mcpAddr,
+		"--mcp-listen", mcpListenAddr,
 		"--state-dir", stateDir,
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// #432 / architect's #432 walk: bootE2EHarness spawns chepherd
+	// directly (not via scripts/start.sh) so the #403/#406 CNI-vs-
+	// slirp4netns detection script never runs. On hosts without CNI
+	// plugins (most CI runners + bare-Ubuntu dev boxes) the agent
+	// containers default to `chepherd-net` which doesn't exist →
+	// they die silently → `[chepherd-stop] podman stop: already
+	// gone` + test sees `session: closed` on first send.
+	//
+	// Mirror scripts/start.sh's CNI-unavailable fallback explicitly:
+	//   - CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns
+	//   - CHEPHERD_MCP_URL=ws://host.containers.internal:<mcpPort>/mcp/ws
+	// slirp4netns works rootless without CNI; host.containers.internal
+	// resolves to the host network gateway → agents can reach the
+	// MCP listener bound on 0.0.0.0:mcpPort above.
+	//
+	// CHEPHERD_TEST_LIVE_CLAUDE is forwarded so the live-claude
+	// gate in liveClaudeAvailable() observes the operator's intent.
+	cmd.Env = append(os.Environ(),
+		"CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns",
+		fmt.Sprintf("CHEPHERD_MCP_URL=ws://host.containers.internal:%d/mcp/ws", mcpPort),
+	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start chepherd: %v", err)
