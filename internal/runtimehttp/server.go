@@ -1195,6 +1195,57 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// cleanupOrphans implements POST /api/v1/sessions/_cleanup-orphans
+// (#393 P1, deferred from #377). Walks the SessionStore, deletes
+// every row whose name is NOT in the live runtime registry, returns
+// {deleted: N, kept: M}. Idempotent: running twice on the same state
+// yields deleted=0 the second time.
+//
+// The operator unblock for #393 was a curl loop I gave them
+// (workaround documented in #393 body). This endpoint is the
+// programmatic equivalent + the backend for the dashboard's
+// "Clean up orphans" header button.
+//
+// Live sessions (rt.Get returns non-nil) are PRESERVED unconditionally —
+// the rt-Get gate guards against accidentally killing a session that
+// happens to also have a persisted row (the canonical case is "every
+// live session HAS a row").
+func (s *Server) cleanupOrphans(w http.ResponseWriter, r *http.Request) {
+	if s.SessionStore == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": 0, "kept": 0, "note": "no session store wired"})
+		return
+	}
+	ctx := r.Context()
+	ids, err := s.SessionStore.List(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "SessionStore.List: " + err.Error()})
+		return
+	}
+	var deleted, kept int
+	var deletedNames []string
+	for _, name := range ids {
+		var live bool
+		if s.rt != nil {
+			sess, _ := s.rt.Get(name)
+			live = sess != nil
+		}
+		if live {
+			kept++
+			continue
+		}
+		if err := s.SessionStore.Delete(ctx, name); err != nil {
+			continue // soft-fail per-row; report the others
+		}
+		deleted++
+		deletedNames = append(deletedNames, name)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted":       deleted,
+		"kept":          kept,
+		"deleted_names": deletedNames,
+	})
+}
+
 func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
 	parts := strings.SplitN(path, "/", 2)
@@ -1202,6 +1253,16 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 	sub := ""
 	if len(parts) == 2 {
 		sub = parts[1]
+	}
+	// #393 P1 — bulk orphan cleanup. Walks the SessionStore, deletes
+	// every row whose name has no live runtime entry, returns the
+	// deleted count. Operator-driven via dashboard's "Clean up
+	// orphans" header button; previously they had to click DELETE
+	// N times or run a curl loop (#393 body documents the workaround
+	// I gave them). Deferred bonus from #377.
+	if name == "_cleanup-orphans" && sub == "" && r.Method == http.MethodPost {
+		s.cleanupOrphans(w, r)
+		return
 	}
 
 	var (
