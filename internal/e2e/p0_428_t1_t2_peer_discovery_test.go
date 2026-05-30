@@ -53,6 +53,7 @@ type e2eHarness struct {
 	binPath      string
 	stateDir     string
 	httpAddr     string
+	mcpAddr      string
 	logPath      string
 	bootstrapTok string
 	cmd          *exec.Cmd
@@ -202,7 +203,8 @@ func bootE2EHarness(t *testing.T) *e2eHarness {
 
 	h := &e2eHarness{
 		t: t, binPath: binPath, stateDir: stateDir,
-		httpAddr: httpAddr, logPath: logFile.Name(), cmd: cmd,
+		httpAddr: httpAddr, mcpAddr: mcpAddr,
+		logPath: logFile.Name(), cmd: cmd,
 	}
 	// Read bootstrap token from log (per #225 row B1).
 	if b, err := os.ReadFile(logFile.Name()); err == nil {
