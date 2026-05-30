@@ -245,6 +245,16 @@ func (s *Session) fanout(chunk []byte) {
 	}
 }
 
+// RingSnapshot returns the current ring-buffer snapshot — the
+// trailing tail of PTY stdout/stderr the agent has produced so far.
+// #363.
+func (s *Session) RingSnapshot() []byte {
+	if s.ring == nil {
+		return nil
+	}
+	return s.ring.Snapshot()
+}
+
 // Subscribe registers a new fan-out consumer. The returned Subscriber
 // receives every PTY stdout chunk that arrives AFTER subscribe time;
 // the second return value is a snapshot of the ring (call replay

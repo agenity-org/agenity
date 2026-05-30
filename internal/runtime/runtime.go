@@ -81,6 +81,10 @@ type SessionInfo struct {
 	Exited   bool `json:"exited,omitempty"`
 	ExitCode int  `json:"exit_code,omitempty"`
 
+	// #363 — trailing tail of PTY stdout/stderr captured at agent
+	// death. Surfaced in dashboard agent-details.
+	LastOutput string `json:"last_output,omitempty"`
+
 	// Activity counters (populated by the runtime's per-session sniffer).
 	// Reported on every Get/List; values are wall-clock snapshots.
 	TotalBytes  int64   `json:"total_bytes"`
@@ -1004,6 +1008,14 @@ func (r *Runtime) markExited(id string) {
 	sess := r.sessions[id]
 	if sess != nil {
 		info.ExitCode = sess.ExitCode()
+		// #363 — capture trailing tail of agent output (8KB cap).
+		const tailCap = 8 * 1024
+		if snap := sess.RingSnapshot(); len(snap) > 0 {
+			if len(snap) > tailCap {
+				snap = snap[len(snap)-tailCap:]
+			}
+			info.LastOutput = string(snap)
+		}
 	}
 	name := info.Name
 	code := info.ExitCode
