@@ -232,6 +232,74 @@
   function actionLabel(a) {
     return { stop: 'Stop', restart: 'Restart', pause: 'Pause', resume: 'Resume', message: 'Send' }[a] || a;
   }
+
+  // #393 P0 — per-row × button + bulk "Clean up orphans" header
+  // button. The right-click context menu already has "■ Stop" but
+  // the tooltip says "membership actions" + there's no visible
+  // affordance, so operators don't discover the delete path. The ×
+  // is the most-discoverable affordance.
+  let deletingNames = $state(new Set());
+  let cleanupResult = $state(null); // { deleted: N, kept: M } | { error: '...' }
+  let cleaningUp = $state(false);
+
+  async function deleteOne(name, ev) {
+    if (ev) ev.stopPropagation();
+    if (deletingNames.has(name)) return;
+    deletingNames = new Set([...deletingNames, name]);
+    try {
+      const r = await fetch(`${API}/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        const t = (await r.text()).trim();
+        throw new Error(t || `HTTP ${r.status}`);
+      }
+      // Row drops on next poll-refresh (parent re-fetches sessions
+      // every ~2.5s). Until then, deletingNames keeps it visually
+      // dimmed so the operator sees feedback.
+      if (selectedAgents.has(name)) {
+        const next = new Set(selectedAgents);
+        next.delete(name);
+        selectedAgents = next;
+      }
+    } catch (e) {
+      // Surface the error inline; clear from deletingNames so the
+      // operator can retry.
+      const next = new Set(deletingNames);
+      next.delete(name);
+      deletingNames = next;
+      alert(`Delete ${name} failed: ${e.message || e}`);
+    }
+  }
+
+  async function cleanupOrphans() {
+    if (cleaningUp) return;
+    if (!confirm('Delete all sessions that have no running container? Live sessions are preserved.')) return;
+    cleaningUp = true;
+    cleanupResult = null;
+    try {
+      const r = await fetch(`${API}/sessions/_cleanup-orphans`, { method: 'POST' });
+      if (!r.ok) {
+        const t = (await r.text()).trim();
+        throw new Error(t || `HTTP ${r.status}`);
+      }
+      cleanupResult = await r.json();
+    } catch (e) {
+      cleanupResult = { error: String(e.message || e) };
+    } finally {
+      cleaningUp = false;
+      // Clear feedback after a hold so the next session-list state is
+      // visually clean.
+      setTimeout(() => { cleanupResult = null; }, 5000);
+    }
+  }
+
+  // Orphan count derived from current sessions list — a session is
+  // an orphan when its server-side `live` field is false (#357 P0
+  // adds this field; persisted-but-not-running rows surface here).
+  // Used to gate the "Clean up orphans" button so the operator only
+  // sees it when there's actually orphans to clean.
+  let orphanCount = $derived.by(() => {
+    return (sessions || []).filter(s => s && s.live === false).length;
+  });
 </script>
 
 <!--
@@ -301,6 +369,33 @@
   </div>
 {/if}
 
+<!-- #393 P1 — header bar with orphan-count + "Clean up orphans"
+     button. Only visible when there's actually orphans to clean
+     (orphanCount > 0). Live feedback after click via cleanupResult. -->
+{#if orphanCount > 0 || cleanupResult}
+  <div class="list-header">
+    {#if orphanCount > 0}
+      <span class="orphan-count" title="Sessions persisted but no running container">
+        {orphanCount} orphan{orphanCount === 1 ? '' : 's'}
+      </span>
+      <button type="button" class="cleanup-btn" disabled={cleaningUp}
+              onclick={cleanupOrphans}
+              title="Delete all sessions with no running container (live sessions preserved)">
+        {cleaningUp ? '⟳ Cleaning…' : '✕ Clean up orphans'}
+      </button>
+    {/if}
+    {#if cleanupResult}
+      <span class="cleanup-result" class:err={cleanupResult.error}>
+        {#if cleanupResult.error}
+          ✗ {cleanupResult.error}
+        {:else}
+          ✓ Cleaned {cleanupResult.deleted} · Kept {cleanupResult.kept} live
+        {/if}
+      </span>
+    {/if}
+  </div>
+{/if}
+
 <div class="list">
   {#each tree as group (group.team.name)}
     <section class="team">
@@ -314,13 +409,25 @@
           {#if agent}
             {@const score = geomean(agent.scorecard)}
             <li class:selected={selectedAgents.has(agent.name)}
+                class:deleting={deletingNames.has(agent.name)}
+                class:orphan={agent.live === false}
                 onclick={(ev) => handleAgentClick(ev, agent.name)}
                 oncontextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
-                title="Click to select. Ctrl+click to toggle. Shift+click for range. Right-click for membership actions.">
+                title="Click to select. Ctrl+click to toggle. Shift+click for range. Right-click for full menu (move team, change role, pause, stop). Hover for × to delete.">
               <span class="icon" class:shepherd={m.role === 'shepherd'}>{m.role === 'shepherd' ? '✻' : '●'}</span>
               <span class="name">{agent.name}</span>
+              {#if agent.live === false}<span class="orphan-tag" title="Not running — orphan row">orphan</span>{/if}
               {#if score != null}<span class="score">{score.toFixed(1)}</span>{/if}
               <span class="age">{ageString(agent.created_at)}</span>
+              <!-- #393 P0 — per-row × button (visible on hover). Disabled
+                   while delete in-flight. stopPropagation so click
+                   doesn't also fire row-select. -->
+              <button type="button" class="row-delete"
+                      disabled={deletingNames.has(agent.name)}
+                      onclick={(ev) => deleteOne(agent.name, ev)}
+                      title="Delete this session ({agent.live === false ? 'orphan' : 'live — will stop container'})">
+                {deletingNames.has(agent.name) ? '⟳' : '×'}
+              </button>
             </li>
           {/if}
         {/each}
@@ -340,13 +447,21 @@
       <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: true }) }); closeContext(); }}>⏸ Pause</button>
       <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: false }) }); closeContext(); }}>▶ Resume</button>
       <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/restart`, { method: 'POST' }); closeContext(); }}>↻ Restart</button>
-      <button class="danger" onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}`, { method: 'DELETE' }); closeContext(); }}>■ Stop</button>
+      <button class="danger" onclick={async () => { if (!confirm(`Delete session ${ctxMenu.agent}?`)) { closeContext(); return; } await fetch(`${API}/sessions/${ctxMenu.agent}`, { method: 'DELETE' }); closeContext(); }}>✕ Delete</button>
     </div>
   </div>
 {/if}
 
 <style>
   .list { padding: 0.5rem 0.5rem; height: 100%; overflow-y: auto; background: var(--bg); }
+  /* #393 P1 — list header with orphan-count + Clean up orphans button */
+  .list-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); background: var(--bg-elev); font-size: 0.8rem; }
+  .orphan-count { color: var(--warn, #d99); font-weight: 600; }
+  .cleanup-btn { background: var(--btn-bg, #2a2a2a); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer; font-size: 0.78rem; }
+  .cleanup-btn:hover:not(:disabled) { background: var(--btn-hover, #3a3a3a); border-color: var(--accent); }
+  .cleanup-btn:disabled { opacity: 0.6; cursor: wait; }
+  .cleanup-result { margin-left: auto; font-size: 0.78rem; color: var(--ok, #6c6); }
+  .cleanup-result.err { color: var(--err, #e66); }
   .team { margin-bottom: 0.8rem; }
   .team h3 { font-size: 0.82rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 0.3rem 0.2rem; font-weight: 600; }
   .team-head { cursor: pointer; }
@@ -361,6 +476,50 @@
   .team li .name { flex: 1; font-weight: 500; }
   .team li .score { background: var(--accent); color: #000; padding: 0.05rem 0.4rem; border-radius: 8px; font-size: 0.72rem; font-weight: 600; }
   .team li .age { color: var(--fg-faint); font-size: 0.74rem; }
+  /* #393 P0 — per-row × button. Visible only on row hover (or while
+     deleting) to keep idle rows visually quiet but discoverable. */
+  .team li .row-delete {
+    background: transparent;
+    color: var(--fg-faint);
+    border: 1px solid transparent;
+    border-radius: 3px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    cursor: pointer;
+    font-size: 0.95rem;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+  }
+  .team li:hover .row-delete,
+  .team li.selected .row-delete,
+  .team li.deleting .row-delete {
+    opacity: 1;
+  }
+  .team li .row-delete:hover:not(:disabled) {
+    background: var(--err, #e66);
+    color: #fff;
+    border-color: var(--err, #e66);
+  }
+  .team li .row-delete:disabled { cursor: wait; opacity: 0.7; }
+  .team li.deleting { opacity: 0.5; }
+  /* Orphan visual treatment so operator sees the persisted-but-not-
+     running rows at a glance (not just "click ×"). */
+  .team li.orphan .icon { color: var(--fg-faint); }
+  .team li .orphan-tag {
+    background: var(--warn, #d99);
+    color: #000;
+    padding: 0.02rem 0.35rem;
+    border-radius: 8px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
   .empty { color: var(--fg-faint); font-size: 0.82rem; padding: 1rem; text-align: center; }
   .ctx-backdrop { position: fixed; inset: 0; z-index: 999; }
   .ctx-menu { position: fixed; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 6px; padding: 0.35rem; min-width: 200px; box-shadow: 0 6px 20px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 0.05rem; }

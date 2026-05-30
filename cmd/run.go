@@ -179,6 +179,41 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// a parallel chepherd binary on the same host has its own pool +
 	// can't be cross-killed by this reap pass.
 	_ = rt.ReapOrphanContainers()
+	// #393 P2 — log orphan session-row count on boot. An "orphan" is
+	// a persisted SessionStore row whose name has no live runtime
+	// entry (typically: agent died between chepherd restarts, or the
+	// row was abandoned). Loud number in the boot banner so operators
+	// notice without having to scroll the dashboard. Set
+	// CHEPHERD_CLEANUP_ORPHANS_ON_START=true to also delete them
+	// automatically — useful for CI/test harnesses + operators who
+	// want a clean slate on every bounce. Defaults to log-only so
+	// existing operators aren't surprised by data loss on first
+	// upgrade.
+	if store != nil {
+		ctx := context.Background()
+		if ids, err := store.Sessions().List(ctx); err == nil {
+			var orphans []string
+			for _, name := range ids {
+				if sess, _ := rt.Get(name); sess == nil {
+					orphans = append(orphans, name)
+				}
+			}
+			if len(orphans) > 0 {
+				fmt.Printf("[chepherd-boot] %d orphan session-row(s) in store (no live container)\n", len(orphans))
+				if os.Getenv("CHEPHERD_CLEANUP_ORPHANS_ON_START") == "true" {
+					var deleted int
+					for _, name := range orphans {
+						if err := store.Sessions().Delete(ctx, name); err == nil {
+							deleted++
+						}
+					}
+					fmt.Printf("[chepherd-boot] auto-cleaned %d orphan row(s) (CHEPHERD_CLEANUP_ORPHANS_ON_START=true)\n", deleted)
+				} else {
+					fmt.Printf("[chepherd-boot]   → click 'Clean up orphans' in dashboard sessions pane, OR set CHEPHERD_CLEANUP_ORPHANS_ON_START=true to auto-clean at boot\n")
+				}
+			}
+		}
+	}
 	// v0.9.2 (#208): internal/messagebus/relay.go (337 LOC + 4 Runtime
 	// SessionRegistry methods) deleted in this sub-branch. A2A
 	// SendMessage supersedes the regex @-line PTY relay entirely;
