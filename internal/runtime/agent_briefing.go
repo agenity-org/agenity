@@ -106,6 +106,13 @@ func renderAgentClaudeMD(spec SpawnSpec, peers []PeerBrief) string {
 	fmt.Fprintf(&b, "## How to talk to the operator\n\n")
 	fmt.Fprintf(&b, "Use `chepherd.alert_human` MCP tool when you need human attention — they see it in the dashboard's inbox. Use sparingly: the human is the ultimate authority but you're expected to drive work autonomously between escalations.\n\n")
 
+	fmt.Fprintf(&b, "## How to react to team changes\n\n")
+	fmt.Fprintf(&b, "When a peer joins/leaves your team or changes role, chepherd injects a notification into your PTY prefixed `[chepherd team-event]`. Read those notifications — they're authoritative team-state updates. Examples:\n\n")
+	fmt.Fprintf(&b, "- `[chepherd team-event] `beta` joined team `dev` as `reviewer`` — call `chepherd.get_peer_card(\"beta\")` if their role is relevant to your work\n")
+	fmt.Fprintf(&b, "- `[chepherd team-event] `gamma` left team `dev` (was `qa`)` — your handoff target may need re-routing\n")
+	fmt.Fprintf(&b, "- `[chepherd team-event] `alpha` role in team `dev`: `worker` → `lead`` — escalations should now go to them, not the previous lead\n\n")
+	fmt.Fprintf(&b, "Your `~/.claude/CLAUDE.md` (this file) is REGENERATED ~1 second after each event so the peer list stays current. Reload by running `cat ~/.claude/CLAUDE.md` if you want a fresh view; otherwise rely on the inline notifications + the MCP tools above for live state.\n\n")
+
 	fmt.Fprintf(&b, "## What chepherd is\n\n")
 	fmt.Fprintf(&b, "Chepherd is a multi-agent orchestration runtime. It spawns claude-code (and other agent) sessions in containers, gives them the MCP toolkit to talk to each other + the operator, and provides a dashboard for the human to observe + steer the team. The whole point is parallel + peer-to-peer agent work. You're one node in that mesh, not a solo agent.\n\n")
 
