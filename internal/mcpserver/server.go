@@ -273,6 +273,13 @@ func (s *Server) toolList() []map[string]any {
 				"name": map[string]any{"type": "string"},
 			},
 		}},
+		{"name": "chepherd.peer_status", "description": "Fetch a sibling agent's LIVE status: alive/paused/exited, last activity timestamp, idle seconds, recent PTY output excerpt. Use this to answer 'what is peer X doing right now' without reading their pane via chepherd.read_pane. Args: name (the peer's @-address).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"name"},
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+			},
+		}},
 		{"name": "chepherd.send_to_session", "description": "Write a message directly into a session's PTY stdin. Used by the Scrum Master to advise Adam (prefer @target relay for normal conversation). Args: name, body.", "inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"name", "body"},
@@ -525,6 +532,25 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			return resp
 		}
 		resp.Result = runtime.BuildPeerAgentCard(info)
+	case "peer_status":
+		// #404 P0.2 — return a sibling's PeerStatus (live activity +
+		// ring excerpt). Same shape as
+		// GET /api/v1/sessions/<name>/peer-status.
+		var a struct{ Name string }
+		if err := json.Unmarshal(args, &a); err != nil {
+			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
+			return resp
+		}
+		if a.Name == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "name is required"}
+			return resp
+		}
+		status := s.rt.BuildPeerStatus(a.Name)
+		if status == nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "no such session: " + a.Name}
+			return resp
+		}
+		resp.Result = status
 	case "read_pane":
 		var a struct {
 			Name  string
