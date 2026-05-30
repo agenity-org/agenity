@@ -129,6 +129,17 @@
     resizeObs = new ResizeObserver(tryFit);
     resizeObs.observe(termContainer);
 
+    // #357 P0: refuse to open the WS if the runtime says live=false.
+    // Without this, persisted-but-not-running sessions in the cached
+    // sessions list cause an infinite 5s 404-reconnect loop.
+    const sess = (sessions || []).find(s => s.name === name);
+    if (sess && sess.live === false) {
+      // Don't dial. Operator clicks 'Resume' on agent-details to
+      // spawn the session, which flips live=true + triggers a
+      // fresh attachTo via the $effect reactivity.
+      return;
+    }
+
     // #151 — auto-reconnect on transient WebSocket close. Exponential
     // backoff capped at 5s, gives up after 8 attempts (~30s).
     let wsReconnectAttempts = 0;
