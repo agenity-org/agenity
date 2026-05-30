@@ -3038,55 +3038,104 @@ func (s *Server) claudeLoginBegin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"name": name})
 }
 
+// claudeAutoDismissStep is one prompt-matcher entry. Extracted to
+// package-level so the regression test (p0_411_*_test.go) can feed
+// canned fixtures through the matcher without spinning up a PTY.
+//
+// #411 P0.
+type claudeAutoDismissStep struct {
+	marker string
+	reply  []byte
+	pause  time.Duration
+}
+
+// claudeAutoDismissSteps is the full canonical sequence chepherd's
+// auto-dismiss watcher walks through. Order matters; we advance
+// strictly forward (no step fires twice; step N+1 only after step N).
+//
+// Package-level so p0_411 test can assert the MCP-approval step's
+// shape directly. #411 P0.
+var claudeAutoDismissSteps = []claudeAutoDismissStep{
+	// 1. Theme picker. Default highlight "Dark mode ✔" — Enter accepts.
+	{marker: "Choosethetextstyle", reply: []byte("\r"), pause: 1200 * time.Millisecond},
+	// 2. "Select login method" — default option 1 is "Claude account
+	//    with subscription". Enter accepts. (Only fires when there's
+	//    no usable .credentials.json + .claude.json in agent home.)
+	{marker: "Selectloginmethod", reply: []byte("\r"), pause: 1200 * time.Millisecond},
+	// 3. Legacy/alternate API-key conflict prompt (safety net — only
+	//    fires if ANTHROPIC_API_KEY somehow leaked into env).
+	{marker: "DoyouwanttousethisAPIkey", reply: []byte("2\r"), pause: 1000 * time.Millisecond},
+	// 4. "Do you trust the files in this folder?" — fires on every
+	//    fresh container the first time it cd's into the workspace.
+	//    Default is "Yes, I trust this folder" highlighted → Enter
+	//    accepts. We mount the repo and let claude-code at it.
+	{marker: "Yes,Itrustthisfolder", reply: []byte("\r"), pause: 1200 * time.Millisecond},
+	// 5. MCP server approval — chepherd injects its own MCP server
+	//    via .mcp.json into every workspace.
+	//
+	//    #411 P0 — pre-fix matched option 2's label + bare "\r" reply
+	//    selected option 1 ("Use this MCP server") which isn't
+	//    permanent. Worse, in operator's repro the function exited on
+	//    its 4s idle-tick timeout BEFORE the MCP prompt rendered
+	//    (chepherd-net DNS + WS handshake → 5-8s on first boot). Agent
+	//    wedged forever.
+	//
+	//    Fix: marker = HEADING text (fires as soon as prompt starts
+	//    rendering), reply = "2\r" (deterministic option 2 — permanent
+	//    across future spawns regardless of TUI default-highlight
+	//    position).
+	{marker: "NewMCPserverfoundinthisproject", reply: []byte("2\r"), pause: 2000 * time.Millisecond},
+	// 6. Bypass-permissions warning (because we pass --dangerously-skip-permissions).
+	//    Options are "1. No, exit" (default highlight) and "2. Yes, I accept".
+	//    Special-case sentinel — handled in the loop below with split
+	//    Down-arrow + 800ms wait + Enter so claude-code's Ink TUI
+	//    has time to process the selection-change before the confirm.
+	{marker: "BypassPermissionsmode", reply: []byte("__BYPASS_PROMPT__"), pause: 2000 * time.Millisecond},
+	// 7. Intro "Press Enter to continue" (some claude-code versions
+	//    show this between login-method pick and the welcome screen).
+	{marker: "PressEntertocontinue", reply: []byte("\r"), pause: 1000 * time.Millisecond},
+}
+
+// claudeAutoDismissNormalize returns the form the matcher compares
+// against — same scrubbing the live loop applies. Extracted for the
+// #411 regression test so fixtures + the matcher use the same
+// normalization rules.
+func claudeAutoDismissNormalize(raw []byte) string {
+	clean := ansiAndCRStrip.ReplaceAll(raw, nil)
+	text := strings.ReplaceAll(strings.ReplaceAll(string(clean), "\r", ""), "\n", "")
+	return strings.ReplaceAll(text, " ", "")
+}
+
+// claudeAutoDismissFirstUnfired returns the index of the first step
+// whose marker is present in `tail` AND hasn't already fired, or -1
+// if none match.
+func claudeAutoDismissFirstUnfired(tail string, fired []bool) int {
+	for i, st := range claudeAutoDismissSteps {
+		if fired[i] {
+			continue
+		}
+		if strings.Contains(tail, st.marker) {
+			return i
+		}
+	}
+	return -1
+}
+
 // autoDismissClaudeFirstRunPrompts watches sess's ring buffer for the
 // first-run prompts claude-code prints + injects the right reply per
 // prompt so the OAuth URL surfaces without operator interaction.
 // Returns once the canonical Claude OAuth URL is detected or after a
 // timeout — the polling URL endpoint handles the rest.
 func autoDismissClaudeFirstRunPrompts(sess *session.Session) {
-	// Each step: marker substring → bytes to inject after it's seen.
-	// Order matters; we only advance to step N after step N-1's marker
-	// was seen (so a prompt that's already been dismissed doesn't re-fire).
-	type step struct {
-		marker string
-		reply  []byte
-		// If pause>0, sleep after injecting (lets the next prompt render).
-		pause time.Duration
-	}
+	// #411 P0 — steps moved to package-level claudeAutoDismissSteps so
+	// the regression test in p0_411_*_test.go can exercise the matcher
+	// without spinning up a real PTY.
 	// claude-code's TUI renders each word via cursor-position escape
 	// codes (e.g. "\x1b[9G text"), not real spaces, so stripping ANSI
 	// from the ring buffer leaves words concatenated. Markers below are
 	// the SPACE-LESS form ("ChoosethetextstylethatlooksbestwithyourTerminal"
 	// etc.) — they must match the post-strip text.
-	steps := []step{
-		// 1. Theme picker. Default highlight "Dark mode ✔" — Enter accepts.
-		{marker: "Choosethetextstyle", reply: []byte("\r"), pause: 1200 * time.Millisecond},
-		// 2. "Select login method" — default option 1 is "Claude account
-		//    with subscription". Enter accepts. (Only fires when there's
-		//    no usable .credentials.json + .claude.json in agent home.)
-		{marker: "Selectloginmethod", reply: []byte("\r"), pause: 1200 * time.Millisecond},
-		// 3. Legacy/alternate API-key conflict prompt (safety net — only
-		//    fires if ANTHROPIC_API_KEY somehow leaked into env).
-		{marker: "DoyouwanttousethisAPIkey", reply: []byte("2\r"), pause: 1000 * time.Millisecond},
-		// 4. "Do you trust the files in this folder?" — fires on every
-		//    fresh container the first time it cd's into the workspace.
-		//    Default is "Yes, I trust this folder" highlighted → Enter
-		//    accepts. We mount the repo and let claude-code at it.
-		{marker: "Yes,Itrustthisfolder", reply: []byte("\r"), pause: 1200 * time.Millisecond},
-		// 5. MCP server approval — chepherd injects its own MCP server
-		//    via .mcp.json into every workspace. Default is "Use this
-		//    and all future MCP servers in this project". Enter accepts.
-		{marker: "UsethisandallfutureMCPserversinthisproject", reply: []byte("\r"), pause: 1200 * time.Millisecond},
-		// 6. Bypass-permissions warning (because we pass --dangerously-skip-permissions).
-		//    Options are "1. No, exit" (default highlight) and "2. Yes, I accept".
-		//    Special-case sentinel — handled in the loop below with split
-		//    Down-arrow + 800ms wait + Enter so claude-code's Ink TUI
-		//    has time to process the selection-change before the confirm.
-		{marker: "BypassPermissionsmode", reply: []byte("__BYPASS_PROMPT__"), pause: 2000 * time.Millisecond},
-		// 7. Intro "Press Enter to continue" (some claude-code versions
-		//    show this between login-method pick and the welcome screen).
-		{marker: "PressEntertocontinue", reply: []byte("\r"), pause: 1000 * time.Millisecond},
-	}
+	steps := claudeAutoDismissSteps
 
 	// Only look at the TAIL of the cleaned buffer — the cumulative buffer
 	// contains every screen claude-code has ever drawn, including the
@@ -3096,9 +3145,16 @@ func autoDismissClaudeFirstRunPrompts(sess *session.Session) {
 	// dismissed, and step 6 ("BypassPermissionsmode" → "2\r") could fire
 	// during the trust screen with disastrous side effects (selecting
 	// "No, exit" on the trust prompt, killing the container).
-	const tailWindow = 1500
+	const tailWindow = 2048
+	// #411 P0 — bumped deadline (60s → 180s) and idle tolerance (8 ticks
+	// → 24 ticks = 12s) so the MCP-server-approval prompt has time to
+	// render after trust-folder dismiss. MCP server init involves DNS
+	// resolution on chepherd-net + WS handshake to ws://chepherd:9090,
+	// which can take 5-8s on first boot. Pre-#411 the 4s idle window
+	// fired BEFORE the prompt rendered and the function returned,
+	// leaving the agent wedged forever.
 	fired := make([]bool, len(steps))
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(180 * time.Second)
 	idleTicks := 0
 	for time.Now().Before(deadline) {
 		sub, replay, err := sess.Subscribe(1)
@@ -3135,8 +3191,11 @@ func autoDismissClaudeFirstRunPrompts(sess *session.Session) {
 				_, _ = sess.Inject([]byte("\x1b[B"))
 				time.Sleep(800 * time.Millisecond)
 				_, _ = sess.Inject([]byte("\r"))
+				fmt.Fprintf(os.Stderr, "[chepherd-auto-dismiss] step %d (bypass): sent Down+Enter\n", fireIdx)
 			} else {
 				_, _ = sess.Inject(reply)
+				fmt.Fprintf(os.Stderr, "[chepherd-auto-dismiss] step %d marker %q matched → sent %q\n",
+					fireIdx, steps[fireIdx].marker, string(reply))
 			}
 			fired[fireIdx] = true
 			time.Sleep(steps[fireIdx].pause)
@@ -3149,13 +3208,19 @@ func autoDismissClaudeFirstRunPrompts(sess *session.Session) {
 			return
 		}
 		idleTicks++
-		// 8 idle ticks * 500ms = 4s with no marker hit + no OAuth URL
-		// → agent has reached the welcome screen, our job is done.
-		if idleTicks > 8 {
+		// #411 P0 — 24 idle ticks * 500ms = 12s with no marker hit + no
+		// OAuth URL → agent has reached steady state. Pre-#411 the
+		// tolerance was 8 ticks (4s) which was too aggressive: MCP
+		// server init (DNS + WS handshake to ws://chepherd:9090) can
+		// take 5-8s on first boot, so the function exited BEFORE the
+		// MCP approval prompt rendered + the agent wedged.
+		if idleTicks > 24 {
+			fmt.Fprintf(os.Stderr, "[chepherd-auto-dismiss] reached steady state (24 idle ticks); exiting\n")
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	fmt.Fprintf(os.Stderr, "[chepherd-auto-dismiss] DEADLINE reached (180s) — agent may be wedged on an unmatched prompt\n")
 }
 
 // claudeLoginURL polls the ephemeral agent's ring buffer for the OAuth URL.
