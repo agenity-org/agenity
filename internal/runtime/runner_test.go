@@ -98,21 +98,31 @@ func TestNewRunner_MissingStateDir(t *testing.T) {
 	}
 }
 
-// TestPodRunner_ScaffoldPending pins the sentinel-error contract on
-// PodRunner. ProcessRunner is wired to the existing Runtime in this
-// sub-branch's runtime-migration commit; PodRunner stays scaffold
-// until the k8s-integration commit.
+// TestPodRunner_ScaffoldPending — historical name preserved post-#349.
+// Pre-D1.7 this verified the scaffold-pending error path; D1.7 made
+// newPodRunner actually parse the kubeconfig, so this test now pins
+// that NewRunner with a NON-EXISTENT kubeconfig fails at construction.
+// Methods on a successfully-constructed PodRunner are exercised by
+// the D1 #312 + D1.2-D1.7 #349 batch tests.
 func TestPodRunner_ScaffoldPending(t *testing.T) {
 	t.Parallel()
-	r, err := NewRunner(RunnerConfig{
+	_, err := NewRunner(RunnerConfig{
 		Kind:           RunnerKindPod,
 		Store:          openTestStore(t),
 		StateDir:       t.TempDir(),
 		KubeconfigPath: filepath.Join(t.TempDir(), "kubeconfig"),
 	})
-	if err != nil {
-		t.Fatalf("NewRunner pod: %v", err)
+	if err == nil {
+		t.Fatal("NewRunner pod with non-existent kubeconfig: expected error, got nil")
 	}
+	if !strings.Contains(err.Error(), "kubeconfig") {
+		t.Errorf("err = %v, want kubeconfig-related", err)
+	}
+	return
+	// Block below preserved-but-unreachable for git-history readability.
+	// The original sentinel-error assertions belong to a different
+	// universe; the new contract is the file-not-found surface above.
+	var r Runner
 	ctx := context.Background()
 	for _, call := range []struct {
 		name string
