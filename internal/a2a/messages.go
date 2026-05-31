@@ -51,6 +51,19 @@ type Message struct {
 	// Kind discriminates Message from other Result types in JSON-RPC
 	// envelopes. Always "message" for spec compliance.
 	Kind string `json:"kind,omitempty"`
+
+	// From is a chepherd-extension field used by the knock-marker +
+	// chepherd.get_task pattern (#451 / V0.9.2-ARCHITECTURE §10
+	// Pattern 1). Populated by the send_to_session shim with the
+	// sender agent's @-name so the recipient's knock line can carry
+	// `from=<name>` for human-debuggable peer attribution. The raw
+	// /jsonrpc message/send path doesn't populate it (callers there
+	// authenticate via JWT) — empty `From` renders as `from=""` in
+	// the knock line.
+	//
+	// NOT part of A2A v1.0 spec; safe to ignore on non-chepherd
+	// peers since `json:"from,omitempty"` omits when empty.
+	From string `json:"from,omitempty"`
 }
 
 // Part is one entry in Message.Parts. Discriminated by Kind.

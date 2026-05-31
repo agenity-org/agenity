@@ -136,23 +136,36 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 			// message). Better than blocking the entire Deliver.
 		}
 	}
-	if _, err := sess.Write([]byte(text)); err != nil {
-		failed := d.failedTask(msg, "PTY write: "+err.Error())
+	// #451 — V0.9.2-ARCHITECTURE §10 Pattern 1: runner writes ONLY
+	// the knock marker to PTY; agent sees the knock line + calls
+	// `chepherd.get_task(taskID=...)` MCP to pull the structured
+	// A2A task envelope; then processes the message + replies via
+	// stdout. Pre-#451 we wrote the FULL body + submit-sequence to
+	// PTY which made claude TUI render the message as if the operator
+	// had typed it — that's the architectural shape #451 closes.
+	//
+	// Knock wire format (matches the architect's spec in issue #451):
+	//   [chepherd-knock taskID=<uuid> from=<name>]
+	// Single line, terminated by '\n' (NOT the flavor submit
+	// sequence). The newline ends the input-line; the line itself
+	// is bytes claude TUI will render in its scrollback. claude is
+	// instructed via the per-agent CLAUDE.md briefing (#451 doc
+	// update) to call chepherd.get_task whenever it sees this prefix.
+	//
+	// `text` was extracted above; it's NO LONGER WRITTEN to PTY.
+	// The full body lives in the persisted Task.InputBlob (decoded by
+	// the chepherd.get_task MCP handler).
+	_ = text
+	knock := fmt.Sprintf("[chepherd-knock taskID=%s from=%s]\n", task.ID, msg.From)
+	if _, err := sess.Write([]byte(knock)); err != nil {
+		failed := d.failedTask(msg, "PTY knock write: "+err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
 	}
-	// Submit via flavor-specific sequence (defaults to CR when no
-	// override). agentcatalog lookup keyed on the session's agent slug.
-	submitSeq := d.submitSequenceFor(info.AgentSlug)
-	if _, err := sess.Write(submitSeq); err != nil {
-		failed := d.failedTask(msg, "PTY submit: "+err.Error())
-		d.persistTask(ctx, msg, failed, "message/send")
-		return failed, err
-	}
-	// #387 P0 — mark the send boundary AFTER both writes land. The
+	// #387 P0 — mark the send boundary AFTER the knock lands. The
 	// pump's responseBuf may already contain banner chunks at this
 	// point; sendOffset captures the current length so silence-
-	// finalize only sees response bytes (post-send).
+	// finalize only sees response bytes (post-knock).
 	if mark != nil {
 		mark.MarkSendNow()
 	}

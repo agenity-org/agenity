@@ -354,6 +354,8 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// real history; before A4 the Tasks table stayed empty
 		// because nobody called Save in the delivery path.
 		a2aDeliverer.SetTaskStore(store.Tasks(), rt.InstanceUUID())
+		// #451 — MCP server reads the same store for chepherd.get_task.
+		mcpSrv.SetTaskStore(store.Tasks())
 		methodBodies := &a2a.MethodBodies{
 			Store:       store,
 			AgentCardFn: func() a2a.AgentCard { return *newAgentCard(runFlagListen) },

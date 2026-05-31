@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/runtime"
 )
 
@@ -42,6 +43,11 @@ import (
 type Server struct {
 	rt           *runtime.Runtime
 	deliverer    a2a.Deliverer // v0.9.2: backs the chepherd.send_to_session shim onto A2A SendMessage. Removed in v1.0.
+	// #451 — chepherd.get_task MCP handler reads task envelopes from
+	// this store. Wired by cmd/run.go via SetTaskStore (same
+	// TaskRepository the A2ADeliverer persists to). nil disables the
+	// get_task tool (returns -32000).
+	taskStore persistence.TaskRepository
 	httpListener net.Listener
 	httpServer   *http.Server
 	// AuthToken (#139/#153) is the shared-secret bearer token clients
@@ -62,6 +68,14 @@ type Server struct {
 // SetAuthToken configures the bearer token required on every WS upgrade
 // and /mcp/rpc request. Empty string disables enforcement.
 func (s *Server) SetAuthToken(tok string) { s.authToken = tok }
+
+// SetTaskStore wires the persistence.TaskRepository so the
+// chepherd.get_task MCP handler can resolve task envelopes by ID.
+// Same store the A2ADeliverer writes to. Empty / unwired → get_task
+// returns -32000 "task store not wired". (#451)
+func (s *Server) SetTaskStore(store persistence.TaskRepository) {
+	s.taskStore = store
+}
 
 // requireAuth returns nil if the request carries the right bearer token
 // or auth is disabled. Otherwise returns the http status + error string
@@ -303,6 +317,27 @@ func (s *Server) toolList() []map[string]any {
 			"properties": map[string]any{
 				"name": map[string]any{"type": "string"},
 			},
+		}},
+		// #451 — V0.9.2-ARCHITECTURE §10 Pattern 1 knock-fetch
+		// pattern. When you see a line `[chepherd-knock taskID=<uuid>
+		// from=<name>]` in your terminal, call chepherd.get_task with
+		// that taskID to pull the structured A2A task envelope (the
+		// peer's actual message). DO NOT treat the knock line itself
+		// as content; it's just a notification.
+		{"name": "chepherd.get_task", "description": "Pull the structured A2A task envelope by taskID. Call this when you see a `[chepherd-knock taskID=<uuid> from=<name>]` line in your terminal — the knock is just a notification; the actual message body is in the task envelope this tool returns. Args: taskID (the UUID from the knock line).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"taskID"},
+			"properties": map[string]any{
+				"taskID": map[string]any{"type": "string"},
+			},
+		}},
+		// #451 — V0.9.2-ARCHITECTURE §10 Pattern 1: A → list_peers →
+		// pick recipient → send. Distinct from chepherd.list (which
+		// lists ALL sessions); list_peers is TEAM-SCOPED to the
+		// caller's team membership.
+		{"name": "chepherd.list_peers", "description": "Enumerate Agent Cards for peers in YOUR team. Returns name + role + agent slug + skills per peer (excludes yourself). Use this to discover who to message via send_to_session. Distinct from chepherd.list which returns ALL sessions globally.", "inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
 		}},
 		{"name": "chepherd.send_to_session", "description": "Write a message directly into a session's PTY stdin. Used by the Scrum Master to advise Adam (prefer @target relay for normal conversation). Args: name, body.", "inputSchema": map[string]any{
 			"type":     "object",
@@ -575,6 +610,87 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			return resp
 		}
 		resp.Result = status
+	case "get_task":
+		// #451 — V0.9.2-ARCHITECTURE §10 Pattern 1 knock-fetch pull.
+		// Decode the persisted Task.InputBlob (serialized a2a.Message
+		// from the original SendMessage) + return as the structured
+		// envelope. Recipient-scoping: the InputBlob's ContextID must
+		// match the calling agent's identity (i.e. you can only pull
+		// tasks addressed to YOU). NULL ContextID match is rejected.
+		var a struct {
+			TaskID string `json:"taskID"`
+		}
+		_ = json.Unmarshal(args, &a)
+		if a.TaskID == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "taskID is required"}
+			return resp
+		}
+		if s.taskStore == nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "task store not wired"}
+			return resp
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rec, err := s.taskStore.Get(ctx, a.TaskID)
+		if err != nil || rec == nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "task not found: " + a.TaskID}
+			return resp
+		}
+		var inputMsg a2a.Message
+		if len(rec.InputBlob) > 0 {
+			_ = json.Unmarshal(rec.InputBlob, &inputMsg)
+		}
+		// Recipient-scoping: caller name must match the task's
+		// ContextID (the recipient agent the SendMessage targeted).
+		// Accept either short @-name or full session ID; resolution
+		// runs through the same GetByContextID path the Deliverer used.
+		caller := s.CurrentCaller()
+		if caller != "" && inputMsg.ContextID != "" && caller != inputMsg.ContextID {
+			// Try resolving the ContextID to a session info + matching
+			// by Name — covers the case where the caller's @-name is
+			// the short name but ContextID was set to the full
+			// session ID.
+			_, info := s.rt.GetByContextID(inputMsg.ContextID)
+			if info == nil || info.Name != caller {
+				resp.Error = &rpcErr{Code: -32000, Message: "task not addressed to caller"}
+				return resp
+			}
+		}
+		// Return the structured envelope the agent's instructions
+		// teach it to expect. body field is the canonical
+		// concatenation of TextParts — same shape as a2a.ExtractText.
+		bodyText, _ := a2a.ExtractText(inputMsg)
+		resp.Result = map[string]any{
+			"taskID":    rec.ID,
+			"state":     rec.State,
+			"from":      inputMsg.From,
+			"contextID": inputMsg.ContextID,
+			"body":      bodyText,
+			"createdAt": rec.CreatedAt,
+		}
+	case "list_peers":
+		// #451 — team-scoped peer enumeration. Caller's session info
+		// resolves their team; ListMemberships(team="") of THAT team's
+		// members minus self = peers. Each peer's AgentCard is built
+		// the same way chepherd.get_peer_card does it.
+		caller := s.CurrentCaller()
+		_, callerInfo := s.rt.Get(caller)
+		var team string
+		if callerInfo != nil {
+			team = callerInfo.Team
+		}
+		var peers []*runtime.PeerAgentCard
+		for _, m := range s.rt.ListMemberships("", team) {
+			if m.AgentName == caller {
+				continue
+			}
+			_, info := s.rt.Get(m.AgentName)
+			if info == nil {
+				continue
+			}
+			peers = append(peers, runtime.BuildPeerAgentCard(info))
+		}
+		resp.Result = map[string]any{"peers": peers, "team": team}
 	case "read_pane":
 		var a struct {
 			Name  string
@@ -646,10 +762,14 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			time.Sleep(remaining)
 		}
 		body := strings.TrimRight(a.Body, "\r\n")
+		// #451 — populate From so the knock marker carries the
+		// sender's @-name. CurrentCaller resolves to the agent
+		// behind this MCP WS conn (set in handleWS / identify).
 		task, err := s.deliverer.Deliver(context.Background(), a2a.Message{
 			Role:      "user",
 			Kind:      "message",
 			ContextID: a.Name,
+			From:      s.CurrentCaller(),
 			Parts:     []a2a.Part{{Kind: "text", Text: body}},
 		})
 		if err != nil {
