@@ -58,6 +58,8 @@ var (
 	runFlagFederationRegistryURL    string // #225 row C1 — hosted peer registry
 	runFlagFederationPublicURL      string // #225 row C1 — this chepherd's public URL for announcements
 	runFlagFederationOutboundBearer string // #225 §DoD walk — shared bearer for FederatedDeliverer outbound POST
+	runFlagFederationMTLS           bool   // #487 Wave T3 — enforce mTLS on cross-org federation traffic
+	runFlagFederationOrgID          string // #487 Wave T3 — this daemon's org identifier (CN on its cert)
 	runFlagIOgridEndpoint        string
 	runFlagKeychainBackend       string // #322 H6.1 — keychain backend (default = auto)
 	runFlagOpenBaoAddr           string // #322 H6.1 — OpenBao server URL
@@ -109,6 +111,10 @@ func init() {
 		"iogrid recipe-dispatch endpoint URL — empty disables the iogrid extension on agent-card.json. When set, peers can discover this chepherd's iogrid surface via /.well-known/agent-card.json's x-iogrid block.")
 	runCmd.Flags().StringVar(&runFlagFederationPublicURL, "federation-public-url", "",
 		"this chepherd's public URL announced to peers (default: derived from --listen).")
+	runCmd.Flags().BoolVar(&runFlagFederationMTLS, "federation-mtls", false,
+		"#487 Wave T3 — enforce mTLS on cross-org federation client + server traffic. When false (dev/test default) federation HTTP stays plaintext; when true the daemon mints / loads its own org cert from AuthSecretRepository + presents on every outbound + requires peer cert with chain-to-pinned-CA on every inbound.")
+	runCmd.Flags().StringVar(&runFlagFederationOrgID, "federation-org-id", "",
+		"#487 Wave T3 — this daemon's org identifier (used as CN on the federation leaf cert). Empty defaults to InstanceUUID + 'org-' prefix. Stable across restarts because the cert is persisted under AuthSecretRepository.")
 	runCmd.Flags().StringVar(&runFlagFederationOutboundBearer, "federation-outbound-bearer", "",
 		"shared bearer token sent on every cross-instance SendMessage POST (use B3 trust-list + ES256 JWT in production; this flag is the §DoD walk-friendly bootstrap path).")
 	runCmd.Flags().StringVar(&runFlagScrumMasterName, "scrummaster-name", "shepherd",
@@ -302,6 +308,28 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 				selfURL = "http://" + runFlagListen
 			}
 			fed := federation.New(store.AgentCards())
+			// #487 Wave T3 — wire mTLS onto Federation.HTTPClient when
+			// --federation-mtls is set. The transport presents this
+			// daemon's leaf cert + verifies peer certs against pinned
+			// CAs. When the flag is unset, federation HTTP stays
+			// plaintext (dev/test default).
+			if runFlagFederationMTLS {
+				orgID := runFlagFederationOrgID
+				if orgID == "" {
+					orgID = "org-" + rt.InstanceUUID()
+				}
+				mtls, err := federation.LoadOrCreateMTLS(context.Background(), store.AuthSecrets(), orgID)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warn: federation mTLS: %v (falling back to plaintext)\n", err)
+				} else {
+					fed.HTTPClient = &http.Client{
+						Timeout:   10 * time.Second,
+						Transport: &http.Transport{TLSClientConfig: federation.BuildClientTLSConfig(mtls)},
+					}
+					fmt.Printf("✓ Federation mTLS active (org=%s, %d pinned CAs)\n",
+						mtls.OrgID, len(mtls.PinnedCAs.Subjects()))
+				}
+			}
 			fed.Register(&federation.HostedRegistryDiscoverer{
 				RegistryURL: runFlagFederationRegistryURL,
 				SelfSID:     rt.InstanceUUID(),
