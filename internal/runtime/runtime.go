@@ -254,6 +254,12 @@ type Runtime struct {
 	containerRuntime ContainerRuntime // podman | docker | bare
 	spawner          AgentSpawner     // podman-sidecar | operator | direct (#127)
 
+	// mcpListenAddr is the host:port the chepherd MCP server is bound on.
+	// Set via SetMCPListenAddr from cmd/run.go after the MCP server boots.
+	// Used by writeMCPConfig (#595) to derive the .mcp.json URL when no
+	// explicit override is set — replaces the hardcoded :9090 fallback.
+	mcpListenAddr string
+
 	// #270 — instanceUUID is the 8-char SHA256 fingerprint of the
 	// absolute state-dir path. Two chepherd binaries with distinct
 	// --state-dir flags get distinct UUIDs → distinct container-name
@@ -449,6 +455,58 @@ type VaultCredMeta struct {
 // filesystem. Safe to call before or after Spawn. Pass nil to detach.
 func (r *Runtime) SetVault(v VaultProvider) {
 	r.vault = v
+}
+
+// SetMCPListenAddr records the host:port the chepherd MCP server is
+// bound on. Called from cmd/run.go after StartHTTP succeeds. Used by
+// writeMCPConfig (#595) to derive .mcp.json's MCP URL when no env
+// override is set — replaces the hardcoded ":9090" fallback so any
+// non-default --mcp-listen works correctly out-of-the-box.
+func (r *Runtime) SetMCPListenAddr(addr string) {
+	r.mcpListenAddr = addr
+}
+
+// deriveAgentMCPURL builds the .mcp.json `url` field for spawned
+// agents when neither CHEPHERD_MCP_URL nor CHEPHERD_AGENT_MCP_URL is
+// set explicitly. Detects topology + uses the actual MCP listen port
+// instead of hardcoding ":9090" (#595).
+//
+// Detection:
+//   - HOSTNAME == "chepherd": running inside the canonical 'chepherd'
+//     container (per scripts/start.sh + chepherd-net). Agents in
+//     chepherd-net resolve "chepherd" by container name → use
+//     "ws://chepherd:<port>/mcp/ws".
+//   - Otherwise (host-direct, k8s service, any other deploy): use
+//     "ws://host.containers.internal:<port>/mcp/ws" so agents
+//     (typically slirp4netns or bridge-net) reach the host backend
+//     via Podman/Docker's host-loopback DNS.
+//
+// Port comes from r.mcpListenAddr (set via SetMCPListenAddr after
+// MCP boot). Falls back to 9090 only when mcpListenAddr is unset
+// (legacy / test-mode pre-SetMCPListenAddr).
+func (r *Runtime) deriveAgentMCPURL() string {
+	port := mcpPortFromListenAddr(r.mcpListenAddr)
+	hostname := os.Getenv("HOSTNAME")
+	if hostname == "chepherd" {
+		// In-container deploy: agents resolve via chepherd-net DNS.
+		return fmt.Sprintf("ws://chepherd:%s/mcp/ws", port)
+	}
+	// Host-direct (or any non-canonical hostname): route through
+	// host-loopback DNS that Podman/Docker exposes to containers.
+	return fmt.Sprintf("ws://host.containers.internal:%s/mcp/ws", port)
+}
+
+// mcpPortFromListenAddr extracts the port from a host:port string.
+// Empty / invalid input falls back to "9090" (the legacy hardcode)
+// so tests + pre-SetMCPListenAddr code paths still work.
+func mcpPortFromListenAddr(addr string) string {
+	if addr == "" {
+		return "9090"
+	}
+	if i := strings.LastIndex(addr, ":"); i >= 0 && i+1 < len(addr) {
+		return addr[i+1:]
+	}
+	return "9090"
 }
 
 // SetAgentEnv registers a key=value pair that will be appended to
@@ -2153,27 +2211,13 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 	// becomes ws://chepherd:9090).
 	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
 	if mcpURL == "" {
-		// #398 P0 v2 — default to chepherd-net container-name DNS.
-		// scripts/start.sh creates a user-defined podman network
-		// `chepherd-net` + attaches both the chepherd container and
-		// every agent container to it (via agentNetworkMode default).
-		// Agents resolve `chepherd` by name within the network — no
-		// host-loopback gymnastics, no slirp4netns kernel-isolation
-		// problem.
-		//
-		// Earlier defaults this overrode:
-		//   #369: ws://host.containers.internal:9090/mcp/ws (slirp4netns
-		//     could reach the host IP but kernel isolation later
-		//     blocked the back-connect — #398 surfaced this live)
-		//   pre-#369: HostAddrForAgent outbound-IP heuristic (didn't
-		//     route through slirp4netns NAT)
-		//
-		// Bare-host dev mode (chepherd not in chepherd-net): operator
-		// must set CHEPHERD_MCP_URL=ws://host.containers.internal:9090/mcp/ws
-		// AND CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns.
-		// K8s in-cluster: set CHEPHERD_MCP_URL=ws://chepherd:9090/mcp/ws
-		// (matches by coincidence; chepherd Service DNS).
-		mcpURL = "ws://chepherd:9090/mcp/ws"
+		// #595 — auto-detect topology + actual listen port instead of
+		// hardcoding `ws://chepherd:9090/mcp/ws`. The hardcode broke
+		// every host-direct deploy (no `chepherd` container hostname
+		// to resolve) AND every deploy that bound MCP on a non-9090
+		// port (the wizard reported success but agents couldn't reach
+		// the backend → operator-visible /mcp DISCONNECTED).
+		mcpURL = r.deriveAgentMCPURL()
 	}
 	// Use the absolute path of the currently-running chepherd binary so
 	// the MCP-bridge subprocess matches the running runtime regardless
