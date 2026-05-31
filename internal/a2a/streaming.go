@@ -49,13 +49,25 @@ type streamingParams struct {
 type StreamingHandlerFn func(w http.ResponseWriter, r *http.Request, req JSONRPCRequest)
 
 // MakeStreamingHandler returns a StreamingHandlerFn that handles
-// `message/stream` requests inline as SSE. It uses the same task-
-// persistence + broker subscribe path as the two-call handler so
-// the event source is identical; only the response framing differs.
+// `message/stream` AND `tasks/resubscribe` requests inline as SSE.
+//
+// message/stream — creates a fresh Task, subscribes, streams live.
+// tasks/resubscribe — joins an existing Task's broadcast (#481 Wave A2),
+//                     first replaying the persisted task history (the
+//                     status snapshot + initial message + any output
+//                     history / artifacts) THEN tailing live events.
+//
+// Both methods share the SSE header contract + frame format; only the
+// subscription source differs. The shared frame writer is streamSSE.
 func MakeStreamingHandler(store persistence.Store, broker *StreamBroker, runnerSID string) StreamingHandlerFn {
 	sp := &streamingParams{Store: store, Broker: broker, RunnerSID: runnerSID}
 	return func(w http.ResponseWriter, r *http.Request, req JSONRPCRequest) {
-		sp.serve(w, r, req)
+		switch req.Method {
+		case "tasks/resubscribe":
+			sp.serveResubscribe(w, r, req)
+		default:
+			sp.serve(w, r, req)
+		}
 	}
 }
 
@@ -138,6 +150,94 @@ func (sp *streamingParams) serve(w http.ResponseWriter, r *http.Request, req JSO
 		_ = writeSSEFrame(w, flusher, StreamEvent{Type: "status", Task: initial})
 	}
 
+	sp.tailSubscription(w, r, flusher, sub, streamID)
+}
+
+// serveResubscribe handles tasks/resubscribe inline as SSE (#481 Wave
+// A2). Loads the persisted Task, emits a `status` event carrying the
+// full task history snapshot, then either closes immediately on a
+// terminal state OR subscribes to the live broker channel + tails
+// until terminal. The frame format is identical to message/stream's
+// so consumers can treat both methods as the same wire.
+func (sp *streamingParams) serveResubscribe(w http.ResponseWriter, r *http.Request, req JSONRPCRequest) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeRPCError(w, req.ID, ErrCodeInternalError,
+			"SSE requires a flushable ResponseWriter")
+		return
+	}
+	var params resubscribeParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		writeRPCError(w, req.ID, ErrCodeInvalidParams,
+			"decode ResubscribeTaskParams: "+err.Error())
+		return
+	}
+	if params.TaskID == "" {
+		writeRPCError(w, req.ID, ErrCodeInvalidParams,
+			"taskId is required")
+		return
+	}
+	rec, err := sp.Store.Tasks().Get(r.Context(), params.TaskID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeRPCError(w, req.ID, -32004, "task not found: "+params.TaskID)
+			return
+		}
+		writeRPCError(w, req.ID, ErrCodeInternalError,
+			"TaskRepository.Get: "+err.Error())
+		return
+	}
+	streamID, err := sp.Broker.Subscribe(params.TaskID)
+	if err != nil {
+		writeRPCError(w, req.ID, ErrCodeInternalError,
+			"StreamBroker.Subscribe: "+err.Error())
+		return
+	}
+	sub, ok := sp.Broker.lookup(streamID)
+	if !ok {
+		writeRPCError(w, req.ID, ErrCodeInternalError,
+			"StreamBroker.lookup: subscription disappeared")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	_, _ = fmt.Fprintf(w, ": resubscribed to task %s on stream %s\n\n", params.TaskID, streamID)
+	flusher.Flush()
+
+	// History replay — emit the persisted Task snapshot, which carries
+	// the input message, output history, artifacts, and the LAST
+	// observed status. A late-subscriber sees the catch-up trail
+	// before any live tail events.
+	task, decodeErr := decodeTask(rec)
+	if decodeErr == nil && task != nil {
+		_ = writeSSEFrame(w, flusher, StreamEvent{Type: "status", Task: task})
+	}
+
+	// If the persisted state is already terminal, emit a `done`
+	// event and close the stream immediately. No live broker tail
+	// can produce more events for this task.
+	if isTerminalState(TaskState(rec.State)) {
+		if task != nil {
+			_ = writeSSEFrame(w, flusher, StreamEvent{Type: "done", Task: task})
+		}
+		sp.Broker.cleanup(streamID)
+		return
+	}
+
+	sp.tailSubscription(w, r, flusher, sub, streamID)
+}
+
+// tailSubscription pulls events off the subscription channel + writes
+// SSE frames until either the broker closes the channel (terminal
+// done event), the HTTP request context cancels (client disconnect),
+// or the writer errors out. Idle pings keep the connection alive
+// under long quiet periods.
+func (sp *streamingParams) tailSubscription(w http.ResponseWriter, r *http.Request, flusher http.Flusher, sub *subscription, streamID string) {
 	ctx := r.Context()
 	idleTimer := time.NewTimer(sp.Broker.idleTimeout())
 	defer idleTimer.Stop()
@@ -148,9 +248,6 @@ func (sp *streamingParams) serve(w http.ResponseWriter, r *http.Request, req JSO
 		case <-ctx.Done():
 			return
 		case <-idleTimer.C:
-			// Heartbeat comment — keeps the connection alive without
-			// counting as an event. EventSource clients ignore comment
-			// frames silently.
 			if _, err := fmt.Fprint(w, ": idle-ping\n\n"); err != nil {
 				return
 			}
@@ -158,7 +255,7 @@ func (sp *streamingParams) serve(w http.ResponseWriter, r *http.Request, req JSO
 			idleTimer.Reset(sp.Broker.idleTimeout())
 		case ev, ok := <-sub.ch:
 			if !ok {
-				return // broker closed the channel (terminal done event)
+				return
 			}
 			if err := writeSSEFrame(w, flusher, ev); err != nil {
 				return
@@ -175,6 +272,18 @@ func (sp *streamingParams) serve(w http.ResponseWriter, r *http.Request, req JSO
 			}
 		}
 	}
+}
+
+// isTerminalState reports whether the A2A task state is one that the
+// broker will never publish further events for. Resubscribe to a
+// terminal-state task emits the snapshot + done and closes; no live
+// tail is possible.
+func isTerminalState(s TaskState) bool {
+	switch s {
+	case TaskStateCompleted, TaskStateFailed, TaskStateCanceled:
+		return true
+	}
+	return false
 }
 
 func writeSSEFrame(w http.ResponseWriter, flusher http.Flusher, ev StreamEvent) error {

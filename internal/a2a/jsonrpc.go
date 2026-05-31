@@ -171,13 +171,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		writeError(w, rpcReq.ID, ErrCodeInvalidRequest, "jsonrpc must be \"2.0\"")
 		return
 	}
-	// #480 Wave A1 — single-call POST→SSE binding for message/stream.
-	// When the StreamingHandler is wired AND the client advertised
-	// text/event-stream, branch into the SSE handler which owns the
-	// response from here on. Falls through to the JSON path for
-	// non-streaming Accept or when StreamingHandler is nil.
+	// #480 Wave A1 + #481 Wave A2 — inline POST→SSE binding for
+	// streaming methods. When the StreamingHandler is wired AND the
+	// client advertised text/event-stream, branch into the SSE
+	// handler which owns the response from here on. Falls through to
+	// the JSON two-call path for non-streaming Accept or when
+	// StreamingHandler is nil.
 	if r.StreamingHandler != nil &&
-		rpcReq.Method == "message/stream" &&
+		(rpcReq.Method == "message/stream" || rpcReq.Method == "tasks/resubscribe") &&
 		acceptsEventStream(req) {
 		r.StreamingHandler(w, req, rpcReq)
 		return
