@@ -1033,6 +1033,29 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, err
 		if fallbackCwd == "" {
 			fallbackCwd, _ = os.UserHomeDir()
 		}
+		// #594 — translate v0.9-wizard's hardcoded
+		// '/home/chepherd/...' (container-only path) to the daemon's
+		// actual host home when running host-direct. The wizard was
+		// designed for the canonical scripts/start.sh topology where
+		// chepherd runs in a container as user 'chepherd'; on
+		// host-direct deploy /home/chepherd doesn't exist and spawn
+		// fails with the misleading 'fork/exec /usr/bin/podman: no
+		// such file' error (the real failure is os/exec chdir to
+		// non-existent cwd before exec).
+		if strings.HasPrefix(fallbackCwd, "/home/chepherd/") {
+			if home, err := os.UserHomeDir(); err == nil && home != "/home/chepherd" {
+				translated := home + strings.TrimPrefix(fallbackCwd, "/home/chepherd")
+				if _, statErr := os.Stat(translated); statErr == nil {
+					fallbackCwd = translated
+				}
+			}
+		}
+		// #594 Fix 2 — pre-validate cwd exists so we surface
+		// actionable errors instead of the kernel-level ENOENT from
+		// os/exec.
+		if _, err := os.Stat(fallbackCwd); err != nil {
+			return fallbackCwd, fmt.Errorf("spawn cwd does not exist: %s (check wizard Stage 2 Repo selection or chepherd state-dir layout)", fallbackCwd)
+		}
 		return fallbackCwd, nil
 	}
 	providers, err := runtime.LoadGitProviders(s.rt.StateDir())
