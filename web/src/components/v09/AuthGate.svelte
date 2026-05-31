@@ -154,9 +154,7 @@
     <div class="login-card">
       <h2 id="login-heading">🔑 chepherd login</h2>
       <p class="prose">Paste the bootstrap token chepherd printed at startup.</p>
-      <p class="prose tiny">Find it with:
-        <code>podman exec chepherd cat /home/chepherd/.local/state/chepherd/auth.printed</code>
-      </p>
+      <p class="prose tiny">Find it in chepherd's stdout (right after the “Bootstrap token (operator, 30d):” banner), or read it from <code>$STATE_DIR/auth.printed</code> where <code>$STATE_DIR</code> is the path you passed to <code>--state-dir</code> at boot.</p>
       <textarea
         bind:value={tokenInput}
         placeholder="eyJhbGc…"
