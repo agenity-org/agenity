@@ -41,7 +41,6 @@ import (
 	"syscall"
 
 	"github.com/chepherd/chepherd/internal/mcpserver"
-	"github.com/chepherd/chepherd/internal/runtime"
 )
 
 func main() {
@@ -126,23 +125,29 @@ func run() error {
 		return fmt.Errorf("mkdir mcp-socket parent %q: %w", filepath.Dir(cfg.mcpSocket), err)
 	}
 
-	// Bring up a minimal Runtime for this single-session runner.
-	// In the daemon today Runtime manages MANY sessions; in the
-	// runner it manages exactly ONE (this runner's). The same
-	// type backs both for now — touch points 2-3 narrow this so
-	// per-runner state stays bounded.
-	rt, err := runtime.New(cfg.stateDir)
-	if err != nil {
-		return fmt.Errorf("runtime.New: %w", err)
-	}
-
-	// MCP server. The runner doesn't yet have a Deliverer (touch
-	// point 2 wires the per-session A2A endpoint; until then the
-	// send_to_session shim returns the descriptive -32000 error
-	// the New() path already emits). The local Unix-socket
-	// transport is the operator-visible deliverable of this
-	// touch point.
-	mcp := mcpserver.New(rt)
+	// #504 CI follow-up — DON'T init internal/runtime.Runtime here.
+	// runtime.New triggers podman/docker capability probes
+	// (chepherd-runtime-detect → imageExists chepherd-agent:latest →
+	// `podman image exists` subprocess) which take 5-10s on cold
+	// CI runners that don't have the agent image. That blew past
+	// the e2e test's 5s polling deadline → daemon never saw the
+	// runner row → red CI.
+	//
+	// For R1 the runner doesn't NEED a Runtime — it doesn't spawn
+	// containers, doesn't manage multiple sessions, doesn't host
+	// the chepherd MCP tool catalog. Wave R4 (PTY ownership
+	// cutover) will introduce a stripped-down per-session manager
+	// inside the runner; the daemon's full Runtime stays where it
+	// is.
+	//
+	// MCP server is constructed with rt=nil. The healthz/info paths
+	// don't touch rt; the JSON-RPC tool catalog DOES — until the
+	// runner's R2+ scope adds a runner-specific tool surface, any
+	// tools/call hitting the runner's MCP socket NPEs. That's fine
+	// for R1: agents inside the container talk to the daemon via
+	// the existing /mcp/rpc surface, NOT the local socket yet. The
+	// local socket exists for R2 to wire onto.
+	mcp := mcpserver.New(nil)
 	if cfg.authToken != "" {
 		mcp.SetAuthToken(cfg.authToken)
 	}
@@ -208,7 +213,6 @@ func run() error {
 		dc.Close()
 	}
 	mcp.Stop()
-	_ = rt
 	return nil
 }
 
