@@ -207,15 +207,21 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// handler-lookup branch see.
 	canonicalMethod := canonicalizeMethod(rpcReq.Method)
 	rpcReq.Method = canonicalMethod
-	// #480 Wave A1 + #481 Wave A2 — inline POST→SSE binding for
-	// streaming methods. When the StreamingHandler is wired AND the
-	// client advertised text/event-stream, branch into the SSE
-	// handler which owns the response from here on. Falls through to
-	// the JSON two-call path for non-streaming Accept or when
-	// StreamingHandler is nil.
+	// #569 — SendStreamingMessage + SubscribeToTask MUST return
+	// Content-Type: text/event-stream per A2A v1.0 §9.4.2 + §9.4.6,
+	// directly from the POST response. No two-call streamId pattern
+	// + no Accept-header opt-in — the spec is unconditional on the
+	// response Content-Type for these methods. When the runner has
+	// wired a StreamingHandler, route streaming methods to SSE
+	// unconditionally; pre-#569 chepherd's Accept-header gate was a
+	// spec violation that returned application/json + {streamId}
+	// instead. When StreamingHandler is nil (e.g., chepherd-runner
+	// headless scaffold without broker), fall through to the JSON
+	// two-call legacy path so the runner still has a working response
+	// — the spec-conformant path requires the StreamingHandler wiring
+	// at the runtime.
 	if r.StreamingHandler != nil &&
-		(canonicalMethod == "SendStreamingMessage" || canonicalMethod == "SubscribeToTask") &&
-		acceptsEventStream(req) {
+		(canonicalMethod == "SendStreamingMessage" || canonicalMethod == "SubscribeToTask") {
 		r.StreamingHandler(w, req, rpcReq)
 		return
 	}
