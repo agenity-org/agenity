@@ -53,8 +53,8 @@ func TestAuthMiddleware_MissingAuthorization(t *testing.T) {
 	}
 	var rpc JSONRPCResponse
 	_ = json.NewDecoder(resp.Body).Decode(&rpc)
-	if rpc.Error == nil || rpc.Error.Code != -32001 {
-		t.Errorf("expected -32001 in body, got %+v", rpc.Error)
+	if rpc.Error == nil || rpc.Error.Code != ErrCodeAuthRequired {
+		t.Errorf("expected ErrCodeAuthRequired (-32011) in body, got %+v", rpc.Error)
 	}
 }
 

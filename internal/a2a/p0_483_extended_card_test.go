@@ -60,8 +60,8 @@ func TestWaveA4_ExtendedCard_UnauthenticatedReturns32001(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatalf("expected error envelope, got %+v", resp)
 	}
-	if resp.Error.Code != -32001 {
-		t.Errorf("error code = %d, want -32001", resp.Error.Code)
+	if resp.Error.Code != ErrCodeAuthRequired {
+		t.Errorf("error code = %d, want ErrCodeAuthRequired (-32011)", resp.Error.Code)
 	}
 	if resp.Result != nil {
 		t.Errorf("result should be nil on auth failure, got %v", resp.Result)

@@ -169,8 +169,8 @@ func TestWaveA2_Resubscribe_UnknownTaskReturnsJSONError(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&rpc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if rpc.Error == nil || rpc.Error.Code != -32004 {
-		t.Errorf("error = %+v, want code=-32004 (task not found)", rpc.Error)
+	if rpc.Error == nil || rpc.Error.Code != ErrCodeTaskNotFound {
+		t.Errorf("error = %+v, want code=ErrCodeTaskNotFound (-32001 TaskNotFound)", rpc.Error)
 	}
 }
 
