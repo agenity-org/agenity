@@ -18,7 +18,6 @@
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -102,60 +101,43 @@ func TestV094Walk_RealServerExtendedAgentCard(t *testing.T) {
 	}
 	bearer := strings.TrimSpace(string(tokenBytes))
 
+	_ = bearer // retired by R5; see comment below
+
 	rpcBody := `{"jsonrpc":"2.0","id":1,"method":"agent/getAuthenticatedExtendedCard","params":{}}`
 
-	// ─── Assertion 1: missing Bearer → 401 from AuthMiddleware ──────
-	noauthReq, _ := http.NewRequest(http.MethodPost,
+	// Post-R5 #521 daemon-de-A2A cutover: the daemon NO LONGER
+	// serves /jsonrpc. The A2A surface (including
+	// agent/getAuthenticatedExtendedCard) lives on each chepherd-
+	// runner at /a2a/<sid>/jsonrpc. The daemon's /jsonrpc returns
+	// 410-Gone with the deprecation chain + Link: rel="successor-
+	// version" pointing at the D1 directory.
+	//
+	// This e2e asserts the R5 operator-observable behavior. The
+	// substantive A4 method-body contract (Subject + audit_endpoint
+	// + Grants + RateUsage) is unit-tested in
+	// internal/a2a/p0_483_extended_card_test.go against the actual
+	// MethodBodies handler — which runners' a2a.Router serves. A
+	// runner-hosted live-walk lands when the H-series customer
+	// flow surfaces the extended card to operators via the iogrid
+	// API.
+	r5Req, _ := http.NewRequest(http.MethodPost,
 		"http://"+httpAddr+"/jsonrpc",
 		strings.NewReader(rpcBody))
-	noauthReq.Header.Set("Content-Type", "application/json")
-	noauthResp, err := http.DefaultClient.Do(noauthReq)
+	r5Req.Header.Set("Content-Type", "application/json")
+	r5Resp, err := http.DefaultClient.Do(r5Req)
 	if err != nil {
-		t.Fatalf("no-auth POST: %v", err)
+		t.Fatalf("POST /jsonrpc: %v", err)
 	}
-	noauthResp.Body.Close()
-	if noauthResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("no-auth status = %d, want 401 (AuthMiddleware short-circuit)",
-			noauthResp.StatusCode)
+	defer r5Resp.Body.Close()
+	if r5Resp.StatusCode != http.StatusGone {
+		t.Fatalf("status = %d, want 410-Gone (R5 daemon-de-A2A cutover)",
+			r5Resp.StatusCode)
 	}
-
-	// ─── Assertion 2: valid Bearer → extended card wire shape ──────
-	authReq, _ := http.NewRequest(http.MethodPost,
-		"http://"+httpAddr+"/jsonrpc",
-		strings.NewReader(rpcBody))
-	authReq.Header.Set("Authorization", "Bearer "+bearer)
-	authReq.Header.Set("Content-Type", "application/json")
-	authResp, err := http.DefaultClient.Do(authReq)
-	if err != nil {
-		t.Fatalf("auth POST: %v", err)
+	if dep := r5Resp.Header.Get("Deprecation"); dep == "" {
+		t.Errorf("missing Deprecation header (RFC 9745)")
 	}
-	defer authResp.Body.Close()
-	if authResp.StatusCode != http.StatusOK {
-		t.Fatalf("auth status = %d, want 200", authResp.StatusCode)
-	}
-	var rpc map[string]any
-	if err := json.NewDecoder(authResp.Body).Decode(&rpc); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if rpc["error"] != nil {
-		t.Fatalf("unexpected JSON-RPC error: %v", rpc["error"])
-	}
-	result, _ := rpc["result"].(map[string]any)
-	card, _ := result["card"].(map[string]any)
-	if card == nil {
-		t.Fatalf("result.card missing: %v", rpc)
-	}
-	if card["name"] == "" {
-		t.Errorf("card.name empty: %v", card)
-	}
-	auth, _ := card["x-chepherd-auth"].(map[string]any)
-	if auth == nil {
-		t.Fatalf("x-chepherd-auth extension missing: %v", card)
-	}
-	if auth["subject"] == "" || auth["subject"] == nil {
-		t.Errorf("x-chepherd-auth.subject empty: %v", auth)
-	}
-	if auth["audit_endpoint"] == "" || auth["audit_endpoint"] == nil {
-		t.Errorf("x-chepherd-auth.audit_endpoint empty: %v", auth)
+	if link := r5Resp.Header.Get("Link"); !strings.Contains(link, "successor-version") {
+		t.Errorf("Link header missing successor-version: %q", link)
 	}
 }
+
