@@ -89,6 +89,14 @@ type runnerConfig struct {
 	// for R1 (Wave R2 lights the A2A endpoint + populates this).
 	a2aBaseURL string
 
+	// A2AListen is the runner's per-session A2A endpoint TCP bind
+	// address (host:port). Empty disables the endpoint entirely
+	// (back-compat with R1 scaffold mode + the daemon-register-only
+	// e2e test). When set + --sid is non-empty, the runner mounts
+	// internal/a2a.Router at /a2a/<sid>/jsonrpc serving all 11 A2A
+	// methods. Set via --a2a-listen or CHEPHERD_A2A_LISTEN. #463.
+	a2aListen string
+
 	// StateDir is the per-runner state directory inside the
 	// container. Defaults to /var/lib/chepherd/runner.
 	stateDir string
@@ -192,6 +200,19 @@ func run() error {
 		// uploaded audits for SendMessage call events.
 	}
 
+	// #463 Wave R2 — per-session A2A endpoint. Off by default for
+	// back-compat with R1 scaffold mode; activates when --a2a-listen
+	// is non-empty AND --sid is non-empty (the URL path /a2a/<sid>
+	// depends on the sid).
+	var a2aSrv *a2aEndpoint
+	if cfg.a2aListen != "" && cfg.sid != "" {
+		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.a2aBaseURL, cfg.stateDir)
+		if err != nil {
+			return fmt.Errorf("a2a endpoint: %w", err)
+		}
+		a2aSrv = srv
+	}
+
 	// #504 — agent spawn + PTY pump. The runner's reason for being
 	// (eventually) is to host the agent CLI process as its child +
 	// stream PTY output to the daemon as audit events. R1 ships the
@@ -213,6 +234,7 @@ func run() error {
 		dc.Close()
 	}
 	mcp.Stop()
+	a2aSrv.Close()
 	return nil
 }
 
@@ -238,6 +260,8 @@ func parseFlags() (*runnerConfig, error) {
 		"operator-visible @-handle for this runner (e.g. \"iogrid-1\"). Empty fine; daemon may echo back from spawn intent.")
 	fs.StringVar(&cfg.a2aBaseURL, "a2a-base-url", envOr("CHEPHERD_A2A_BASE_URL", ""),
 		"scheme://host:port the runner serves its A2A endpoint on. Daemon templates the §12.1 well-known URI off this. Empty for R1; Wave R2 lights it.")
+	fs.StringVar(&cfg.a2aListen, "a2a-listen", envOr("CHEPHERD_A2A_LISTEN", ""),
+		"per-session A2A endpoint TCP bind address (host:port). Empty disables. When set + --sid non-empty, mounts /a2a/<sid>/jsonrpc serving all 11 A2A methods. (#463 Wave R2)")
 	fs.StringVar(&cfg.stateDir, "state-dir", envOr("CHEPHERD_RUNNER_STATE", "/var/lib/chepherd/runner"),
 		"per-runner state directory inside the container")
 	fs.StringVar(&cfg.authToken, "auth-token", envOr("CHEPHERD_TOKEN", ""),
