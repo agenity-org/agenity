@@ -43,7 +43,11 @@ import (
 // "PTY". After the silence window, the completer must flip Task
 // state in the store.
 func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
-	t.Setenv("CHEPHERD_A2A_SILENCE_WINDOW_MS", "300")
+	// CI runners can be slow; 300ms silence window was occasionally
+	// tight in parallel runs (#522 cascade observed P0_422-style
+	// timing flake on this test). 800ms gives ~3× safety margin
+	// without changing the contract.
+	t.Setenv("CHEPHERD_A2A_SILENCE_WINDOW_MS", "800")
 
 	src := newR4FakeSubscriberSource(64)
 	pty := &fakePTY{}
@@ -69,10 +73,10 @@ func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
 	// is sendOffset=0 and the cursor IS in the post-send slice.
 	src.PushChunk([]byte("\xe2\x9d\xaf agent reply\n"))
 
-	// (a) — Wait up to 2s for the broker to capture an artifact
-	// event with the pushed bytes.
+	// (a) — Wait up to 4s for the broker to capture an artifact
+	// event with the pushed bytes (was 2s; bumped for CI headroom).
 	gotBytes := false
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, ev := range broker.Events() {
 			if ev.Event.Type == "artifact" && ev.Event.Artifact != nil {
@@ -92,9 +96,9 @@ func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
 		t.Fatalf("(a) FAIL: broker never received the cursor-bearing artifact within 2s. broker events=%d", len(broker.Events()))
 	}
 
-	// (b) — After the 300ms silence window, the completer must fire +
-	// flip the persisted Task to "completed".
-	deadline = time.Now().Add(2 * time.Second)
+	// (b) — After the 800ms silence window, the completer must fire +
+	// flip the persisted Task to "completed". 5s headroom for CI.
+	deadline = time.Now().Add(5 * time.Second)
 	var completedState string
 	var completedBlob []byte
 	for time.Now().Before(deadline) {
@@ -107,7 +111,7 @@ func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if completedState != string(a2a.TaskStateCompleted) {
-		t.Fatalf("(b) FAIL: Task never transitioned to completed within 2s after silence window")
+		t.Fatalf("(b) FAIL: Task never transitioned to completed within 5s after silence window")
 	}
 
 	// (b) follow-up — completed OutputBlob carries the artifact text.
