@@ -360,6 +360,8 @@ func parseFlags() (*runnerConfig, error) {
 		"#499 Wave H1 — output path for the A2A Task envelope. Empty = write to stdout.")
 	fs.DurationVar(&cfg.headless.timeout, "task-timeout", 5*time.Minute,
 		"#499 Wave H1 — wall-clock cap for the agent process under --headless. Zero disables (not recommended for batch consumers).")
+	fs.StringVar(&cfg.headless.credentialsFile, "credentials-file", "",
+		"#501 Wave H3 — path to 0600 JSON file with BYO credentials [{\"provider\":\"anthropic\",\"key\":\"sk-...\"}]. Read once + deleted; values injected into CHILD agent process env only (never on the runner's command line, never exported to the runner's own env).")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, err

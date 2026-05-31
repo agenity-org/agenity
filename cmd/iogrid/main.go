@@ -277,12 +277,28 @@ func (s *server) spawnRunner(taskBody []byte) (*runnerInfo, error) {
 		return nil, fmt.Errorf("workdir: %w", err)
 	}
 	resultFile := filepath.Join(workDir, "result.json")
-	cmd := exec.Command(s.cfg.runnerBin,
+	// #501 Wave H3 — strip credentials from the task body before
+	// forwarding to the runner. The runner gets the task via
+	// --task-json (visible in /proc/<runner-pid>/cmdline); the
+	// credentials NEVER appear there. They flow via
+	// --credentials-file pointing at a 0600 file the runner reads
+	// + deletes.
+	taskBodyForRunner, credsFile, credSummary, cerr := extractCredentialsFromTaskBody(taskBody, workDir)
+	if cerr != nil {
+		_ = os.RemoveAll(workDir)
+		return nil, fmt.Errorf("credentials: %w", cerr)
+	}
+	args := []string{
 		"--headless",
-		"--task-json", string(taskBody),
+		"--task-json", string(taskBodyForRunner),
 		"--result-file", resultFile,
 		"--task-timeout", s.cfg.taskTimeout.String(),
-	)
+	}
+	if credsFile != "" {
+		args = append(args, "--credentials-file", credsFile)
+		fmt.Printf("iogrid: injecting credentials for task %s: %s\n", id, credSummary)
+	}
+	cmd := exec.Command(s.cfg.runnerBin, args...)
 	// Capture child stderr into the workdir so failed runners
 	// can be diagnosed; stdout is discarded because --result-file
 	// owns the canonical task envelope.
@@ -374,6 +390,59 @@ func (s *server) killAll() {
 	for _, id := range ids {
 		s.cancelRunner(id)
 	}
+}
+
+// extractCredentialsFromTaskBody pulls a top-level "credentials"
+// field out of the iogrid POST body and writes it to a 0600 file
+// in workDir for the runner to read via --credentials-file
+// (#501 Wave H3). The redacted body (without credentials) is what
+// the runner sees via --task-json — keys never reach
+// /proc/<runner-pid>/cmdline.
+//
+// Returns the redacted task body, the credentials file path (empty
+// when no credentials supplied), and a provider-list summary for
+// audit logging. The summary NEVER includes key values.
+func extractCredentialsFromTaskBody(body []byte, workDir string) ([]byte, string, string, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		// Body isn't a JSON object — forward as-is (the bare-prompt
+		// convenience shape the runner accepts).
+		return body, "", "", nil
+	}
+	credsRaw, ok := envelope["credentials"]
+	if !ok || len(credsRaw) == 0 || string(credsRaw) == "null" {
+		return body, "", "", nil
+	}
+	// Validate the credentials shape before writing.
+	var creds []map[string]any
+	if err := json.Unmarshal(credsRaw, &creds); err != nil {
+		return nil, "", "", fmt.Errorf("decode credentials: %w", err)
+	}
+	if len(creds) == 0 {
+		// Empty list — strip the field, forward without creds.
+		delete(envelope, "credentials")
+		out, _ := json.Marshal(envelope)
+		return out, "", "", nil
+	}
+	// Build the summary (provider names only).
+	providers := make([]string, 0, len(creds))
+	for _, c := range creds {
+		if p, ok := c["provider"].(string); ok {
+			providers = append(providers, p)
+		}
+	}
+	credsFile := filepath.Join(workDir, "credentials.json")
+	if err := os.WriteFile(credsFile, credsRaw, 0o600); err != nil {
+		return nil, "", "", fmt.Errorf("write credentials file: %w", err)
+	}
+	// Strip credentials from the body before forwarding.
+	delete(envelope, "credentials")
+	redacted, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("re-marshal task body: %w", err)
+	}
+	summary := "providers=[" + strings.Join(providers, ",") + "]"
+	return redacted, credsFile, summary, nil
 }
 
 func writeJSONError(w http.ResponseWriter, code int, msg string) {
