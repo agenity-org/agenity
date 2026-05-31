@@ -24,6 +24,20 @@ type JSONRPCRequest struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+
+	// AuthSubject is the validated bearer subject extracted from the
+	// inbound HTTP request's Authorization header. Set by
+	// Router.ServeHTTP via SubjectFromContext(req.Context()) — i.e.
+	// populated only when AuthMiddleware authenticated the request.
+	// Empty for unauthenticated callers OR for direct (non-HTTP)
+	// router invocations. Method bodies that auth-gate themselves
+	// (#483 Wave A4's agent/getAuthenticatedExtendedCard) read this
+	// field; bodies that don't auth-gate ignore it.
+	//
+	// json:"-" so the field is never marshaled into a JSON-RPC
+	// envelope on the wire — it's purely a transport-attached
+	// annotation.
+	AuthSubject string `json:"-"`
 }
 
 type JSONRPCResponse struct {
@@ -171,6 +185,11 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		writeError(w, rpcReq.ID, ErrCodeInvalidRequest, "jsonrpc must be \"2.0\"")
 		return
 	}
+	// #483 Wave A4 — attach the authenticated subject (if any) for
+	// method bodies that auth-gate themselves. Empty when no
+	// AuthMiddleware ran on this request (dev mode / TokenValidator
+	// nil at registration).
+	rpcReq.AuthSubject = SubjectFromContext(req.Context())
 	// #480 Wave A1 + #481 Wave A2 — inline POST→SSE binding for
 	// streaming methods. When the StreamingHandler is wired AND the
 	// client advertised text/event-stream, branch into the SSE

@@ -408,13 +408,11 @@ type getAgentCardResult struct {
 	Card AgentCard `json:"card"`
 }
 
-func (m *MethodBodies) handleGetAuthenticatedExtendedCard(req JSONRPCRequest) JSONRPCResponse {
-	if m.AgentCardFn == nil {
-		return errorResp(req.ID, ErrCodeInternalError, "AgentCard provider not wired")
-	}
-	card := m.AgentCardFn()
-	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: getAgentCardResult{Card: card}}
-}
+// handleGetAuthenticatedExtendedCard moved to extended_card.go for
+// #483 Wave A4. The body now performs the full auth-gate + grant
+// lookup + extension construction. getAgentCardResult remains
+// referenced by the public AgentCard path tests.
+var _ = getAgentCardResult{}
 
 // ─── decodeTask ──────────────────────────────────────────────────
 // Translates a persistence.Task row into the A2A wire Task. The
