@@ -27,13 +27,16 @@ ENV CHEPHERD_HUB_LISTEN=":8443" \
     CHEPHERD_HUB_STUN_LISTEN=":3478" \
     CHEPHERD_HUB_TURN_LISTEN=":3478"
 
-# F1 ports:
+# Ports (F1 declared, F3/F5/F6 backing real handlers):
 #   8443/tcp  — HTTPS (operator-facing; production typically front-
 #               ended by a TLS-terminating proxy or run with
-#               --tls-cert + --tls-key)
-#   3478/udp  — STUN  (F3 will fill behind the stub)
-#   3478/udp  — TURN  (F6 will fill — coexists with STUN per RFC 8656)
-#   3478/tcp  — TURN-over-TCP fallback (F6)
+#               --tls-cert + --tls-key). Hosts the F5 signaling
+#               relay + F6 TURN-creds-mint endpoint at /v1/turn/credentials.
+#   3478/udp  — STUN  (F3 — chepherd-worker shipped)
+#   3478/udp  — TURN  (F6 #496 — pion/turn/v5 server, coexists with
+#               STUN per RFC 8656)
+#   3478/tcp  — TURN-over-TCP fallback (F6 follow-up via
+#               --turn-tcp-listen)
 EXPOSE 8443/tcp 3478/udp 3478/tcp
 
 COPY --from=builder /chepherd-hub /chepherd-hub
@@ -50,5 +53,5 @@ ENTRYPOINT ["/chepherd-hub"]
 # nomad, docker) supply their own HTTP-GET probe — this is purely
 # informational metadata.
 LABEL org.opencontainers.image.title="chepherd-hub" \
-      org.opencontainers.image.description="Public-internet chepherd-org services scaffold (F1)" \
+      org.opencontainers.image.description="Public-internet chepherd-org services: F1 scaffold + F5 signaling + F6 TURN" \
       org.opencontainers.image.source="https://github.com/chepherd/chepherd"

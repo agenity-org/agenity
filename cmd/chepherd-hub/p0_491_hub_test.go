@@ -59,7 +59,6 @@ func TestWaveF1_Healthz_ReportsBinaryAndVersion(t *testing.T) {
 	expected := map[string]string{
 		"cards": "F5",
 		"stun":  "F3",
-		"turn":  "F6",
 		"relay": "F7+F8",
 	}
 	for k, want := range expected {
@@ -67,10 +66,13 @@ func TestWaveF1_Healthz_ReportsBinaryAndVersion(t *testing.T) {
 			t.Errorf("stubs[%q] = %v, want %s", k, stubs[k], want)
 		}
 	}
-	// #495 Wave F5 — signaling is no longer a stub.
+	// F5 #495 + F6 #496 — signaling and turn are no longer stubs.
 	impl, _ := body["implemented"].(map[string]any)
 	if impl == nil || impl["signaling"] != "F5 #495" {
 		t.Errorf("body.implemented.signaling = %v, want F5 #495", impl)
+	}
+	if impl["turn"] != "F6 #496" {
+		t.Errorf("body.implemented.turn = %v, want F6 #496", impl["turn"])
 	}
 }
 
