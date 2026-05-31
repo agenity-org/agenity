@@ -57,16 +57,20 @@ func TestWaveF1_Healthz_ReportsBinaryAndVersion(t *testing.T) {
 		t.Fatalf("body.stubs missing: %v", body)
 	}
 	expected := map[string]string{
-		"cards":     "F5",
-		"signaling": "F5",
-		"stun":      "F3",
-		"turn":      "F6",
-		"relay":     "F7+F8",
+		"cards": "F5",
+		"stun":  "F3",
+		"turn":  "F6",
+		"relay": "F7+F8",
 	}
 	for k, want := range expected {
 		if stubs[k] != want {
 			t.Errorf("stubs[%q] = %v, want %s", k, stubs[k], want)
 		}
+	}
+	// #495 Wave F5 — signaling is no longer a stub.
+	impl, _ := body["implemented"].(map[string]any)
+	if impl == nil || impl["signaling"] != "F5 #495" {
+		t.Errorf("body.implemented.signaling = %v, want F5 #495", impl)
 	}
 }
 
@@ -92,28 +96,9 @@ func TestWaveF1_Cards_Returns501WithF5TODORef(t *testing.T) {
 	}
 }
 
-func TestWaveF1_SignalingRoutes_Each_Returns501WithF5TODORef(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(newServer(&config{}).mux())
-	defer srv.Close()
-	for _, sub := range []string{"offer", "answer", "ice"} {
-		path := "/v1/signaling/" + sub
-		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader(`{}`))
-		if err != nil {
-			t.Errorf("POST %s: %v", path, err)
-			continue
-		}
-		if resp.StatusCode != http.StatusNotImplemented {
-			t.Errorf("%s status = %d, want 501", path, resp.StatusCode)
-		}
-		var body map[string]any
-		_ = json.NewDecoder(resp.Body).Decode(&body)
-		resp.Body.Close()
-		if body["todo_ref"] != "F5 #495" {
-			t.Errorf("%s todo_ref = %v, want F5 #495", path, body["todo_ref"])
-		}
-	}
-}
+// #495 Wave F5 — signaling routes were 501 stubs at F1; F5 wires
+// real handlers (see TestWaveF5_*). The F1-era 501 assertion is
+// retired.
 
 func TestWaveF1_Relay_Returns501WithF7F8TODORef(t *testing.T) {
 	t.Parallel()
@@ -216,9 +201,14 @@ func TestV094Walk_F1_BinaryRespondsOnEveryRoute(t *testing.T) {
 	}{
 		{"GET", "/healthz", 200, ""},
 		{"GET", "/v1/cards", 501, "F5 #495"},
-		{"POST", "/v1/signaling/offer", 501, "F5 #495"},
-		{"POST", "/v1/signaling/answer", 501, "F5 #495"},
-		{"POST", "/v1/signaling/ice", 501, "F5 #495"},
+		// /v1/signaling/* routes are F5-live; the live walk's hub
+		// runs without mTLS + without an X-Chepherd-Org header, so
+		// the endpoints respond 401. That's enough to prove the
+		// stub was replaced by a real auth-checking handler.
+		{"POST", "/v1/signaling/offer", 401, ""},
+		{"POST", "/v1/signaling/answer", 401, ""},
+		{"POST", "/v1/signaling/ice", 401, ""},
+		{"GET", "/v1/signaling/pending", 401, ""},
 		{"GET", "/v1/relay/anything", 501, "F7 #497 + F8 #498"},
 	}
 	for _, c := range cases {

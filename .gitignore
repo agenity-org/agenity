@@ -1,6 +1,6 @@
-# Build outputs
-chepherd
-chepherd-hub
+# Build outputs (root-only so cmd/chepherd-hub/* source isn't ignored)
+/chepherd
+/chepherd-hub
 chepherd-v0?
 *.tar
 
