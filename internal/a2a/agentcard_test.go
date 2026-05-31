@@ -57,7 +57,7 @@ func TestServeAgentCard_RoundTrip(t *testing.T) {
 	if got.Name != card.Name || got.Version != card.Version {
 		t.Errorf("round-trip lost data: %+v", got)
 	}
-	if got.XChepherdP2P == nil || got.XChepherdP2P.Version != "0.9.2" {
+	if got.XChepherdP2P == nil || got.XChepherdP2P.Version != "0.9.4" {
 		t.Errorf("x-chepherd-p2p extension lost: %+v", got.XChepherdP2P)
 	}
 }
