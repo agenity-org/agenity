@@ -1,5 +1,6 @@
 # Build outputs
 chepherd
+chepherd-hub
 chepherd-v0?
 *.tar
 
