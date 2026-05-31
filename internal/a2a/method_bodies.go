@@ -47,6 +47,12 @@ type MethodBodies struct {
 	// can attach to; nil means streaming methods return -32004 (not
 	// supported on this runner — e.g. headless mode without SSE).
 	SubscribeFn func(taskID string) (streamID string, err error)
+	// PublishFn fans a state-transition event out through the broker
+	// to all SSE subscribers + registered push-notification webhooks
+	// (#482 Wave A3). nil disables out-of-band notification for the
+	// state changes triggered by handler-driven paths (e.g. cancel);
+	// the runtime's PTY-driven publishes are unaffected either way.
+	PublishFn func(taskID string, ev StreamEvent)
 }
 
 // Register registers all 10 method bodies on the given Router. The
@@ -190,6 +196,14 @@ func (m *MethodBodies) handleCancelTask(req JSONRPCRequest) JSONRPCResponse {
 	t, err := decodeTask(rec)
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "decode task after cancel: "+err.Error())
+	}
+	// #482 Wave A3 — fan the cancel state-transition out through the
+	// broker so SSE subscribers see it AND any registered push-
+	// notification webhooks fire. `done` semantics: cancel is a
+	// terminal state per A2A v1.0, so the broker reaps the channel
+	// after publishing.
+	if m.PublishFn != nil {
+		m.PublishFn(p.TaskID, StreamEvent{Type: "done", Task: t})
 	}
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: cancelTaskResult{Task: t}}
 }

@@ -48,6 +48,17 @@ type StreamBroker struct {
 	// event in this duration. Default 10 minutes when zero. Operator
 	// can override via SetIdleTimeout.
 	IdleTimeout time.Duration
+
+	// #482 Wave A3 — push-notification webhook delivery. When set,
+	// every Publish call ALSO POSTs the event to all registered
+	// webhook configs for the task, asynchronously. nil disables
+	// webhook delivery; SSE fan-out is unaffected either way.
+	PushConfigStore PushConfigLister
+	// HTTPClient overrides the default webhook http.Client used by
+	// firePushNotifications. Mainly for tests that need a stub
+	// transport. nil = a fresh client with the default 5s timeout
+	// per request.
+	HTTPClient *http.Client
 }
 
 type subscription struct {
@@ -103,6 +114,11 @@ func (b *StreamBroker) SubscribeFn() func(taskID string) (string, error) {
 // publish a `done` event when the task hits a terminal state so the
 // subscribers can disconnect cleanly + the broker can GC.
 func (b *StreamBroker) Publish(taskID string, ev StreamEvent) int {
+	// #482 Wave A3 — webhook fan-out runs UNCONDITIONALLY (even when
+	// no SSE subscribers exist). Push-notification clients are
+	// precisely the use-case where no live subscriber holds a
+	// connection — e.g. mobile / async workers / pipelines.
+	b.firePushNotifications(ev)
 	b.mu.Lock()
 	subs, ok := b.byTaskID[taskID]
 	if !ok {
