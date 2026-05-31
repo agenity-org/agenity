@@ -40,6 +40,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/chepherd/chepherd/internal/runtime/knock"
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
@@ -403,9 +404,16 @@ func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Ta
 		// upcoming Write lands on the live channel (not just the
 		// pre-subscribe ring snapshot). #387 P0.
 		<-mark.Subscribed
-		// Compose msg.Parts → PTY input. Append \n so claude-TUI-style
-		// agents trigger their submit.
-		input := extractMessageText(msg) + "\n"
+		// #472 Wave K1 — write the knock marker, NOT the user text.
+		// Per V0.9.2-ARCH §10 Pattern 1 step 12: agent's pattern
+		// detector sees the marker + calls chepherd.get_task on its
+		// own to fetch the full message body. NO submit sequence —
+		// just the marker + a single trailing LF.
+		from := auth.SubjectFromRunnerContext(ctx)
+		if from == "" {
+			from = "anonymous"
+		}
+		input := knock.FormatKnock(task.ID, from)
 		if _, err := d.ptyW.Write([]byte(input)); err != nil {
 			task.Status.State = a2a.TaskStateFailed
 			return task, fmt.Errorf("runnerDeliverer: PTY write: %w", err)
