@@ -142,7 +142,7 @@ func TestP0_379_TaskCompleter_FlipsStateAndAppendsHistory(t *testing.T) {
 	}
 
 	// Run the completer — this is what the pump fires after silence.
-	completer := d.taskCompleter()
+	completer := d.taskCompleter("")
 	if completer == nil {
 		t.Fatal("taskCompleter returned nil with taskStore set")
 	}
@@ -203,7 +203,7 @@ func TestP0_379_TaskCompleter_IdempotentOnCompletedRow(t *testing.T) {
 	working := d.workingTask(msg)
 	d.persistTask(context.Background(), msg, working, "message/send")
 
-	completer := d.taskCompleter()
+	completer := d.taskCompleter("")
 	completer(working.ID, "first response")
 	completer(working.ID, "second response — should be ignored")
 

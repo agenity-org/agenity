@@ -12,6 +12,7 @@ import (
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
+	"github.com/chepherd/chepherd/internal/runtime/agentpatterns"
 )
 
 // A2ADeliverer implements a2a.Deliverer by routing A2A SendMessage
@@ -53,7 +54,31 @@ type A2ADeliverer struct {
 	broker    brokerPublisher            // #225 row A3 — set via SetBroker; nil disables publishing
 	taskStore persistence.TaskRepository // #225 row A4 — set via SetTaskStore; nil disables persistence
 	runnerSID string                     // #225 row A4 — chepherd-instance ID stamped on persisted Task rows
+
+	// #484 Wave A5 — pre-execution RBAC grant check. When non-nil,
+	// every Deliver call invokes this before persisting/working;
+	// allowed=false → Task is returned in TaskStateRejected with the
+	// supplied reason + persisted + published (so SSE/webhook
+	// consumers see the denial visibly). nil = no check (back-compat
+	// for tests + intra-org deployments where every caller is
+	// already trusted).
+	grantCheck GrantCheckFn
 }
+
+// GrantCheckFn is the pre-execution RBAC seam injected via
+// SetGrantCheck. Inputs: caller SID (typically the calling agent's
+// session ID, derived from JWT sub claim or from the local-auth
+// subject), target SID (the agent being called). Returns
+// allowed=false + a human-readable reason to trigger a REJECTED
+// Task. allowed=true skips REJECTED and lets Deliver proceed as
+// normal.
+type GrantCheckFn func(callerSID, targetSID string) (allowed bool, reason string)
+
+// SetGrantCheck wires the pre-execution RBAC check (#484 Wave A5).
+// nil clears any previously-set check. Same seam shape as
+// runtimehttp.Server.GrantCheck — production cmd/run.go can wire
+// both fields to the same PersistenceGrantCheck.
+func (d *A2ADeliverer) SetGrantCheck(fn GrantCheckFn) { d.grantCheck = fn }
 
 // NewA2ADeliverer wraps a Runtime as an a2a.Deliverer.
 func NewA2ADeliverer(rt *Runtime) *A2ADeliverer {
@@ -76,6 +101,26 @@ func (d *A2ADeliverer) SetTaskStore(store persistence.TaskRepository, runnerSID 
 func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task, error) {
 	if msg.ContextID == "" {
 		return nil, errors.New("A2ADeliverer: msg.ContextID required (chepherd session ID)")
+	}
+	// #484 Wave A5 — pre-execution RBAC check. Fires BEFORE session
+	// lookup so we don't leak "session exists" info to a denied
+	// caller. Caller SID comes from msg.Metadata when an A2A peer
+	// included it; absent metadata is the intra-runner case where
+	// no cross-agent grant is needed (and so a nil grantCheck or a
+	// trivially-allowing one matches the right behavior).
+	if d.grantCheck != nil {
+		callerSID := callerSIDFromMessage(msg)
+		if allowed, reason := d.grantCheck(callerSID, msg.ContextID); !allowed {
+			rejected := d.rejectedTask(msg, reason)
+			d.persistTask(ctx, msg, rejected, "message/send")
+			if d.broker != nil {
+				d.broker.Publish(rejected.ID, a2a.StreamEvent{
+					Type: "done",
+					Task: rejected,
+				})
+			}
+			return rejected, nil
+		}
 	}
 	// Accept ContextID as EITHER the session ID OR the @-name (#217).
 	// Runtime.GetByContextID tries r.info[ContextID] first (full ID),
@@ -123,8 +168,9 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	var mark *pumpSendMark
 	if d.broker != nil || d.taskStore != nil {
 		mark = newPumpSendMark()
-		completer := d.taskCompleter()
-		go pumpPTYToBroker(d.broker, sess, task, completer, mark)
+		completer := d.taskCompleter(info.AgentSlug)
+		decideState := makeDecideStateFn(info.AgentSlug)
+		go pumpPTYToBrokerWithState(d.broker, sess, task, completer, mark, decideState)
 		// Brief bound so a slow Subscribe doesn't wedge Deliver. In
 		// practice subscribe is microseconds; 1s is paranoid.
 		select {
@@ -166,10 +212,39 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 // Save()s. nil when taskStore is unset (tests).
 //
 // #379 P0 receive-loop fix.
-func (d *A2ADeliverer) taskCompleter() func(taskID, response string) {
+// callerSIDFromMessage extracts the caller's SID from the A2A
+// Message envelope. v0.9.4 keeps the chepherd Message struct
+// metadata-free; cross-org callers will surface their identity via
+// the §15.2 JWT sub claim threaded through the JSON-RPC HTTP layer
+// in a follow-up Wave. Today this returns the empty string so the
+// grantCheck closure sees a consistent "intra-runner" signal.
+func callerSIDFromMessage(_ a2a.Message) string { return "" }
+
+// makeDecideStateFn returns the per-slug decideState closure
+// pumpPTYToBrokerWithState uses to translate response bytes into the
+// post-silence Task state. Same agentpatterns lookup as the
+// completer (symmetric) so the SSE event's state field matches the
+// persisted record. AUTH_REQUIRED wins over INPUT_REQUIRED when
+// both fire — the user has to satisfy auth before clarifying
+// questions become answerable.
+func makeDecideStateFn(agentSlug string) decideStateFn {
+	flavor := agentpatterns.ByAgentSlug(agentSlug)
+	return func(buf []byte) a2a.TaskState {
+		if flavor.IsAuthRequired(buf).Match {
+			return a2a.TaskStateAuthRequired
+		}
+		if flavor.IsInputRequired(buf).Match {
+			return a2a.TaskStateInputRequired
+		}
+		return a2a.TaskStateCompleted
+	}
+}
+
+func (d *A2ADeliverer) taskCompleter(agentSlug string) func(taskID, response string) {
 	if d.taskStore == nil {
 		return nil
 	}
+	flavor := agentpatterns.ByAgentSlug(agentSlug)
 	return func(taskID, response string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -178,9 +253,7 @@ func (d *A2ADeliverer) taskCompleter() func(taskID, response string) {
 			return // not persisted (shouldn't happen — Deliver persists first)
 		}
 		// Terminal states already final — don't re-write.
-		if rec.State == string(a2a.TaskStateCompleted) ||
-			rec.State == string(a2a.TaskStateFailed) ||
-			rec.State == string(a2a.TaskStateCanceled) {
+		if a2a.IsTerminal(a2a.TaskState(rec.State)) {
 			return
 		}
 		agentMsg := a2a.Message{
@@ -202,8 +275,24 @@ func (d *A2ADeliverer) taskCompleter() func(taskID, response string) {
 		out.History = append(out.History, agentMsg)
 		blob, _ := json.Marshal(out)
 		rec.OutputBlob = blob
-		rec.State = string(a2a.TaskStateCompleted)
-		rec.UpdatedAt = time.Now().UTC()
+		// #484 Wave A5 — decide the post-silence state via the
+		// per-flavor pattern-match library. Order: AUTH_REQUIRED >
+		// INPUT_REQUIRED > COMPLETED. AUTH wins over INPUT when both
+		// fire because an OAuth challenge is the stronger signal —
+		// the user needs to satisfy the auth before clarifying
+		// questions become answerable.
+		nextState := a2a.TaskStateCompleted
+		responseBytes := []byte(response)
+		if flavor.IsAuthRequired(responseBytes).Match {
+			nextState = a2a.TaskStateAuthRequired
+		} else if flavor.IsInputRequired(responseBytes).Match {
+			nextState = a2a.TaskStateInputRequired
+		}
+		if err := a2a.TransitionTask(rec, nextState, "silence-finalize via "+agentSlug); err != nil {
+			// Illegal transition — log via UpdatedAt+state-unchanged.
+			// Falls back to whatever state was already persisted.
+			return
+		}
 		_ = d.taskStore.Save(ctx, rec)
 	}
 }
@@ -279,6 +368,30 @@ func (d *A2ADeliverer) failedTask(msg a2a.Message, reason string) *a2a.Task {
 		Kind:      "task",
 		Status: a2a.TaskStatus{
 			State: a2a.TaskStateFailed,
+			Message: &a2a.Message{
+				Role: "agent",
+				Kind: "message",
+				Parts: []a2a.Part{
+					{Kind: "text", Text: reason},
+				},
+			},
+		},
+	}
+}
+
+// rejectedTask constructs a Task in TaskStateRejected — the
+// pre-execution RBAC-denial state per #484 Wave A5. Distinct from
+// failedTask in that REJECTED is a denial BEFORE any agent
+// execution started; FAILED is for runtime errors mid-execution.
+// SSE / webhook consumers use the difference to surface
+// "rejected by policy" vs "agent crashed" appropriately.
+func (d *A2ADeliverer) rejectedTask(msg a2a.Message, reason string) *a2a.Task {
+	return &a2a.Task{
+		ID:        taskIDOrGenerate(msg.TaskID),
+		ContextID: msg.ContextID,
+		Kind:      "task",
+		Status: a2a.TaskStatus{
+			State: a2a.TaskStateRejected,
 			Message: &a2a.Message{
 				Role: "agent",
 				Kind: "message",

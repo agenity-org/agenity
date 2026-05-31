@@ -150,7 +150,18 @@ func (d *A2ADeliverer) SetBroker(b brokerPublisher) {
 // caller (Deliver). nil ⇒ no marking; pump uses full responseBuf for
 // silence-gate + completer (matches pre-#387 behavior for back-compat
 // with #379/#385 tests).
+// decideStateFn returns the state to transition into when silence-
+// finalize fires. Inputs: the response bytes captured between
+// MarkSendNow and silence. nil = legacy behavior (always
+// TaskStateCompleted). Wave A5 (#484) wires this from the deliverer
+// to an agentpatterns-backed decision.
+type decideStateFn func(buf []byte) a2a.TaskState
+
 func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Task, completer func(taskID, response string), mark *pumpSendMark) {
+	pumpPTYToBrokerWithState(broker, sess, task, completer, mark, nil)
+}
+
+func pumpPTYToBrokerWithState(broker brokerPublisher, sess subscriberSource, task *a2a.Task, completer func(taskID, response string), mark *pumpSendMark, decideState decideStateFn) {
 	if sess == nil || task == nil {
 		return
 	}
@@ -205,7 +216,18 @@ func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Ta
 			completer(task.ID, string(slice))
 		}
 		if broker != nil {
-			broker.Publish(task.ID, doneEvent(task))
+			// #484 Wave A5 — pick the final state via the injected
+			// decideState fn (agentpatterns-backed in production).
+			// Terminal states (COMPLETED / FAILED / CANCELED /
+			// REJECTED) emit Type=done so the broker reaps the
+			// subscription. Non-terminal states (INPUT_REQUIRED /
+			// AUTH_REQUIRED) emit Type=status so consumers stay
+			// subscribed for the next transition back to WORKING.
+			state := a2a.TaskStateCompleted
+			if decideState != nil {
+				state = decideState(slice)
+			}
+			broker.Publish(task.ID, finalizeEvent(task, state))
 		}
 	}
 
@@ -298,14 +320,28 @@ func pumpPTYToBroker(broker brokerPublisher, sess subscriberSource, task *a2a.Ta
 }
 
 // doneEvent builds the terminal stream event. Uses state=completed.
+// Retained for back-compat; new sites use finalizeEvent.
 func doneEvent(task *a2a.Task) a2a.StreamEvent {
+	return finalizeEvent(task, a2a.TaskStateCompleted)
+}
+
+// finalizeEvent builds the silence-finalize stream event for the
+// chosen state (#484 Wave A5). Terminal states use Type=done so
+// the broker reaps the subscription; non-terminal states use
+// Type=status so consumers stay subscribed for the next
+// transition back to WORKING.
+func finalizeEvent(task *a2a.Task, state a2a.TaskState) a2a.StreamEvent {
+	typ := "status"
+	if a2a.IsTerminal(state) {
+		typ = "done"
+	}
 	return a2a.StreamEvent{
-		Type: "done",
+		Type: typ,
 		Task: &a2a.Task{
 			ID:        task.ID,
 			ContextID: task.ContextID,
 			Kind:      "task",
-			Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
+			Status:    a2a.TaskStatus{State: state},
 		},
 	}
 }
