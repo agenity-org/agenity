@@ -70,7 +70,7 @@ func TestT5_PeerStatusSurfacesObservableActivity(t *testing.T) {
 	const agent = "t5-ticker"
 	const team = "t5-team"
 
-	// Sovereign-shell driven by an argv that emits a predictable
+	// Stub-shell driven by an argv that emits a predictable
 	// stream of "TICK <epoch>" every second. Lets T5 assert against
 	// a known marker in RingExcerptTail without needing real claude.
 	body, _ := json.Marshal(map[string]any{
