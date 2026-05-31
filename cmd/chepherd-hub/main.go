@@ -111,6 +111,13 @@ type config struct {
 	// listen address (suitable for local-dev tests).
 	turnPublicHost string
 
+	// federationTargets is the comma-separated <orgID>=<daemonURL>
+	// pairs registry the hub forwards /v1/federation/auth requests
+	// to (#498 Wave F8). Empty disables federation (/v1/federation/auth
+	// returns 502 for any target). Production: a directory feeds
+	// this; v0.9.4 uses static flag config.
+	federationTargets string
+
 	// startupTimeout caps how long the binary waits for listeners
 	// to become ready before exiting with an error. Default 5s.
 	startupTimeout time.Duration
@@ -199,6 +206,9 @@ func parseFlags(args []string) *config {
 		"#496 Wave F6 — optional TURN-over-TCP listener for UDP-blocked networks (e.g. :443)")
 	fs.StringVar(&cfg.turnPublicHost, "turn-public-host", envOr("CHEPHERD_HUB_TURN_PUBLIC_HOST", ""),
 		"#496 Wave F6 — host:port runners receive in the TURN URI list (default: derive from listen addr)")
+	fs.StringVar(&cfg.federationTargets, "federation-targets",
+		envOr("CHEPHERD_HUB_FEDERATION_TARGETS", ""),
+		"#498 Wave F8 — comma-separated <orgID>=<daemonURL> pairs the hub relays /v1/federation/auth to (empty disables)")
 	if err := fs.Parse(args); err != nil {
 		return cfg
 	}
@@ -213,21 +223,22 @@ func envOr(key, fallback string) string {
 }
 
 // server holds runtime state for the hub binary. F1 kept it
-// minimal; F5 #495 added the signaling queue; F6 #496 added the
-// TURN relay handle; F7 #497 added the reverse-proxy tunnel
-// manager. F8 will add JWT federation state here.
+// minimal; F5 #495 added signaling queue; F6 #496 TURN relay;
+// F7 #497 tunnels; F8 #498 federation registry.
 type server struct {
-	cfg       *config
-	signaling *signalingQueue
-	turn      *turnRelay     // nil when TURN disabled (no --turn-secret)
-	tunnels   *tunnelManager // #497 Wave F7 — reverse-proxy tunnels
+	cfg        *config
+	signaling  *signalingQueue
+	turn       *turnRelay                    // nil when TURN disabled (no --turn-secret)
+	tunnels    *tunnelManager                // #497 Wave F7 — reverse-proxy tunnels
+	federation *federationRegistryWithClient // #498 Wave F8 — cross-org JWT relay
 }
 
 func newServer(cfg *config) *server {
 	return &server{
-		cfg:       cfg,
-		signaling: newSignalingQueue(),
-		tunnels:   newTunnelManager(),
+		cfg:        cfg,
+		signaling:  newSignalingQueue(),
+		tunnels:    newTunnelManager(),
+		federation: loadFederationTargetsFromConfig(cfg),
 	}
 }
 
@@ -247,6 +258,8 @@ func (s *server) mux() http.Handler {
 	// /v1/relay/tunnel  : runner-initiated WS upgrade
 	// /v1/relay/{org}/* : inbound HTTP forwarded over tunnel
 	mux.HandleFunc("/v1/relay/", s.handleRelayInbound)
+	// #498 Wave F8 — cross-org JWT federation relay.
+	mux.HandleFunc("/v1/federation/auth", s.handleFederationAuth)
 	return mux
 }
 
@@ -263,12 +276,14 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 			"stun":  "F3",
 		},
 		"implemented": map[string]string{
-			"signaling": "F5 #495",
-			"turn":      "F6 #496",
-			"relay":     "F7 #497",
+			"signaling":  "F5 #495",
+			"turn":       "F6 #496",
+			"relay":      "F7 #497",
+			"federation": "F8 #498",
 		},
-		"turn":    s.turnStatus(),
-		"tunnels": s.tunnelsStatus(),
+		"turn":       s.turnStatus(),
+		"tunnels":    s.tunnelsStatus(),
+		"federation": s.federationStatus(),
 	})
 }
 
