@@ -57,7 +57,7 @@ var (
 	runFlagMCPListen             string
 	runFlagFederationRegistryURL    string // #225 row C1 — hosted peer registry
 	runFlagFederationPublicURL      string // #225 row C1 — this chepherd's public URL for announcements
-	runFlagFederationOutboundBearer string // #225 §DoD walk — shared bearer for FederatedDeliverer outbound POST
+	runFlagFederationOutboundBearer string // #225 §DoD walk — retired in #471 Wave D5; flag retained as a no-op for back-compat; FederatedDeliverer moved to runner side in Wave R
 	runFlagFederationMTLS           bool   // #487 Wave T3 — enforce mTLS on cross-org federation traffic
 	runFlagFederationOrgID          string // #487 Wave T3 — this daemon's org identifier (CN on its cert)
 	runFlagFederationListen         string // #527 Wave T3.1 — federation-facing mTLS HTTP listener address (separate from dashboard listener)
@@ -241,13 +241,15 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if mcpListen == "" {
 		mcpListen = mcpserver.DefaultListenAddr
 	}
-	// v0.9.2 (#208): build the A2A PTY Deliverer once + thread to the
-	// legacy MCP server (chepherd.send_to_session shim translates onto
-	// A2A SendMessage). The same Deliverer instance is also consumed
-	// by the runner-side A2A HTTPS endpoint via a2a.Router.WireDeliverer
-	// when that endpoint is stood up.
-	a2aDeliverer := runtime.NewA2ADeliverer(rt)
-	mcpSrv := mcpserver.NewWithDeliverer(rt, a2aDeliverer)
+	// #471 Wave D5 — daemon-side A2ADeliverer retired. Post-R5
+	// (#466), the chepherd-runner owns its own A2A endpoint +
+	// PTY-driving Deliverer; the daemon no longer needs a Deliverer
+	// instance. The MCP server's chepherd.send_to_session shim is
+	// constructed without a Deliverer → returns -32000 "deliverer
+	// not wired" (deprecation behavior per its v0.9.2 comment).
+	// Operator-facing migration: use A2A SendMessage directly via
+	// the runner's /a2a/<sid>/jsonrpc endpoint (R2 #463).
+	mcpSrv := mcpserver.New(rt)
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
@@ -365,29 +367,14 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// registry + auth (D2 JWT mint) + RBAC (D3 grants) + JWKS
 		// (T2) + audit.
 		//
-		// What was here (waves A1-A4 / A6, C1-C2):
-		//   - a2a.NewRouter + WireDeliverer (with FederatedDeliverer)
-		//   - a2a.MethodBodies.Register for the 10 non-SendMessage
-		//     methods (tasks/get, tasks/list, tasks/cancel,
-		//     tasks/resubscribe, message/stream, pushNotif CRUD,
-		//     agent/getAuthenticatedExtendedCard)
-		//   - streamBroker.PushConfigStore + a2aDeliverer.SetBroker +
-		//     SetTaskStore + StreamingHandler
-		//   - rs.A2ACard / A2ARouter / StreamBroker wired
-		//
-		// All moved into cmd/runner via Waves R1-R4 (#504 #463 #464 #465).
-		// internal/runtimehttp/server.go's Handler() now serves /jsonrpc
-		// with the 410-Gone deprecation handler (see daemon_a2a_cutover_
-		// 410.go) so existing clients see a structured error instead of
-		// silent route-loss.
-		//
-		// internal/a2a + internal/runtime stay compiled (used by
-		// cmd/runner via Wave R4 exports). FederatedDeliverer +
-		// A2ADeliverer + pumpPTYToBroker live there for the runner; they
-		// just no longer have a daemon-side caller.
-		_ = a2aDeliverer // daemon-side instance unused after R5; kept for
-		// the MCP-shim path (chepherd.send_to_session) which a future
-		// Wave will route through the runner's A2A endpoint.
+		// Historical: pre-Wave-R the daemon mounted A2A method bodies,
+		// FederatedDeliverer, StreamBroker, PushConfigStore wiring,
+		// MakeStreamingHandler, rs.A2ACard/A2ARouter/StreamBroker
+		// here. All moved into chepherd-runner via R1-R4 (#504 #463
+		// #464 #465) and the daemon-side /jsonrpc was retired via
+		// R5 410-Gone (#466). D5 (#471) removed the residual
+		// a2aDeliverer holder line that R5 left behind for the MCP
+		// shim — the shim now degrades gracefully via mcpserver.New.
 		// #505 Wave T2 — daemon-owned ES256 KeyStore with rotation +
 		// overlap window. Supersedes the single-key LoadOrCreateES256
 		// path. The store migrates the legacy "a2a-es256-priv" row on
