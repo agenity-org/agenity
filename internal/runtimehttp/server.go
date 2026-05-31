@@ -115,6 +115,15 @@ type Server struct {
 	// the /api/v1/peers endpoint to enumerate cached peers).
 	Federation     *federation.Federation
 	AgentCardStore persistence.AgentCardRepository
+
+	// FederationMTLS holds the daemon's federation leaf cert + pinned-
+	// CA pool when --federation-mtls is enabled (#527 Wave T3.1).
+	// cmd/run.go uses this to build the optional federation-facing
+	// mTLS HTTP listener (`--federation-listen` flag) on a separate
+	// port so cross-org peers terminate mTLS at the dedicated surface
+	// while the dashboard listener stays plain TLS. nil = mTLS
+	// disabled (dev/test default).
+	FederationMTLS *federation.MTLSConfig
 	// TaskStore is wired when persistence is enabled; surfaces the
 	// A2A Task records for the dashboard's A2A Inbox tab (#225 row G2).
 	TaskStore persistence.TaskRepository
