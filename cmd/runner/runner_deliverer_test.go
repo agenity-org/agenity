@@ -44,7 +44,7 @@ func TestR4_RunnerDeliverer_S1_PersistOnlyFallback(t *testing.T) {
 	store := newTestStore(t)
 	d := newRunnerDeliverer(store, "test-sid")
 	msg := a2a.Message{
-		ContextID: "ctx-1",
+		ContextID: "test-sid",
 		Parts:     []a2a.Part{{Kind: "text", Text: "hello"}},
 	}
 	task, err := d.Deliver(context.Background(), msg)
@@ -98,7 +98,7 @@ func TestR4_RunnerDeliverer_S2_PTYWritesPassThrough(t *testing.T) {
 
 	d := newRunnerDeliverer(store, "test-sid").withPTY(src, pty, broker)
 	msg := a2a.Message{
-		ContextID: "ctx-1",
+		ContextID: "test-sid",
 		Parts: []a2a.Part{
 			{Kind: "text", Text: "Hello, "},
 			{Kind: "text", Text: "world!"},
@@ -144,7 +144,7 @@ func TestR4_RunnerDeliverer_S3_CompleterFlipsState(t *testing.T) {
 	d := newRunnerDeliverer(store, "test-sid")
 
 	// First persist a working task as the precondition.
-	msg := a2a.Message{ContextID: "ctx-3", Parts: []a2a.Part{{Kind: "text", Text: "go"}}}
+	msg := a2a.Message{ContextID: "test-sid", Parts: []a2a.Part{{Kind: "text", Text: "go"}}}
 	task, err := d.Deliver(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)

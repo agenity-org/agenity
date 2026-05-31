@@ -55,7 +55,7 @@ func TestK5_KnockBracketedResponse_EndToEnd(t *testing.T) {
 	// mechanism in isolation. K5 proves the K1 knock-write boundary
 	// + silence-finalize + completer path lines up.
 	msg := a2a.Message{
-		ContextID: "k5-recipient",
+		ContextID: "k5-runner",
 		Parts:     []a2a.Part{{Kind: "text", Text: "trigger from peer"}},
 	}
 	task, err := d.Deliver(context.Background(), msg)

@@ -449,7 +449,6 @@ func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Ta
 	if msg.ContextID != "" && msg.ContextID != d.runnerSID {
 		return nil, fmt.Errorf("runnerDeliverer: contextId %q does not match this runner's sid %q (each runner serves exactly one session per /a2a/<sid>)", msg.ContextID, d.runnerSID)
 	}
-
 	taskID := msg.TaskID
 	if taskID == "" {
 		id, err := uuid.NewV7()
