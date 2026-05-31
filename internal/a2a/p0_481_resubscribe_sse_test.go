@@ -174,26 +174,22 @@ func TestWaveA2_Resubscribe_UnknownTaskReturnsJSONError(t *testing.T) {
 	}
 }
 
-func TestWaveA2_Resubscribe_JSONAccept_FallsThroughToTwoCall(t *testing.T) {
+// TestWaveA2_Resubscribe_JSONAccept_StillReturnsSSE — #569 contract
+// for SubscribeToTask (formerly tasks/resubscribe). A2A v1.0 §9.4.6
+// mandates SSE response unconditionally for this method; the
+// pre-#569 Accept-header gate routing `Accept: application/json` to
+// the two-call JSON+streamId pattern was a spec violation. With
+// #569, when the StreamingHandler is wired, both Accept values get
+// SSE.
+func TestWaveA2_Resubscribe_JSONAccept_StillReturnsSSE(t *testing.T) {
 	t.Parallel()
 	srv, _, _, mb := newStreamingTestServer(t)
 	seedResubscribeTask(t, mb.Store, "task-resub-D", string(TaskStateWorking))
 
 	resp := postResubscribe(t, srv.URL, "task-resub-D", false) // Accept: application/json
 	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
-		t.Errorf("Content-Type = %q, want application/json", ct)
-	}
-	var rpc JSONRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpc); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if rpc.Error != nil {
-		t.Fatalf("error in two-call fallback: %+v", rpc.Error)
-	}
-	result, _ := rpc.Result.(map[string]any)
-	if result == nil || result["streamId"] == "" {
-		t.Errorf("two-call result missing streamId: %v", result)
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type = %q, want text/event-stream (#569 spec §9.4.6)", ct)
 	}
 }
 
