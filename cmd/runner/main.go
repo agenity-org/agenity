@@ -206,7 +206,7 @@ func run() error {
 	// depends on the sid).
 	var a2aSrv *a2aEndpoint
 	if cfg.a2aListen != "" && cfg.sid != "" {
-		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.a2aBaseURL, cfg.stateDir)
+		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.name, cfg.a2aBaseURL, cfg.daemonURL, cfg.stateDir)
 		if err != nil {
 			return fmt.Errorf("a2a endpoint: %w", err)
 		}

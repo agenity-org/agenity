@@ -63,7 +63,7 @@ type a2aEndpoint struct {
 // stateDir is where the runner's task-store SQLite file lives.
 //
 // Caller must Close() the returned endpoint at shutdown.
-func startA2AEndpoint(listenAddr, sid, baseURL, stateDir string) (*a2aEndpoint, error) {
+func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string) (*a2aEndpoint, error) {
 	if sid == "" {
 		return nil, fmt.Errorf("a2a endpoint: --sid is required (no scaffold mode for A2A — the URL path /a2a/<sid> depends on it)")
 	}
@@ -88,13 +88,23 @@ func startA2AEndpoint(listenAddr, sid, baseURL, stateDir string) (*a2aEndpoint, 
 	// The other 10 methods come from MethodBodies. AgentCardFn
 	// returns a minimal card today — R3 ships the canonical
 	// per-session card.
+	// #464 Wave R3 — daemon JWKS URL surfaced in the Agent Card's
+	// security scheme description so peers know where to fetch
+	// signing keys. Empty daemonURL leaves the JWKS reference
+	// relative (peers resolve against the daemon they discovered
+	// the card through).
+	daemonJWKSURL := ""
+	if daemonURL != "" {
+		daemonJWKSURL = joinBaseAndPath(daemonURL, a2a.JWKSPath)
+	}
+	card := buildRunnerAgentCard(sid, name, baseURL, daemonJWKSURL)
 	methodBodies := &a2a.MethodBodies{
 		Store: store,
 		AgentCardFn: func() a2a.AgentCard {
-			return minimalRunnerCard(sid, baseURL)
+			return card
 		},
 		RunnerSID:   sid,
-		SubscribeFn: nil, // streaming methods → -32004 until R3+ wires SSE
+		SubscribeFn: nil, // streaming methods → -32004 until A2/A3 wire SSE in MethodBodies (A1 wired stream inline in jsonrpc.go)
 	}
 	if err := methodBodies.Register(router); err != nil {
 		_ = store.Close()
@@ -107,6 +117,15 @@ func startA2AEndpoint(listenAddr, sid, baseURL, stateDir string) (*a2aEndpoint, 
 	// runner address.
 	mux := http.NewServeMux()
 	mux.Handle("/a2a/"+sid+"/jsonrpc", router)
+	// #464 Wave R3 — per-session Agent Card at the §12.1 well-known
+	// URI. Mount BOTH the canonical AgentCardPath (the spec-mandated
+	// hyphenated form) AND AgentCardAliasPath (the suffix-less
+	// shortcut peer agents commonly try first; #378 P1). The handler
+	// just marshals the prebuilt card so both paths serve identical
+	// bytes.
+	cardHandler := a2a.ServeAgentCard(&card)
+	mux.Handle("/a2a/"+sid+a2a.AgentCardPath, cardHandler)
+	mux.Handle("/a2a/"+sid+a2a.AgentCardAliasPath, cardHandler)
 	// Healthz so callers (operator curl, R5 cutover smoke tests) can
 	// confirm the endpoint is up without a JSON-RPC roundtrip.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -151,35 +170,98 @@ func (e *a2aEndpoint) Addr() string {
 	return e.listener.Addr().String()
 }
 
-// minimalRunnerCard is the placeholder Agent Card returned today by
-// agent/getAuthenticatedExtendedCard. R3 (#464) ships the canonical
-// per-session Agent Card; this is a stub so the JSON-RPC method
-// doesn't 5xx in the meantime.
-func minimalRunnerCard(sid, baseURL string) a2a.AgentCard {
-	url := baseURL
-	if url == "" {
-		url = "/a2a/" + sid + "/jsonrpc"
-	} else {
-		// strip trailing slash so we don't emit double slash
-		for len(url) > 0 && url[len(url)-1] == '/' {
-			url = url[:len(url)-1]
-		}
-		url += "/a2a/" + sid + "/jsonrpc"
+// buildRunnerAgentCard constructs the canonical per-session Agent Card
+// per V0.9.2-ARCHITECTURE §5 #9 + §7 + §12.1. Replaces R2's
+// minimalRunnerCard stub.
+//
+// Wire shape:
+//   - protocolVersion = "1.0" (A2A v1.0)
+//   - name            = "chepherd-runner-<sid>" (operator-visible
+//                       chepherd-runner-X form; runner's
+//                       --name flag value lifts into description if
+//                       set so the spec-required `name` stays
+//                       runner-instance-stable)
+//   - url             = <baseURL>/a2a/<sid>/jsonrpc (the SendMessage
+//                       endpoint a sibling POSTs to)
+//   - version         = runnerSelfVersion
+//   - capabilities    = {streaming=true (Wave A1 #511 SSE shipped),
+//                       pushNotifications=false (Wave A3 lights it),
+//                       extendedCard=false (Wave A5 — state-transition
+//                       history)}
+//   - defaultInputModes / defaultOutputModes = ["text/plain"]
+//   - skills          = [] (runner-flavor-specific skills are
+//                       advertised by the AGENT process the runner
+//                       hosts, NOT by the runner itself; Wave A5+
+//                       may template a chepherd-runner skill block)
+//   - security        = [{httpAuth: ["chepherd-jwt"]}] — Bearer JWT
+//                       issued by daemon's JWKS-published keys
+//                       (#505 Wave T2)
+//   - securitySchemes = {chepherd-jwt: HTTP Bearer JWT, with the
+//                       daemon's JWKS URL surfaced in description so
+//                       peers know where to fetch the public keys}
+//   - x-chepherd-p2p  = placeholder (Wave F2/F3/F4 populates with
+//                       WebRTC signaling endpoint + ICE servers +
+//                       supported data channels)
+//
+// baseURL is the scheme://host[:port] siblings reach this runner on
+// (the --a2a-base-url flag value). Empty leaves URLs relative.
+//
+// daemonJWKSURL is the absolute URL of the daemon's JWKS document
+// (scheme://daemon-host/.well-known/jwks.json), populated from the
+// runner's --daemon-url flag at startup. Surfaced in the
+// securitySchemes.chepherd-jwt description so peers know where to
+// fetch the public keys for JWT verification. Empty fine (the
+// description falls back to the relative path).
+func buildRunnerAgentCard(sid, runnerName, baseURL, daemonJWKSURL string) a2a.AgentCard {
+	endpointURL := joinBaseAndPath(baseURL, "/a2a/"+sid+"/jsonrpc")
+	description := "chepherd-runner v" + runnerSelfVersion + " hosting one A2A-protocol agent session"
+	if runnerName != "" {
+		description = description + " (operator handle: @" + runnerName + ")"
+	}
+	jwksRef := daemonJWKSURL
+	if jwksRef == "" {
+		jwksRef = a2a.JWKSPath // relative — peers resolve against daemon they discovered the card through
 	}
 	return a2a.AgentCard{
 		ProtocolVersion: "1.0",
 		Name:            "chepherd-runner-" + sid,
-		URL:             url,
+		Description:     description,
+		URL:             endpointURL,
 		Version:         runnerSelfVersion,
 		Capabilities: a2a.AgentCapabilities{
-			Streaming:         false, // R3+ wires SSE
-			PushNotifications: true,
-			ExtendedCard:      false,
+			Streaming:         true,  // Wave A1 #511 SSE binding live
+			PushNotifications: false, // Wave A3 lights this
+			ExtendedCard:      false, // Wave A5 — state-transition history
 		},
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
 		Skills:             []a2a.AgentSkill{},
+		Security: []map[string][]string{
+			{"chepherd-jwt": {}},
+		},
+		SecuritySchemes: map[string]a2a.SecurityScheme{
+			"chepherd-jwt": {
+				Type:         "http",
+				Scheme:       "bearer",
+				BearerFormat: "JWT",
+				Description:  "Per-call JWT minted by chepherd-daemon (POST /api/v1/jwt/mint, Wave D2). Verify against daemon JWKS at " + jwksRef + " (Wave T2). ES256 signing.",
+			},
+		},
+		XChepherdP2P: a2a.DefaultExtension(),
 	}
+}
+
+// joinBaseAndPath cleanly composes base + path. Empty base → relative
+// path. Trailing slash on base is stripped so we don't emit a double
+// slash.
+func joinBaseAndPath(base, path string) string {
+	if base == "" {
+		return path
+	}
+	for len(base) > 0 && base[len(base)-1] == '/' {
+		base = base[:len(base)-1]
+	}
+	return base + path
 }
 
 // ─── runnerDeliverer ──────────────────────────────────────────────
