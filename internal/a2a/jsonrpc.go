@@ -57,6 +57,18 @@ type methodHandler func(req JSONRPCRequest) JSONRPCResponse
 // method handler, or returns method-not-found.
 type Router struct {
 	handlers map[string]methodHandler
+
+	// StreamingHandler, when non-nil, is invoked instead of the
+	// JSON-RPC methodHandler when an inbound /jsonrpc POST satisfies
+	// ALL of: method == "message/stream" AND Accept header includes
+	// "text/event-stream". The handler is responsible for ALL
+	// response writing (SSE headers, frames, terminal close). When
+	// nil, message/stream falls through to the standard two-call
+	// pattern (returns {task, streamId} JSON; client connects to
+	// /a2a/stream/<streamId> separately).
+	//
+	// Refs #480 Wave A1.
+	StreamingHandler StreamingHandlerFn
 }
 
 // NewRouter returns a Router with all 11 A2A methods registered to
@@ -157,6 +169,17 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	if rpcReq.JSONRPC != "2.0" {
 		writeError(w, rpcReq.ID, ErrCodeInvalidRequest, "jsonrpc must be \"2.0\"")
+		return
+	}
+	// #480 Wave A1 — single-call POST→SSE binding for message/stream.
+	// When the StreamingHandler is wired AND the client advertised
+	// text/event-stream, branch into the SSE handler which owns the
+	// response from here on. Falls through to the JSON path for
+	// non-streaming Accept or when StreamingHandler is nil.
+	if r.StreamingHandler != nil &&
+		rpcReq.Method == "message/stream" &&
+		acceptsEventStream(req) {
+		r.StreamingHandler(w, req, rpcReq)
 		return
 	}
 	h, ok := r.handlers[rpcReq.Method]
