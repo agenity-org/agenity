@@ -109,6 +109,19 @@ type Server struct {
 	// in stub-allow-all mode in that case.
 	GrantStore persistence.RBACGrantRepository
 
+	// AuditEventStore backs the §10-step-24 audit persistence +
+	// GET /api/v1/audit/events query endpoint (#489 Wave AU2). nil
+	// disables persistence — the AU1 stub-log path stays active so
+	// the WS receiver doesn't fail open, but query API responds 503.
+	AuditEventStore persistence.AuditEventRepository
+
+	// DaemonOrgID is this daemon's org identifier. Stamped on every
+	// audit event at ingest so cross-org events from federation peers
+	// stay scoped to the receiver-daemon's org. Empty disables the
+	// org-partition guard (dev / unit-test mode); production
+	// deployments MUST set it.
+	DaemonOrgID string
+
 	// v0.9.3 #225 row C1 — federation orchestrator + cached agent-card
 	// store. Federation is nil when --federation-registry-url is empty;
 	// AgentCardStore is always set when persistence is wired (used by
@@ -217,6 +230,10 @@ func (s *Server) Handler() http.Handler {
 	// /api/v1/agents/ Agent Card directory atop.
 	mux.HandleFunc("/api/v1/runners/register", s.handleRunnerRegister)
 	mux.HandleFunc("/api/v1/runners", s.handleRunnersList)
+	// #489 Wave AU2 — audit event query endpoint. Auth-gated by the
+	// same Bearer middleware that protects other /api/v1/* routes;
+	// per-org scoped at the repository layer.
+	mux.HandleFunc("/api/v1/audit/events", s.handleAuditEventsQuery)
 	mux.HandleFunc("/api/v1/inbox", s.inbox)
 	mux.HandleFunc("/api/v1/inbox/", s.inboxByID)
 	mux.HandleFunc("/api/v1/inbox/read-all", s.inboxReadAll)

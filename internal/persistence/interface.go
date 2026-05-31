@@ -43,6 +43,7 @@ type Store interface {
 	AuthSecrets() AuthSecretRepository
 	Events() EventRepository
 	Grants() RBACGrantRepository
+	AuditEvents() AuditEventRepository
 	Tasks() TaskRepository
 	Artifacts() ArtifactRepository
 	PushConfigs() PushNotificationConfigRepository
@@ -275,6 +276,50 @@ type GrantListOpts struct {
 	GranterOrg string
 	GranteeOrg string
 	OnlyActive bool
+}
+
+// ─── 9b. AuditEventRepository ─────────────────────────────────────
+// NEW in v0.9.4 (#489 Wave AU2). Persists §10-step-24 audit events
+// streamed up from runners over the register WS. Per-org partitioned;
+// queries are org-scoped via OrgID filter.
+
+type AuditEventRepository interface {
+	Save(ctx context.Context, ev *AuditEventRecord) error
+	List(ctx context.Context, opts AuditEventListOpts) ([]*AuditEventRecord, error)
+}
+
+// AuditEventRecord is the persisted form of runtime.AuditEvent + the
+// receiver-daemon's org_id stamped at ingest. RawJSON preserves the
+// wire-shape for forward-compat with additive event fields (AU3 +
+// future dashboard consumers).
+type AuditEventRecord struct {
+	ID         string
+	OrgID      string
+	EventType  string // audit.sent | audit.received
+	Timestamp  time.Time
+	Caller     string
+	Callee     string
+	Method     string
+	LatencyMS  int64
+	JTI        string
+	Status     string // success | error
+	Error      string
+	TaskID     string
+	RawJSON    []byte
+}
+
+// AuditEventListOpts filters the audit-events query. All fields
+// optional; empty = no filter on that dimension. OrgID is the
+// canonical privacy boundary — caller MUST set it to the request's
+// org context.
+type AuditEventListOpts struct {
+	OrgID   string
+	Caller  string
+	Callee  string
+	Method  string
+	Since   *time.Time
+	Until   *time.Time
+	Limit   int // default 100, max 1000
 }
 
 // ─── 10. TaskRepository ───────────────────────────────────────────
