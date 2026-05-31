@@ -36,25 +36,46 @@ import (
 	"time"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/runtime"
 )
+
+// waitFor polls `check` every 5ms up to 2s. Used in the post-#549
+// tests as the deterministic-trigger barrier — synchronous code in
+// the pump goroutine fires immediately after MarkSilenceFire(); a
+// short polling deadline (much smaller than the pre-#549 wall-clock
+// windows) catches the goroutine-schedule boundary without depending
+// on the silence-finalize timer.
+func waitFor(t *testing.T, what string, check func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if check() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("waitFor %q: timed out after 2s", what)
+}
 
 // TestR4_PTYToBroker_Chunked_EndToEnd verifies (a) + (b) by pushing
 // chunks into a fakeSubscriberSource the deliverer treats as its
 // "PTY". After the silence window, the completer must flip Task
 // state in the store.
 func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
-	// CI runners flake on wall-clock-tight tests under parallel
-	// load. Original 300ms → 800ms (#522/#524) → still flaked on
-	// #542 K4 CI. 1500ms = 5× original safety margin. Full clock-
-	// injection refactor is a separate Wave (would touch
-	// internal/runtime to thread a clock through pumpPTYToBroker).
-	t.Setenv("CHEPHERD_A2A_SILENCE_WINDOW_MS", "1500")
-
+	// #549 — deterministic-clock seam. Pre-#549 this test set
+	// CHEPHERD_A2A_SILENCE_WINDOW_MS + raced wall-clock; 3
+	// consecutive recurrence flakes (#542/#545) prompted the
+	// structural fix. We now drive silence-finalize via
+	// mark.MarkSilenceFire() at the exact moment we want it to
+	// fire — no wall-clock dependency, no widen-the-window churn.
 	src := newR4FakeSubscriberSource(64)
 	pty := &fakePTY{}
 	store := newTestStore(t)
 	broker := &fakeBroker{}
+	markCh := make(chan *runtime.PumpSendMark, 1)
 	d := newRunnerDeliverer(store, "test-sid").withPTY(src, pty, broker)
+	d.markFactory = runtime.NewPumpSendMarkWithSilenceFire
+	d.markObserver = func(m *runtime.PumpSendMark) { markCh <- m }
 
 	msg := a2a.Message{
 		ContextID: "ctx-r4",
@@ -68,51 +89,51 @@ func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
 		t.Fatalf("returned task state = %q, want working", task.Status.State)
 	}
 
+	// Grab the spawned mark (observer fires synchronously inside
+	// Deliver before it returns; the channel is buffered=1 so this
+	// receives immediately).
+	mark := <-markCh
+
 	// Push a cursor-bearing chunk to satisfy the silence-finalize
-	// cursor gate (#385 P1). The chunk arrives AFTER Deliver has
-	// already called MarkSendNow — so the responseBuf at this point
-	// is sendOffset=0 and the cursor IS in the post-send slice.
+	// cursor gate (#385 P1).
 	src.PushChunk([]byte("\xe2\x9d\xaf agent reply\n"))
 
-	// (a) — Wait up to 4s for the broker to capture an artifact
-	// event with the pushed bytes (was 2s; bumped for CI headroom).
-	gotBytes := false
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
+	// (a) — Wait for the pump to publish the artifact event. The
+	// chunk goes onto sub.Ch + the pump loop reads it on the next
+	// select iteration; broker.Publish runs synchronously inside
+	// the pump. Deterministic wait via the broker's recorded events.
+	waitFor(t, "broker artifact", func() bool {
 		for _, ev := range broker.Events() {
 			if ev.Event.Type == "artifact" && ev.Event.Artifact != nil {
 				for _, p := range ev.Event.Artifact.Parts {
 					if p.Kind == "text" && containsCursor(p.Text) {
-						gotBytes = true
+						return true
 					}
 				}
 			}
 		}
-		if gotBytes {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !gotBytes {
-		t.Fatalf("(a) FAIL: broker never received the cursor-bearing artifact within 2s. broker events=%d", len(broker.Events()))
-	}
+		return false
+	})
 
-	// (b) — After the 800ms silence window, the completer must fire +
-	// flip the persisted Task to "completed". 5s headroom for CI.
-	deadline = time.Now().Add(10 * time.Second)
-	var completedState string
+	// (b) — Deterministically trigger silence-finalize. Pre-#549
+	// this required a 800ms wall-clock wait that flaked under CI
+	// load 3 times. Post-#549 the test fires the SilenceFire
+	// channel + the pump exits the loop immediately.
+	mark.MarkSilenceFire()
+
+	// Wait for the completer (runs synchronously inside the pump
+	// goroutine after MarkSilenceFire fires) to flip the task state.
 	var completedBlob []byte
-	for time.Now().Before(deadline) {
+	waitFor(t, "task → completed", func() bool {
 		r, err := store.Tasks().Get(context.Background(), task.ID)
 		if err == nil && r != nil && r.State == string(a2a.TaskStateCompleted) {
-			completedState = r.State
 			completedBlob = r.OutputBlob
-			break
+			return true
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if completedState != string(a2a.TaskStateCompleted) {
-		t.Fatalf("(b) FAIL: Task never transitioned to completed within 5s after silence window")
+		return false
+	})
+	if completedBlob == nil {
+		t.Fatalf("(b) FAIL: task never reached completed state")
 	}
 
 	// (b) follow-up — completed OutputBlob carries the artifact text.

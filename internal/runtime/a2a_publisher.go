@@ -40,17 +40,38 @@ import (
 // tests that spawn pump without a Deliver-driven mark).
 // SendNow nil ⇒ pump never receives a mark (back-compat: full buf
 // used for the silence gate, matching pre-#387 behavior).
+//
+// SilenceFire — #549 deterministic-clock test seam. When non-nil,
+// the pump's select loop reads from this channel alongside the
+// wall-clock silenceTimer.C; either receive treats as "silence
+// window elapsed". Tests build a mark with SilenceFire set + send
+// on it instead of waiting on real time. Production marks leave it
+// nil → timer-only behavior (unchanged from pre-#549).
 type pumpSendMark struct {
-	Subscribed chan struct{}
-	SendNow    chan struct{}
-	once       sync.Once
+	Subscribed  chan struct{}
+	SendNow     chan struct{}
+	SilenceFire chan struct{}
+	once        sync.Once
 }
 
 func newPumpSendMark() *pumpSendMark {
 	return &pumpSendMark{
 		Subscribed: make(chan struct{}),
 		SendNow:    make(chan struct{}),
+		// SilenceFire stays nil for production; tests construct
+		// marks via newPumpSendMarkWithSilenceFire.
 	}
+}
+
+// newPumpSendMarkWithSilenceFire — #549 test-only constructor that
+// returns a mark with SilenceFire wired. Tests get a deterministic
+// silence-finalize trigger: just `mark.SilenceFire <- struct{}{}`.
+//
+//nolint:unused // referenced from _test.go files only
+func newPumpSendMarkWithSilenceFire() *pumpSendMark {
+	m := newPumpSendMark()
+	m.SilenceFire = make(chan struct{}, 1)
+	return m
 }
 
 // MarkSendNow signals the pump to record the current responseBuf
@@ -60,6 +81,21 @@ func (m *pumpSendMark) MarkSendNow() {
 		return
 	}
 	m.once.Do(func() { close(m.SendNow) })
+}
+
+// MarkSilenceFire signals the pump to treat the silence window as
+// elapsed (in lieu of waiting on the real-time timer). #549 test-
+// only seam — production marks leave SilenceFire nil.
+//
+//nolint:unused // referenced from _test.go files only
+func (m *pumpSendMark) MarkSilenceFire() {
+	if m == nil || m.SilenceFire == nil {
+		return
+	}
+	select {
+	case m.SilenceFire <- struct{}{}:
+	default:
+	}
 }
 
 // ansiEscapeRE matches CSI sequences (ESC [ ... letter) + OSC sequences
@@ -239,6 +275,15 @@ func pumpPTYToBrokerWithState(broker brokerPublisher, sess subscriberSource, tas
 	if mark != nil {
 		sendNowCh = mark.SendNow
 	}
+	// #549 — deterministic-clock test seam. When mark.SilenceFire is
+	// wired, tests trigger silence-finalize via mark.MarkSilenceFire()
+	// instead of waiting on real wall-clock. Production marks leave
+	// this nil → channel-blocks-forever (no behavior change from
+	// pre-#549).
+	var silenceFireCh <-chan struct{}
+	if mark != nil {
+		silenceFireCh = mark.SilenceFire
+	}
 
 	silence := silenceWindow()
 	silenceTimer := time.NewTimer(silence)
@@ -285,6 +330,20 @@ func pumpPTYToBrokerWithState(broker brokerPublisher, sess subscriberSource, tas
 			}
 			silenceTimer.Reset(silence)
 			timerArmed = true
+		case <-silenceFireCh:
+			// #549 — deterministic-clock test seam fired. Treat as
+			// silence-window-elapsed: same cursor-gate + slice + exit
+			// semantics as the timer branch below.
+			if !bytes.Contains(responseSlice(), promptCursorUTF8) {
+				// Tests that fire SilenceFire BEFORE the cursor lands
+				// drop through here; the test must Fire again after
+				// pushing the cursor chunk (matches the production
+				// gate behavior — silence-finalize doesn't fire
+				// without the cursor).
+				continue
+			}
+			finalize()
+			return
 		case <-silenceTimer.C:
 			// #379 P0 — silence window elapsed → response complete.
 			// Fire the completer (persists agent response + flips
