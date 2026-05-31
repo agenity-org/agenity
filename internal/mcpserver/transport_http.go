@@ -34,13 +34,54 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(_ *http.Request) bool { return true },
 }
 
+// mcpListen returns a net.Listener for `addr`. If addr is prefixed with
+// "unix://" the rest is treated as a filesystem path + the listener uses
+// AF_UNIX; otherwise addr is treated as a TCP host:port. The Unix path
+// is removed before bind so a stale socket from a prior crash doesn't
+// block fresh listen — same convention systemd uses.
+//
+// #453 Wave R — MCP-over-Unix-socket is the runner's local-only MCP
+// transport (agent ↔ runner inside one container). The TCP form stays
+// for the daemon's existing dashboard HTTP surface.
+func mcpListen(addr string) (net.Listener, error) {
+	const unixPrefix = "unix://"
+	if len(addr) > len(unixPrefix) && addr[:len(unixPrefix)] == unixPrefix {
+		path := addr[len(unixPrefix):]
+		_ = os.Remove(path)
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			return nil, fmt.Errorf("mcp http: listen unix %s: %w", path, err)
+		}
+		// 0600 — runner + agent share the namespace so 0660 with a shared
+		// group would be ideal, but in single-UID rootless containers
+		// 0600 is sufficient + simpler. Operator-side socket umask is
+		// already restrictive.
+		if err := os.Chmod(path, 0o600); err != nil {
+			_ = ln.Close()
+			return nil, fmt.Errorf("mcp http: chmod %s: %w", path, err)
+		}
+		return ln, nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("mcp http: listen %s: %w", addr, err)
+	}
+	return ln, nil
+}
+
 // StartHTTP binds the MCP HTTP listener on `addr` and serves WS+REST. Runs
 // the accept loop in a goroutine; returns once `net.Listen` succeeds. The
 // listener and HTTP server are stored on s so Stop() can close both.
+//
+// #453 Wave R — addr accepts EITHER a TCP host:port (existing daemon path)
+// OR a Unix-socket path prefixed with "unix://" (e.g.
+// "unix:///run/chepherd/mcp.sock"). chepherd-runner uses the Unix-socket
+// form so the agent's MCP client talks to the runner over a local socket
+// that never crosses the container boundary.
 func (s *Server) StartHTTP(addr string) error {
-	ln, err := net.Listen("tcp", addr)
+	ln, err := mcpListen(addr)
 	if err != nil {
-		return fmt.Errorf("mcp http: listen %s: %w", addr, err)
+		return err
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp/ws", s.handleWS)
