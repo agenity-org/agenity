@@ -77,6 +77,17 @@ podman rm -f chepherd 2>/dev/null || true
 # the backend up-front + fall back to slirp4netns + propagate the
 # choice to the runtime so agents get the matching network mode.
 NETWORK_BACKEND="$(podman info --format '{{.Host.NetworkBackend}}' 2>/dev/null || echo unknown)"
+# Podman 3.x older builds (e.g. Ubuntu 22.04's 3.4.4) don't expose the
+# Host.NetworkBackend field — the template eval errors + empty string is
+# returned. Treat empty as "cni" since pre-netavark Podman defaults to
+# CNI; the cni branch then probes plugin paths and either succeeds or
+# falls through to slirp4netns. Without this, Ubuntu 22.04 hosts with
+# CNI plugins installed at /usr/lib/cni would never reach the
+# cni-detection branch + would always slirp4netns-fallback (the #414
+# operator pain).
+if [ -z "${NETWORK_BACKEND}" ] || [ "${NETWORK_BACKEND}" = "unknown" ]; then
+  NETWORK_BACKEND="cni"
+fi
 USE_CHEPHERD_NET=0
 case "${NETWORK_BACKEND}" in
   netavark)
