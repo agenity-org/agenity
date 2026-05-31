@@ -25,6 +25,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -91,12 +92,17 @@ func run() error {
 	fmt.Printf("✓ iogrid listening on http://%s (runner-bin=%s, auth=%v)\n",
 		cfg.listen, cfg.runnerBin, cfg.authToken != "")
 
+	// #503 Wave H5 — start the AUTH_REQUIRED timeout sweeper.
+	authCtx, cancelAuth := context.WithCancel(context.Background())
+	go srv.runAuthTimeoutLoop(authCtx)
+
 	// Graceful shutdown on SIGINT/SIGTERM — kill outstanding
 	// children + close the listener.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	<-sigs
 	fmt.Println("iogrid: shutting down")
+	cancelAuth()
 	srv.killAll()
 	_ = httpSrv.Close()
 	return nil
@@ -126,11 +132,17 @@ type runnerInfo struct {
 }
 
 const (
-	stateRunning   = "running"
-	stateCompleted = "completed"
-	stateFailed    = "failed"
-	stateCanceled  = "canceled"
+	stateRunning      = "running"
+	stateCompleted    = "completed"
+	stateFailed       = "failed"
+	stateCanceled     = "canceled"
+	stateAuthRequired = "auth-required" // #503 Wave H5 — agent emitted OAuth challenge; awaiting credentials inject.
 )
+
+// headlessAuthRequiredExitCode is the runner exit code that signals
+// "task exited cleanly but ended in AUTH_REQUIRED state" — iogrid
+// translates this into the auth-required runner state per #503.
+const headlessAuthRequiredExitCode = 4
 
 type server struct {
 	cfg     *config
@@ -152,6 +164,12 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/v1/runners/", s.requireAuth(s.handleRunnerByID))
 	return mux
 }
+
+// authRequiredTimeout caps how long a runner can sit in AUTH_REQUIRED
+// before iogrid transitions it to FAILED("oauth-timeout"). Operator
+// has this much wall-clock time to complete the out-of-band OAuth
+// flow + POST credentials/inject. Per #503 Wave H5 / §15.3 dispatch.
+const authRequiredTimeout = 10 * time.Minute
 
 func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -213,9 +231,90 @@ func (s *server) handleRunnerByID(w http.ResponseWriter, r *http.Request) {
 		s.handleRunnerState(w, r, id)
 	case "/result":
 		s.handleRunnerResult(w, r, id)
+	case "/credentials/inject":
+		s.handleCredentialsInject(w, r, id)
 	default:
 		writeJSONError(w, http.StatusNotFound, "unknown subpath: "+suffix)
 	}
+}
+
+// handleCredentialsInject resumes an AUTH_REQUIRED runner by
+// re-spawning a fresh task with the supplied credentials merged
+// into the original task body. The original runner ID stays
+// attached to the new headless invocation (state transitions
+// AUTH_REQUIRED → RUNNING → COMPLETED|FAILED|AUTH_REQUIRED again).
+//
+// Request body: {"credentials":[{"provider":"<slug>","key":"<token>"}]}
+//
+// Per §15.3 / #503 Wave H5: this is the resume seam — the operator
+// completes the OAuth flow out-of-band (browser), then hands the
+// resulting token to iogrid via this endpoint. Headless mode has
+// no in-process resume (the agent terminated after AUTH_REQUIRED
+// emission); iogrid spawns a NEW chepherd-runner child with the
+// same task body + new credentials, and the new child finds the
+// MCP server authenticated this time.
+func (s *server) handleCredentialsInject(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	s.mu.Lock()
+	info, ok := s.runners[id]
+	s.mu.Unlock()
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "runner not found")
+		return
+	}
+	if info.State != stateAuthRequired {
+		writeJSONError(w, http.StatusConflict,
+			"runner state="+info.State+", inject only valid in auth-required")
+		return
+	}
+	injectBody, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	var inject struct {
+		Credentials []map[string]string `json:"credentials"`
+	}
+	if err := json.Unmarshal(injectBody, &inject); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "decode body: "+err.Error())
+		return
+	}
+	if len(inject.Credentials) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "credentials array required")
+		return
+	}
+	// Merge credentials into the original task body. The headless
+	// runner already understands the {credentials:[...]} field
+	// (Wave H3 substrate).
+	var orig map[string]any
+	if err := json.Unmarshal(info.taskBody, &orig); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "decode original task: "+err.Error())
+		return
+	}
+	merged := make([]any, 0, len(inject.Credentials))
+	for _, c := range inject.Credentials {
+		merged = append(merged, c)
+	}
+	orig["credentials"] = merged
+	resumedBody, _ := json.Marshal(orig)
+
+	// Spawn a fresh runner under a NEW id. The original id stays in
+	// the registry pinned at auth-required so the result envelope
+	// remains addressable; the new runner is the resumption.
+	newInfo, err := s.spawnRunner(resumedBody)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "respawn: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"resumed_from": id,
+		"id":           newInfo.ID,
+	})
 }
 
 func (s *server) handleRunnerState(w http.ResponseWriter, r *http.Request, id string) {
@@ -258,6 +357,9 @@ func (s *server) handleRunnerResult(w http.ResponseWriter, r *http.Request, id s
 		writeJSONError(w, http.StatusConflict, "runner still running")
 		return
 	}
+	// #503 Wave H5 — auth-required, completed, and failed states all
+	// return the on-disk result file; the envelope's Status.State +
+	// Status.Details is what differentiates them on the wire.
 	body, err := os.ReadFile(info.resultFile)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "read result: "+err.Error())
@@ -344,13 +446,21 @@ func (s *server) trackRunner(info *runnerInfo) {
 		zero := 0
 		info.ExitCode = &zero
 	} else {
-		info.State = stateFailed
 		code := -1
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			code = exitErr.ExitCode()
 		}
 		info.ExitCode = &code
+		// #503 Wave H5 — exit 4 from --headless means the agent
+		// emitted an OAuth challenge; the result file carries the
+		// auth-required Task envelope. Map to AUTH_REQUIRED so
+		// pollers + the inject endpoint can resume the task.
+		if code == headlessAuthRequiredExitCode {
+			info.State = stateAuthRequired
+		} else {
+			info.State = stateFailed
+		}
 	}
 	close(info.done)
 }
@@ -374,6 +484,76 @@ func (s *server) cancelRunner(id string) {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 		<-info.done
 	}
+}
+
+// authTimeoutSweep transitions AUTH_REQUIRED runners that have sat
+// past authRequiredTimeout to FAILED with reason oauth-timeout.
+// Single-shot; the caller (server.runAuthTimeoutLoop) ticks.
+//
+// Refs #503 Wave H5 / §15.3.
+func (s *server) authTimeoutSweep() {
+	cutoff := time.Now().Add(-authRequiredTimeout)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, info := range s.runners {
+		if info.State != stateAuthRequired {
+			continue
+		}
+		if info.CompletedAt.IsZero() || info.CompletedAt.After(cutoff) {
+			continue
+		}
+		info.State = stateFailed
+		// Overwrite the result file's Status.State so consumers
+		// fetching /result see the timeout terminal state rather
+		// than the stale auth-required envelope.
+		_ = rewriteResultStateToFailed(info.resultFile, "oauth-timeout")
+	}
+}
+
+// runAuthTimeoutLoop is the long-lived ticker that calls
+// authTimeoutSweep every 30s. Returns when ctx is canceled.
+func (s *server) runAuthTimeoutLoop(ctx context.Context) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.authTimeoutSweep()
+		}
+	}
+}
+
+// rewriteResultStateToFailed mutates the on-disk Task envelope so
+// Status.State = "failed" + Status.Message carries `reason`. Used
+// by the auth-required timeout sweep to keep the on-disk result
+// in sync with the in-memory state transition.
+func rewriteResultStateToFailed(path, reason string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return err
+	}
+	status, _ := envelope["status"].(map[string]any)
+	if status == nil {
+		status = map[string]any{}
+	}
+	status["state"] = "failed"
+	status["message"] = map[string]any{
+		"role": "agent",
+		"kind": "message",
+		"parts": []map[string]any{
+			{"kind": "text", "text": "AUTH_REQUIRED timed out: " + reason},
+		},
+	}
+	envelope["status"] = status
+	out, _ := json.MarshalIndent(envelope, "", "  ")
+	out = append(out, '\n')
+	return os.WriteFile(path, out, 0o600)
 }
 
 // killAll terminates every still-running child. Called on

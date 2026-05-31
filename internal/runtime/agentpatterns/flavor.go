@@ -70,6 +70,38 @@ type ToolCall struct {
 	Arguments map[string]any
 }
 
+// AuthChallenge is the structured detail extracted from an agent's
+// auth-required signal. Returned by Flavor.ExtractAuthChallenge
+// (#503 Wave H5 / §15.3).
+//
+// Empirical-driven contract (see H5 escalation 2026-05-31): the
+// original §15.3 framing presumed every MCP tool returns an OAuth
+// challenge URL on the wire. Real claude-code 2.1.148 against
+// Anthropic-managed connectors (e.g. claude.ai Google Drive) emits
+// `mcp_servers[*].status="needs-auth"` + tool_result `status:"unsupported"`
+// WITHOUT an in-band auth_url — the user must run /mcp interactively
+// to start the OAuth flow. So URL is OPTIONAL; Provider+Message are
+// the always-populated fields that drive the operator-facing prompt.
+type AuthChallenge struct {
+	// Provider is the human-readable auth scope name. For
+	// Anthropic-managed connectors this is the MCP server name
+	// (e.g. "claude.ai Google Drive"); for third-party OAuth-emitting
+	// tools it's the tool/service name.
+	Provider string
+
+	// Message is the operator-facing instruction. Empirically
+	// captured for claude.ai connectors as the tool_result message
+	// ("Ask the user to run /mcp and select \"<server>\" to
+	// authenticate."). For URL-emitting MCPs it's the prose
+	// preceding the URL ("Authorize at: ...").
+	Message string
+
+	// URL is the direct OAuth start URL when emitted by the MCP
+	// server. Empty for Anthropic-managed connectors that route
+	// through claude.ai's own /mcp UI.
+	URL string
+}
+
 // Flavor is the per-CLI-agent-flavor pattern-match contract.
 // Implementations live one-per-file (claude_code.go, qwen_code.go,
 // aider.go, etc.) and are registered with the package-level
@@ -109,6 +141,17 @@ type Flavor interface {
 	// returned 401 with oauth_url). The A2A state machine maps
 	// this to TASK_STATE_AUTH_REQUIRED. See §15.3.
 	IsAuthRequired(bytes []byte) DetectionResult
+
+	// ExtractAuthChallenge parses the auth-required signal from
+	// `bytes` into a structured AuthChallenge. Returns nil when no
+	// match (mirrors IsAuthRequired returning Match=false). When
+	// IsAuthRequired returns Match=true, ExtractAuthChallenge MUST
+	// return a non-nil result with Provider+Message populated;
+	// URL is optional. The two methods stay in lockstep so callers
+	// can use IsAuthRequired as the cheap predicate + only call
+	// ExtractAuthChallenge when they need to populate Task
+	// Status.Details (#503 Wave H5 / §15.3).
+	ExtractAuthChallenge(bytes []byte) *AuthChallenge
 
 	// ExtractToolCalls returns any tool invocations parsed from
 	// `bytes`. For agents emitting structured tool-call events
@@ -168,9 +211,10 @@ func All() []Flavor {
 // false positives.
 type Noop struct{}
 
-func (Noop) Slug() string                                                  { return "" }
-func (Noop) DetectIdle(_ []byte, _ time.Duration) DetectionResult          { return DetectionResult{} }
-func (Noop) IsCompleted(_ []byte) DetectionResult                          { return DetectionResult{} }
-func (Noop) IsInputRequired(_ []byte) DetectionResult                      { return DetectionResult{} }
-func (Noop) IsAuthRequired(_ []byte) DetectionResult                       { return DetectionResult{} }
-func (Noop) ExtractToolCalls(_ []byte) []ToolCall                          { return nil }
+func (Noop) Slug() string                                          { return "" }
+func (Noop) DetectIdle(_ []byte, _ time.Duration) DetectionResult  { return DetectionResult{} }
+func (Noop) IsCompleted(_ []byte) DetectionResult                  { return DetectionResult{} }
+func (Noop) IsInputRequired(_ []byte) DetectionResult              { return DetectionResult{} }
+func (Noop) IsAuthRequired(_ []byte) DetectionResult               { return DetectionResult{} }
+func (Noop) ExtractAuthChallenge(_ []byte) *AuthChallenge          { return nil }
+func (Noop) ExtractToolCalls(_ []byte) []ToolCall                  { return nil }

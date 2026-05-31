@@ -18,6 +18,7 @@
 package agentpatterns
 
 import (
+	"bytes"
 	"regexp"
 	"time"
 )
@@ -96,6 +97,41 @@ func (QwenCode) IsAuthRequired(b []byte) DetectionResult {
 		}
 	}
 	return DetectionResult{}
+}
+
+// ExtractAuthChallenge parses the OAuth URL out of the prose
+// fallback pattern. qwen-code has no live binary on this build
+// host (see file-header note), so URL is the only signal we
+// currently surface; Provider falls back to the URL host.
+func (QwenCode) ExtractAuthChallenge(b []byte) *AuthChallenge {
+	loc := qwenAuthURLRE.FindIndex(b)
+	if loc == nil {
+		return nil
+	}
+	urlStart := bytes.Index(b[loc[0]:loc[1]], []byte("https://"))
+	if urlStart < 0 {
+		return nil
+	}
+	tail := b[loc[0]+urlStart:]
+	end := bytes.IndexAny(tail, " \t\n\r")
+	if end < 0 {
+		end = len(tail)
+	}
+	url := string(tail[:end])
+	provider := url
+	if i := bytes.Index([]byte(url), []byte("://")); i >= 0 {
+		rest := url[i+3:]
+		if j := bytes.IndexAny([]byte(rest), "/?"); j >= 0 {
+			provider = rest[:j]
+		} else {
+			provider = rest
+		}
+	}
+	return &AuthChallenge{
+		Provider: provider,
+		Message:  "Visit the OAuth URL in a browser to complete authentication.",
+		URL:      url,
+	}
 }
 
 // ExtractToolCalls — qwen-code surfaces tool calls only via
