@@ -283,28 +283,35 @@ func (s *Server) Handler() http.Handler {
 	// #174 — discovery layer (auto-enumerate orgs + repos from saved tokens)
 	mux.HandleFunc("/api/v1/discovery/", s.discoveryRouter)
 
-	// v0.9.2 (#208 follow-up): A2A surface — GET /.well-known/agent-card.json
-	// + POST /jsonrpc. Both exact paths, so ServeMux's longest-prefix rule
-	// keeps them out of the SPA wildcard registered below.
-	if s.A2ACard != nil && s.A2ARouter != nil {
-		// #225 row B1 — gate /jsonrpc with Bearer-token auth when an
-		// AuthProvider is wired. Falls through to unauthenticated mode
-		// when s.Auth is nil (dev / BareExec smoke-test).
-		var validator a2a.TokenValidator
-		if s.Auth != nil {
-			validator = &authProviderValidator{provider: s.Auth}
-		}
-		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter, validator, s.StreamBroker)
-		// #505 Wave T2 — JWKS publication. When KeyStore is wired, the
-		// JWKS endpoint serves the full multi-key document dynamically
-		// (active + retired-within-overlap). The legacy static-body
-		// path stays as fallback for unit tests + back-compat boots.
-		if s.KeyStore != nil {
-			mux.HandleFunc(a2a.JWKSPath, s.jwksDynamic)
-		} else {
-			a2a.RegisterJWKS(mux, s.JWKSBody)
-		}
+	// #466 Wave R5 — DAEMON DE-A2A CUTOVER. Per V0.9.2-ARCH §5 #3 +
+	// §22, A2A goes through per-runner endpoints at /a2a/<sid>/jsonrpc
+	// (Wave R2 #463). The daemon's legacy /jsonrpc + agent-card paths
+	// return 410-Gone with structured operator-visible diagnostics:
+	//   - Deprecation: true (RFC 9745)
+	//   - Sunset header (RFC 8594) — Wave R5 merge date
+	//   - Link: rel="successor-version" pointing at Wave D1 directory
+	//   - JSON-RPC -32601 body so A2A clients see a parseable error
+	//
+	// JWKS (T2 #505) is unaffected — daemon owns the keystore + JWKS
+	// publication; runners verify peer JWTs against this URL.
+	mux.Handle("/jsonrpc", r5A2ACutoverHandler("/jsonrpc"))
+	mux.Handle(a2a.AgentCardPath, r5A2ACutoverHandler(a2a.AgentCardPath))
+	mux.Handle(a2a.AgentCardAliasPath, r5A2ACutoverHandler(a2a.AgentCardAliasPath))
+	// JWKS path stays daemon-owned — peers verify JWTs against this
+	// URL whether minted for daemon-side admin endpoints or per-call
+	// A2A authorization issued by the same daemon.
+	if s.KeyStore != nil {
+		mux.HandleFunc(a2a.JWKSPath, s.jwksDynamic)
+	} else if len(s.JWKSBody) > 0 {
+		a2a.RegisterJWKS(mux, s.JWKSBody)
 	}
+	// #466 — back-compat fields A2ACard / A2ARouter / StreamBroker
+	// stay on the Server struct so existing test fixtures that
+	// populate them don't fail to compile. They're no longer
+	// consumed in this mount block.
+	_ = s.A2ACard
+	_ = s.A2ARouter
+	_ = s.StreamBroker
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)
 	mux.HandleFunc("/api/v1/claude-tokens", s.claudeTokensHandler)

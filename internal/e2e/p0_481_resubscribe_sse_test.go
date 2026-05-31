@@ -33,6 +33,10 @@ func TestV094Walk_RealServerResubscribeSSE(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real-binary boot in -short mode")
 	}
+	// #466 Wave R5 — daemon no longer hosts A2A. tasks/resubscribe
+	// lives on the runner endpoint now (Wave R2 #463 + R4 #465
+	// broker).
+	t.Skip("Wave R5 cutover (#466): daemon de-A2A; resubscribe moved to /a2a/<sid>/jsonrpc")
 
 	gomodOut, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {
