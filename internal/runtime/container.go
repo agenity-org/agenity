@@ -679,35 +679,42 @@ func imageExists(image string) bool {
 }
 
 // agentNetworkMode returns the podman/docker --network argument used
-// when spawning agent containers. Default: slirp4netns (rootless-
-// friendly + no CNI plugin required + matches CHEPHERD_MCP_URL gateway
-// IP contract). Override via CHEPHERD_CONTAINER_NETWORK env var for
-// operators on rootful podman with CNI or those who explicitly need
-// per-pod bridge isolation.
+// when spawning agent containers. Override via CHEPHERD_CONTAINER_NETWORK
+// env var for operators who explicitly need per-pod bridge isolation.
 //
 // Common values:
-//   - "slirp4netns:port_handler=slirp4netns" (default; rootless)
-//   - "host"   (no isolation; simplest sibling-to-chepherd case)
-//   - "bridge" (per-pod isolation; requires CNI plugin)
-//   - "none"   (no network at all)
+//   - "container:chepherd" (default; SHARED NETNS — agent reaches MCP at 127.0.0.1:9090)
+//   - "chepherd-net"       (user-defined podman network; requires netavark OR CNI plugins)
+//   - "slirp4netns:port_handler=slirp4netns" (rootless host-loopback; broken on Podman 3.x)
+//   - "host"               (no isolation; simplest)
+//   - "bridge"             (per-pod isolation; requires CNI plugin)
+//   - "none"               (no network at all)
 //
-// Refs #365 P0.
+// #414 P0 — shared-netns is the architectural answer that works on ALL
+// hosts. Pre-#414 default was "chepherd-net" which requires either
+// netavark (Podman 4.x+) OR working CNI plugins (#403/#406/#442/#443
+// detection chain). On Podman 3.x hosts where rootless-CNI plumbing
+// (rootless-cni-infra helper image, slirp4netns 1.2+, firewall plugin
+// config version 1.0.0) is broken or missing, chepherd-net silently
+// fell back to slirp4netns which kernel-isolates host loopback →
+// agent can't reach chepherd MCP at all → operator-visible -32000.
+//
+// Shared netns (container:chepherd) makes the agent see chepherd's
+// network namespace directly: 127.0.0.1:9090 IS the chepherd MCP
+// listener via loopback. No CNI, no netavark, no slirp4netns gateway
+// hops, no port forwards. Same primitive used by Kubernetes pod
+// sidecars. Works on every podman + docker version with shared-netns
+// support (all of them).
+//
+// Architect verified live 2026-05-31 via doctor --mcp:
+//   --network=chepherd-net   → broken (rootless CNI plumbing dead)
+//   --network=slirp4netns... → TCP unreachable (kernel isolation)
+//   --network=container:chepherd → ALL CHECKS PASS
+//
+// Refs #365 P0 #398 #406 #414.
 func agentNetworkMode() string {
 	if m := os.Getenv("CHEPHERD_CONTAINER_NETWORK"); m != "" {
 		return m
 	}
-	// #398 P0 v2 — attach agent containers to the same user-defined
-	// podman network the chepherd container is on (created by
-	// scripts/start.sh: `podman network create chepherd-net`). Agents
-	// reach the MCP server via container-name DNS:
-	// ws://chepherd:9090/mcp/ws. Replaces the prior slirp4netns
-	// default whose kernel-level host-loopback isolation blocked
-	// agents from reaching 10.0.2.2:9090 despite the 0.0.0.0 host-
-	// port binding (#398 Option A insufficient).
-	//
-	// Bare-host dev mode (chepherd running directly on the host, not
-	// via scripts/start.sh): operator must override via
-	// CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns
-	// + CHEPHERD_MCP_URL=ws://host.containers.internal:9090/mcp/ws.
-	return "chepherd-net"
+	return "container:chepherd"
 }
