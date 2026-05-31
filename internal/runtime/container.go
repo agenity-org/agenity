@@ -85,6 +85,19 @@ type ContainerRuntime interface {
 // visible in chepherd's boot log instead of buried in a misleading
 // "claude not found" downstream error.
 func DetectRuntime() ContainerRuntime {
+	// #522 — CHEPHERD_FORCE_BAREEXEC=1 forces BareExec immediately,
+	// skipping the Podman/Docker probes. Used by the e2e harness so
+	// tests run deterministically on hosts where rootless podman
+	// rejects new containers (kernel keyring quota, persistent
+	// keyring storage full, missing CAP_SYS_ADMIN, etc.) without
+	// pulling those environment failures into test assertions about
+	// unrelated CONTRACTS (team-routing, MCP RPC envelopes, etc.).
+	// Tests that specifically exercise the container path opt back
+	// in via NOT setting this var.
+	if os.Getenv("CHEPHERD_FORCE_BAREEXEC") == "1" {
+		fmt.Fprintf(os.Stderr, "[chepherd-runtime-detect] CHEPHERD_FORCE_BAREEXEC=1 — forcing BareExecRuntime (e2e test mode)\n")
+		return &BareExecRuntime{}
+	}
 	p := &PodmanRuntime{}
 	if err := p.Available(); err == nil {
 		return p

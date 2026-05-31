@@ -8,35 +8,30 @@ package keychain
 
 import (
 	"errors"
-	"sync"
 )
 
-var (
-	installedMu sync.Mutex
-	installed   Backend
-)
+// installed is the explicitly-installed Backend (when set via
+// Install). Protected by keychain.go's `mu` along with chosen +
+// chosenOK — single mutex avoids the data race -race detector found
+// pre-#522 where installedMu protected only `installed` while
+// Install also wrote `chosen = nil` + reset `once` outside any
+// shared lock.
+var installed Backend
 
 // Install sets the active Backend, bypassing Active()'s platform
 // chain. Subsequent Set/Get/Delete calls route through b. Calling
 // Install with nil restores the auto-select behavior.
 //
-// Refs #322 H6.1.
+// Refs #322 H6.1 #522.
 func Install(b Backend) {
-	installedMu.Lock()
-	defer installedMu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	installed = b
-	// Reset the once.Do guard so the next Active() call re-evaluates
-	// against the installed backend.
-	once = sync.Once{}
+	// Invalidate the cached chosen so the next Active() call re-
+	// evaluates against the new installed override (or, when nil,
+	// re-runs the platform chain).
 	chosen = nil
-}
-
-// activeOverride returns the installed Backend (if any) — Active()
-// consults this before falling through to the platform chain.
-func activeOverride() Backend {
-	installedMu.Lock()
-	defer installedMu.Unlock()
-	return installed
+	chosenOK = false
 }
 
 // ErrConfigIncomplete is returned by NewOpenBaoBackendFromFlags when

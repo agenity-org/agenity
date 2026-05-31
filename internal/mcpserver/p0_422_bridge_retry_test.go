@@ -31,16 +31,19 @@ import (
 // We run the bridge in a goroutine + bring up the server mid-retry.
 // The bridge must complete its dial successfully + start streaming.
 func TestP0_422_Bridge_RetriesUntilServerReady(t *testing.T) {
-	// Pick a free port but don't bind it yet — bridge will hit
-	// "connection refused" on first attempt(s) then succeed.
-	addr, err := freeTCPAddr()
+	// #522 — bind the listener AT SETUP, hold it open, then start
+	// Serve() after a 1.5s delay. Pre-#522 the test used
+	// freeTCPAddr() (returns a then-closed listener's port) +
+	// re-bound 1.5s later, racing whatever else might claim the
+	// port in between → "retries exhaust before server ready"
+	// flake.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("freeTCPAddr: %v", err)
+		t.Fatalf("net.Listen: %v", err)
 	}
+	addr := ln.Addr().String()
+	// We keep the listener bound — no port race.
 
-	// Bring up the WS server 1.5s after the bridge starts. That's
-	// long enough to force at least one retry (backoff starts at 1s
-	// after first immediate failure).
 	var upgrader = websocket.Upgrader{
 		CheckOrigin: func(*http.Request) bool { return true },
 	}
@@ -52,21 +55,41 @@ func TestP0_422_Bridge_RetriesUntilServerReady(t *testing.T) {
 			return
 		}
 		connected.Store(true)
-		// Hold the connection open briefly then close so the bridge's
-		// reader sees EOF + the bridge function returns.
 		_, _, _ = c.ReadMessage()
 		c.Close()
 	})
 
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// Drain accept queue for 1.5s so the bridge's first dial(s) see
+	// connection-refused-equivalent (peer closes immediately) and
+	// retry with backoff. Then hand the listener to srv.Serve().
+	// Pre-fix the test re-bound the port at 1.5s, racing port-steal.
+	ready := make(chan struct{})
 	go func() {
-		time.Sleep(1500 * time.Millisecond)
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			t.Logf("bind: %v", err)
-			return
+		deadline := time.Now().Add(1500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if tcp, ok := ln.(*net.TCPListener); ok {
+				_ = tcp.SetDeadline(time.Now().Add(100 * time.Millisecond))
+			}
+			c, err := ln.Accept()
+			if c != nil {
+				_ = c.Close()
+			}
+			if err != nil {
+				// Accept timed out (Phase 1 expected) — loop continues.
+				continue
+			}
 		}
-		srv.Serve(ln)
+		// Clear deadline before handing to srv.Serve so it accepts
+		// normally.
+		if tcp, ok := ln.(*net.TCPListener); ok {
+			_ = tcp.SetDeadline(time.Time{})
+		}
+		close(ready)
+	}()
+	go func() {
+		<-ready
+		_ = srv.Serve(ln)
 	}()
 	defer srv.Close()
 

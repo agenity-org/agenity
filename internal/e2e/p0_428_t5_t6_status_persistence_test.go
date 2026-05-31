@@ -66,6 +66,10 @@ import (
 //	        shape (verifies the two surfaces agree, no drift)
 //	T5.E5 — peer_status for unknown session returns isError=true
 func TestT5_PeerStatusSurfacesObservableActivity(t *testing.T) {
+	// #522 — opt into BareExec spawn. T5 asserts the peer_status
+	// envelope shape + value content; the agent flavor underneath
+	// is incidental. Avoids rootless-podman keyring quota flake.
+	t.Setenv("CHEPHERD_FORCE_BAREEXEC", "1")
 	h := bootE2EHarness(t)
 	const agent = "t5-ticker"
 	const team = "t5-team"
