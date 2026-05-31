@@ -104,8 +104,11 @@ func TestWaveF81_Mount_503_KeystoreOnlyMissingOrgID(t *testing.T) {
 	srv.mountCrossOrgFederationMint(mux)
 	hs := httptest.NewServer(mux)
 	defer hs.Close()
-	resp, _ := http.Post(hs.URL+"/api/v1/federation/jwt", "application/json",
+	resp, err := http.Post(hs.URL+"/api/v1/federation/jwt", "application/json",
 		strings.NewReader(`{"scope":"x"}`))
+	if err != nil {
+		t.Fatalf("Post failed: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", resp.StatusCode)
