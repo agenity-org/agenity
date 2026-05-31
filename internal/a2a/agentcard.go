@@ -46,6 +46,14 @@ type AgentCard struct {
 	// chepherd-aware iogrid catalogues can discover a peer that
 	// accepts recipes via this block. Refs #318 (#225 row E1).
 	XIOgrid *IOgridExtension `json:"x-iogrid,omitempty"`
+
+	// XChepherdMethodAliases publishes the slash-camelCase →
+	// PascalCase JSON-RPC method-name translation table this server
+	// accepts. Spec-conformant a2a-python clients use PascalCase
+	// (the table values + map keys to the right of the colon); stale
+	// a2a-js clients use slash-camelCase (the keys). Inbound calls
+	// in either form route to the same handler. Refs #561 #568.
+	XChepherdMethodAliases map[string]string `json:"x-chepherd-method-aliases,omitempty"`
 }
 
 // AgentCapabilities advertises which A2A features this agent supports.

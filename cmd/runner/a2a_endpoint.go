@@ -301,6 +301,7 @@ func buildRunnerAgentCard(sid, runnerName, baseURL, daemonJWKSURL string) a2a.Ag
 			ext.PopulateSignalingEndpoint(baseURL)
 			return ext
 		}(),
+		XChepherdMethodAliases: a2a.MethodAliases(),
 	}
 }
 

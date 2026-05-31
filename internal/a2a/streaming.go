@@ -62,8 +62,12 @@ type StreamingHandlerFn func(w http.ResponseWriter, r *http.Request, req JSONRPC
 func MakeStreamingHandler(store persistence.Store, broker *StreamBroker, runnerSID string) StreamingHandlerFn {
 	sp := &streamingParams{Store: store, Broker: broker, RunnerSID: runnerSID}
 	return func(w http.ResponseWriter, r *http.Request, req JSONRPCRequest) {
+		// #568 — req.Method is canonicalized to PascalCase by
+		// Router.ServeHTTP before this handler runs. Switch on the
+		// canonical names; legacy slash-camelCase strings would never
+		// reach here.
 		switch req.Method {
-		case "tasks/resubscribe":
+		case "SubscribeToTask":
 			sp.serveResubscribe(w, r, req)
 		default:
 			sp.serve(w, r, req)
