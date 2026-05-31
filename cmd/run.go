@@ -60,6 +60,7 @@ var (
 	runFlagFederationOutboundBearer string // #225 §DoD walk — shared bearer for FederatedDeliverer outbound POST
 	runFlagFederationMTLS           bool   // #487 Wave T3 — enforce mTLS on cross-org federation traffic
 	runFlagFederationOrgID          string // #487 Wave T3 — this daemon's org identifier (CN on its cert)
+	runFlagFederationListen         string // #527 Wave T3.1 — federation-facing mTLS HTTP listener address (separate from dashboard listener)
 	runFlagIOgridEndpoint        string
 	runFlagKeychainBackend       string // #322 H6.1 — keychain backend (default = auto)
 	runFlagOpenBaoAddr           string // #322 H6.1 — OpenBao server URL
@@ -115,6 +116,8 @@ func init() {
 		"#487 Wave T3 — enforce mTLS on cross-org federation client + server traffic. When false (dev/test default) federation HTTP stays plaintext; when true the daemon mints / loads its own org cert from AuthSecretRepository + presents on every outbound + requires peer cert with chain-to-pinned-CA on every inbound.")
 	runCmd.Flags().StringVar(&runFlagFederationOrgID, "federation-org-id", "",
 		"#487 Wave T3 — this daemon's org identifier (used as CN on the federation leaf cert). Empty defaults to InstanceUUID + 'org-' prefix. Stable across restarts because the cert is persisted under AuthSecretRepository.")
+	runCmd.Flags().StringVar(&runFlagFederationListen, "federation-listen", "",
+		"#527 Wave T3.1 — federation-facing mTLS HTTP listener address (host:port). Empty disables the federation listener (cross-org peers fall back to the main dashboard listener, which is dashboard-shaped). When set + --federation-mtls=true the daemon binds a SECOND HTTP listener on this address with mTLS server config; the dashboard listener stays unchanged. Recommend `127.0.0.1:0` for tests + a public address for production cross-org deployments.")
 	runCmd.Flags().StringVar(&runFlagFederationOutboundBearer, "federation-outbound-bearer", "",
 		"shared bearer token sent on every cross-instance SendMessage POST (use B3 trust-list + ES256 JWT in production; this flag is the §DoD walk-friendly bootstrap path).")
 	runCmd.Flags().StringVar(&runFlagScrumMasterName, "scrummaster-name", "shepherd",
@@ -308,11 +311,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 				selfURL = "http://" + runFlagListen
 			}
 			fed := federation.New(store.AgentCards())
-			// #487 Wave T3 — wire mTLS onto Federation.HTTPClient when
-			// --federation-mtls is set. The transport presents this
-			// daemon's leaf cert + verifies peer certs against pinned
-			// CAs. When the flag is unset, federation HTTP stays
-			// plaintext (dev/test default).
+			// #487 Wave T3 + #527 Wave T3.1 — wire mTLS onto Federation
+			// outbound paths. T3 wired Federation.HTTPClient (agent-card
+			// fetches). T3.1 ALSO wires the HostedRegistryDiscoverer +
+			// FederatedDeliverer transports so EVERY outbound federation
+			// HTTP call presents this daemon's leaf cert + verifies the
+			// peer's against pinned CAs.
+			var mtlsClient *http.Client
 			if runFlagFederationMTLS {
 				orgID := runFlagFederationOrgID
 				if orgID == "" {
@@ -322,19 +327,27 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "warn: federation mTLS: %v (falling back to plaintext)\n", err)
 				} else {
-					fed.HTTPClient = &http.Client{
+					mtlsClient = &http.Client{
 						Timeout:   10 * time.Second,
 						Transport: &http.Transport{TLSClientConfig: federation.BuildClientTLSConfig(mtls)},
 					}
+					fed.HTTPClient = mtlsClient
+					rs.FederationMTLS = mtls
 					fmt.Printf("✓ Federation mTLS active (org=%s, %d pinned CAs)\n",
 						mtls.OrgID, len(mtls.PinnedCAs.Subjects()))
 				}
 			}
-			fed.Register(&federation.HostedRegistryDiscoverer{
+			// HostedRegistryDiscoverer's outbound HTTP also flows
+			// cross-org — share the mTLS transport when wired.
+			discoverer := &federation.HostedRegistryDiscoverer{
 				RegistryURL: runFlagFederationRegistryURL,
 				SelfSID:     rt.InstanceUUID(),
 				SelfURL:     selfURL,
-			})
+			}
+			if mtlsClient != nil {
+				discoverer.HTTPClient = mtlsClient
+			}
+			fed.Register(discoverer)
 			fedCtx, fedCancel := context.WithCancel(context.Background())
 			defer fedCancel()
 			go fed.Run(fedCtx)
@@ -453,6 +466,22 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			fmt.Printf("✓ HTTP/WS server + web UI on http://%s (web-dir: %s)\n", runFlagListen, runFlagWebDir)
 		} else {
 			fmt.Printf("✓ HTTP/WS server listening on http://%s (web/mobile clients)\n", runFlagListen)
+		}
+		// #527 Wave T3.1 — federation-facing mTLS listener. Separate
+		// bind so cross-org peers terminate mTLS at the dedicated
+		// surface while the dashboard listener stays plain TLS
+		// (browsers can't present client certs). The handler is the
+		// same runtimehttp mux — every API exposed to dashboards is
+		// ALSO reachable to mTLS-verified peers; access control
+		// (D3 grants, A4 extended card) applies orthogonally.
+		if runFlagFederationListen != "" && rs.FederationMTLS != nil {
+			fedAddr, fedSrv, err := startFederationListener(runFlagFederationListen, rs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: federation listener: %v (cross-org inbound disabled)\n", err)
+			} else {
+				fmt.Printf("✓ Federation mTLS listener on https://%s (cross-org peers)\n", fedAddr)
+				defer fedSrv.Close()
+			}
 		}
 	}
 
