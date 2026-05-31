@@ -63,7 +63,28 @@ type Server struct {
 	// absolute §12.1 agent_card_urls. Empty leaves URLs relative.
 	// Set via SetA2ABaseURL — wired from cmd/run.go. #474 Wave K3.
 	a2aBaseURL string
+
+	// upstreamProxy, when non-nil, replaces local dispatch with the
+	// supplied function (#477 Wave M1). chepherd-runner sets this so
+	// every tools/call received on its Unix-socket MCP server is
+	// forwarded to chepherd-daemon's authoritative MCP catalog
+	// instead of dispatched locally (the runner has no Runtime so
+	// local dispatch would NPE on every tools/call). nil = local
+	// dispatch (the daemon's default).
+	upstreamProxy UpstreamProxyFn
 }
+
+// UpstreamProxyFn is the proxy seam set by SetUpstreamProxy. Takes
+// the inbound JSON-RPC request + the dispatched agent identity;
+// returns the JSON-RPC response. Errors from transport (HTTP dial,
+// timeout) are wrapped as JSON-RPC error envelopes so callers see
+// a uniform shape.
+type UpstreamProxyFn func(method string, params json.RawMessage, agent string) (result any, errCode int, errMessage string)
+
+// SetUpstreamProxy installs the proxy fn. When set, dispatch
+// forwards instead of routing locally. Used by chepherd-runner
+// whose tool catalog lives on chepherd-daemon (#477 Wave M1).
+func (s *Server) SetUpstreamProxy(fn UpstreamProxyFn) { s.upstreamProxy = fn }
 
 // SetAuthToken configures the bearer token required on every WS upgrade
 // and /mcp/rpc request. Empty string disables enforcement.
@@ -188,6 +209,20 @@ func (s *Server) dispatchWithAgent(req *rpcReq, agent string) rpcResp {
 // emission.
 func (s *Server) dispatch(req *rpcReq) rpcResp {
 	caller := s.CurrentCaller()
+	// #477 Wave M1 — upstream proxy. chepherd-runner sets this to
+	// forward every dispatch to chepherd-daemon's authoritative MCP
+	// catalog. discovery methods (initialize, tools/list) also go
+	// upstream so the catalog the agent sees is the daemon's, not
+	// a runner-local stub.
+	if s.upstreamProxy != nil {
+		result, code, message := s.upstreamProxy(req.Method, req.Params, caller)
+		if code != 0 {
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: %s → PROXY ERROR %d: %s\n", caller, req.Method, code, message)
+			return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: code, Message: message}}
+		}
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: %s → PROXY OK\n", caller, req.Method)
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: result}
+	}
 	if req.Method == "" {
 		fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: empty method → -32600\n", caller)
 		return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: -32600, Message: "invalid request"}}

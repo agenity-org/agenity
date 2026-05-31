@@ -159,10 +159,19 @@ func run() error {
 	if cfg.authToken != "" {
 		mcp.SetAuthToken(cfg.authToken)
 	}
+	// #477 Wave M1 — when a daemon URL is configured, wire the MCP
+	// upstream proxy so every tools/list + tools/call received on
+	// the runner's Unix socket forwards to chepherd-daemon's
+	// authoritative MCP catalog. The runner has rt=nil so local
+	// dispatch would NPE on tools/call; the proxy is what makes the
+	// catalog reachable from inside the agent container.
+	if cfg.daemonURL != "" {
+		mcp.SetUpstreamProxy(makeMCPProxy(cfg.daemonURL, cfg.authToken))
+	}
 	if err := mcp.StartHTTP("unix://" + cfg.mcpSocket); err != nil {
 		return fmt.Errorf("mcp StartHTTP: %w", err)
 	}
-	log.Printf("[chepherd-runner] MCP listening on unix://%s", cfg.mcpSocket)
+	log.Printf("[chepherd-runner] MCP listening on unix://%s (proxy=%v)", cfg.mcpSocket, cfg.daemonURL != "")
 
 	// #504 — outbound WS registration with chepherd-daemon. Empty
 	// daemon-url skips registration entirely (dev mode + the

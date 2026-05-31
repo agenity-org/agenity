@@ -86,6 +86,12 @@ func (s *Server) StartHTTP(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp/ws", s.handleWS)
 	mux.HandleFunc("/mcp/rpc", s.handleRPC)
+	// #477 Wave M1 — Anthropic MCP HTTP Streamable transport
+	// canonical path. POST a single JSON-RPC frame → JSON-RPC
+	// response. Same handler body as /mcp/rpc; chepherd-runner's
+	// `.mcp.json` writers (Wave M2) will point at `/mcp` per the
+	// spec, while existing /mcp/rpc clients keep working.
+	mux.HandleFunc("/mcp", s.handleRPC)
 	mux.HandleFunc("/mcp/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
