@@ -135,6 +135,13 @@ func (stubEvents) List(_ context.Context, _ persistence.EventListOpts) ([]persis
 	return nil, nil
 }
 
+type stubAuditEvents struct{}
+
+func (stubAuditEvents) Save(_ context.Context, _ *persistence.AuditEventRecord) error { return nil }
+func (stubAuditEvents) List(_ context.Context, _ persistence.AuditEventListOpts) ([]*persistence.AuditEventRecord, error) {
+	return nil, nil
+}
+
 type stubGrants struct{}
 
 func (stubGrants) Get(_ context.Context, _ string) (*persistence.Grant, error) { return nil, nil }
@@ -192,7 +199,8 @@ func (s *minimalStore) AuthSecrets() persistence.AuthSecretRepository {
 	return s.authSecrets
 }
 func (s *minimalStore) Events() persistence.EventRepository { return stubEvents{} }
-func (s *minimalStore) Grants() persistence.RBACGrantRepository { return stubGrants{} }
+func (s *minimalStore) Grants() persistence.RBACGrantRepository       { return stubGrants{} }
+func (s *minimalStore) AuditEvents() persistence.AuditEventRepository { return stubAuditEvents{} }
 func (s *minimalStore) Tasks() persistence.TaskRepository       { return stubTasks{} }
 func (s *minimalStore) PushConfigs() persistence.PushNotificationConfigRepository {
 	return stubPushConfigs{}

@@ -286,6 +286,14 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// goes from "stub allow-all" to "real grant-gated" the moment
 		// these two lines run.
 		rs.GrantStore = store.Grants()
+		// #489 Wave AU2 — wire the audit-event store for daemon-side
+		// persistence + the GET /api/v1/audit/events query endpoint.
+		// DaemonOrgID defaults to "default" in dev; production should
+		// set CHEPHERD_DAEMON_ORG_ID env (or equivalent flag in a
+		// follow-up) — until then daemon-internal traffic + cross-org
+		// federation peers all share the same partition.
+		rs.AuditEventStore = store.AuditEvents()
+		rs.DaemonOrgID = os.Getenv("CHEPHERD_DAEMON_ORG_ID")
 		rs.GrantCheck = runtimehttp.PersistenceGrantCheck(
 			store.Grants(),
 			func(sid string) (string, bool) {

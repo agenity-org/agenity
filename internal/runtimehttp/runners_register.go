@@ -34,6 +34,7 @@
 package runtimehttp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -42,7 +43,63 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/chepherd/chepherd/internal/persistence"
 )
+
+// decodeAuditEvent parses a runner-uploaded audit.event params blob
+// into a persistence.AuditEventRecord ready for Save. Returns nil
+// when the params can't be decoded (audit emission is best-effort;
+// daemon shouldn't 5xx on malformed runner uploads).
+//
+// org_id is stamped from the receiver-daemon's DaemonOrgID at ingest
+// — cross-org events from federation peers stay scoped to the
+// receiver, not the origin daemon's org.
+//
+// Refs #489 #488.
+func decodeAuditEvent(raw json.RawMessage, orgID string) *persistence.AuditEventRecord {
+	if orgID == "" {
+		orgID = "default"
+	}
+	var ev struct {
+		EventType string    `json:"event_type"`
+		Timestamp time.Time `json:"timestamp"`
+		Caller    string    `json:"caller"`
+		Callee    string    `json:"callee"`
+		Method    string    `json:"method"`
+		LatencyMS int64     `json:"latency_ms"`
+		JTI       string    `json:"jti"`
+		Status    string    `json:"status"`
+		Error     string    `json:"error"`
+		TaskID    string    `json:"task_id"`
+	}
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return nil
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		id = uuid.New()
+	}
+	ts := ev.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	return &persistence.AuditEventRecord{
+		ID:        id.String(),
+		OrgID:     orgID,
+		EventType: ev.EventType,
+		Timestamp: ts,
+		Caller:    ev.Caller,
+		Callee:    ev.Callee,
+		Method:    ev.Method,
+		LatencyMS: ev.LatencyMS,
+		JTI:       ev.JTI,
+		Status:    ev.Status,
+		Error:     ev.Error,
+		TaskID:    ev.TaskID,
+		RawJSON:   append([]byte(nil), raw...),
+	}
+}
 
 // daemonRunnerVersion is reported back to chepherd-runner clients in
 // the register response. Kept as a const here (rather than threading
@@ -305,24 +362,33 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 				SID: row.SID, Kind: p.Kind, Body: p.Body, At: p.At,
 			})
 		case "audit.event":
-			// AU1 #488 — structured A2A call-boundary event. AU1
-			// stubs the daemon-side receiver to a stderr log line
-			// + counter increment on the runner-registry row. AU2
-			// #489 will swap this for proper persistence; AU3 #490
-			// surfaces the events in the dashboard.
-			//
-			// Wire shape locked at internal/runtime.AuditEvent —
-			// don't decode into a strict struct here (AU1's stub
-			// receiver tolerates additive evolution while AU2 is
-			// in flight); just route the body to log + counter.
+			// AU1 #488 + AU2 #489 — structured A2A call-boundary event.
+			// AU2 swaps AU1's stub-log path for real persistence via
+			// AuditEventStore (per-org partitioned at ingest). When
+			// AuditEventStore is nil (dev / unit-test), the AU1 stub
+			// log path stays active so the receiver doesn't black-hole
+			// events.
 			s.runnerReg().recordAudit(row.SID, auditEvent{
 				SID:  row.SID,
 				Kind: "a2a-event",
 				Body: string(f.Params),
 				At:   time.Now().UTC(),
 			})
-			fmt.Fprintf(os.Stderr, "[chepherd-daemon AU1] runner %s audit.event: %s\n",
-				row.SID, string(f.Params))
+			if s.AuditEventStore != nil {
+				rec := decodeAuditEvent(f.Params, s.DaemonOrgID)
+				if rec != nil {
+					// Fire-and-forget per AU1 requirement #4 — don't
+					// block the WS read loop on persistence.
+					go func(r *persistence.AuditEventRecord) {
+						if err := s.AuditEventStore.Save(context.Background(), r); err != nil {
+							fmt.Fprintf(os.Stderr, "[chepherd-daemon AU2] audit_events.Save %s: %v\n", r.ID, err)
+						}
+					}(rec)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "[chepherd-daemon AU1] runner %s audit.event: %s\n",
+					row.SID, string(f.Params))
+			}
 		default:
 			continue
 		}
