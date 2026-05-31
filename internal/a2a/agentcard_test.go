@@ -62,6 +62,68 @@ func TestServeAgentCard_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestAgentCard_Spec4OptionalFields_RoundTrip — #577 pins the §4.4
+// optional fields (provider, documentationUrl, supportedInterfaces,
+// signatures, iconUrl) round-trip through JSON unchanged. Pre-#577
+// the AgentCard struct omitted these entirely, so a spec-conformant
+// SDK decoding the card would never see them and would mark the
+// agent as incomplete.
+func TestAgentCard_Spec4OptionalFields_RoundTrip(t *testing.T) {
+	t.Parallel()
+	card := &AgentCard{
+		ProtocolVersion: "1.0",
+		Name:            "chepherd-test",
+		URL:             "https://chepherd.test/jsonrpc",
+		Version:         "0.9.4",
+		Capabilities:    AgentCapabilities{Streaming: true},
+		Provider: &AgentProvider{
+			URL:          "https://chepherd.org",
+			Organization: "chepherd",
+		},
+		DocumentationURL: "https://chepherd.org/docs",
+		SupportedInterfaces: []AgentInterface{
+			{
+				URL:             "https://chepherd.test/jsonrpc",
+				ProtocolBinding: "JSONRPC",
+				ProtocolVersion: "1.0",
+			},
+		},
+		IconURL: "https://chepherd.org/icon.png",
+	}
+	body, err := json.Marshal(card)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Decode into a plain map to assert exact wire keys (camelCase).
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	wantKeys := []string{"provider", "documentationUrl", "supportedInterfaces", "iconUrl"}
+	for _, k := range wantKeys {
+		if _, ok := raw[k]; !ok {
+			t.Errorf("wire missing %q field — A2A v1.0 §4.4 optional Agent Card field: %s", k, body)
+		}
+	}
+	// Round-trip back to AgentCard + assert fields preserved.
+	var got AgentCard
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if got.Provider == nil || got.Provider.Organization != "chepherd" {
+		t.Errorf("provider lost on round-trip: %+v", got.Provider)
+	}
+	if got.DocumentationURL != "https://chepherd.org/docs" {
+		t.Errorf("documentationUrl lost: %q", got.DocumentationURL)
+	}
+	if len(got.SupportedInterfaces) != 1 || got.SupportedInterfaces[0].ProtocolBinding != "JSONRPC" {
+		t.Errorf("supportedInterfaces lost: %+v", got.SupportedInterfaces)
+	}
+	if got.IconURL != "https://chepherd.org/icon.png" {
+		t.Errorf("iconUrl lost: %q", got.IconURL)
+	}
+}
+
 func TestServeAgentCard_RejectsNonGET(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(ServeAgentCard(&AgentCard{Name: "x"}))

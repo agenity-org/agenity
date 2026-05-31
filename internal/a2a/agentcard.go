@@ -34,6 +34,35 @@ type AgentCard struct {
 	Security           []map[string][]string     `json:"security,omitempty"`
 	SecuritySchemes    map[string]SecurityScheme `json:"securitySchemes,omitempty"`
 
+	// #577 — A2A v1.0 §4.4.1 optional Agent Card fields. Pre-#577
+	// chepherd omitted these even when the spec lists them; missing
+	// fields make a spec-conformance audit (or a strict canonical-SDK
+	// decoder) flag the card as incomplete. Refs #561 #577.
+
+	// Provider identifies the organization serving this agent. §4.4.2
+	// AgentProvider proto schema (url + organization).
+	Provider *AgentProvider `json:"provider,omitempty"`
+
+	// DocumentationURL points operators + tooling to human-readable
+	// docs for the agent. §4.4.1 documentation_url.
+	DocumentationURL string `json:"documentationUrl,omitempty"`
+
+	// SupportedInterfaces enumerates each protocol binding this agent
+	// serves at this URL. Per §4.4.1 line 370 this is REQUIRED, but
+	// the chepherd's top-level URL field (a chepherd-historical field
+	// outside spec) lets callers reach the JSON-RPC binding without
+	// this list. We populate it explicitly for spec round-trippers.
+	SupportedInterfaces []AgentInterface `json:"supportedInterfaces,omitempty"`
+
+	// Signatures hold JWS signatures of the canonical Agent Card per
+	// §4.4.7. v0.9.4 ships the field shape; signature plumbing arrives
+	// in a future Wave (#225 B2 covers JWKS publication; signing TBD).
+	Signatures []AgentCardSignature `json:"signatures,omitempty"`
+
+	// IconURL is an optional URL to a square icon for the agent. §4.4.1
+	// icon_url.
+	IconURL string `json:"iconUrl,omitempty"`
+
 	// XChepherdP2P is the open-source chepherd extension advertising
 	// P2P plumbing (signaling endpoint, ICE servers, etc.). Vanilla
 	// A2A clients ignore unknown extensions; chepherd-aware clients
@@ -54,6 +83,32 @@ type AgentCard struct {
 	// a2a-js clients use slash-camelCase (the keys). Inbound calls
 	// in either form route to the same handler. Refs #561 #568.
 	XChepherdMethodAliases map[string]string `json:"x-chepherd-method-aliases,omitempty"`
+}
+
+// AgentProvider per A2A v1.0 spec §4.4.2.
+type AgentProvider struct {
+	URL          string `json:"url"`
+	Organization string `json:"organization"`
+}
+
+// AgentInterface per A2A v1.0 spec §4.4.6. Lets the card enumerate
+// each transport binding this agent exposes (JSON-RPC, gRPC,
+// HTTP+JSON, custom URI-identified bindings per §5.8) so clients can
+// pick the binding they speak.
+type AgentInterface struct {
+	URL             string `json:"url"`
+	ProtocolBinding string `json:"protocolBinding"`
+	Tenant          string `json:"tenant,omitempty"`
+	ProtocolVersion string `json:"protocolVersion"`
+}
+
+// AgentCardSignature per A2A v1.0 spec §4.4.7. RFC 7515 JWS shape.
+// Signing pipeline is plumbed in a future Wave; this type ships so
+// the wire schema doesn't omit a spec field.
+type AgentCardSignature struct {
+	Protected string         `json:"protected"`
+	Signature string         `json:"signature"`
+	Header    map[string]any `json:"header,omitempty"`
 }
 
 // AgentCapabilities advertises which A2A features this agent supports.

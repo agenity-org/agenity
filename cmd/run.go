@@ -630,6 +630,19 @@ func newAgentCard(listenAddr string) *a2a.AgentCard {
 			"oauth2":   {Type: "oauth2"},
 			"oidc":     {Type: "openIdConnect"},
 		},
+		// #577 — A2A v1.0 §4.4 optional Agent Card fields.
+		Provider: &a2a.AgentProvider{
+			URL:          "https://chepherd.org",
+			Organization: "chepherd",
+		},
+		DocumentationURL: "https://chepherd.org/docs",
+		SupportedInterfaces: []a2a.AgentInterface{
+			{
+				URL:             "http://" + listenAddr + "/jsonrpc",
+				ProtocolBinding: "JSONRPC",
+				ProtocolVersion: "1.0",
+			},
+		},
 		XChepherdP2P:           a2a.DefaultExtension(),
 		XIOgrid:                iogridExtension(),
 		XChepherdMethodAliases: a2a.MethodAliases(),
