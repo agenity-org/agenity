@@ -84,9 +84,32 @@ type config struct {
 	allowedOrgs string
 
 	// turnSecret is the shared secret pion/turn uses to mint TURN
-	// credentials. Empty disables TURN. F6 wires the actual
-	// credential issuance flow.
+	// credentials per draft-uberti-behave-turn-rest. Empty disables
+	// TURN (the credentials endpoint returns 503; the udp listener
+	// stays a log-only stub).
 	turnSecret string
+
+	// turnRealm is the TURN realm name embedded in auth challenges
+	// (RFC 5389 §15.7). Empty → "chepherd-hub". Production
+	// deploys typically set this to the public hostname.
+	turnRealm string
+
+	// turnRelayIP is the IP address pion advertises as the relay
+	// address to clients. When empty F6 derives it from the UDP
+	// listener bind addr (sensible for single-host deploys; multi-
+	// homed production hosts MUST set this to the public IP).
+	turnRelayIP string
+
+	// turnTCPListen is the optional tcp listen address for the
+	// TURN-over-TCP fallback (UDP-blocked networks). Empty disables.
+	// Wired in a follow-up — F6 ships the udp listener + the cred
+	// URI list optionally advertises the tcp endpoint.
+	turnTCPListen string
+
+	// turnPublicHost is the externally-reachable host:port runners
+	// receive in the TURN URI list. When empty the URI uses the
+	// listen address (suitable for local-dev tests).
+	turnPublicHost string
 
 	// startupTimeout caps how long the binary waits for listeners
 	// to become ready before exiting with an error. Default 5s.
@@ -128,10 +151,11 @@ func run() error {
 	fmt.Printf("✓ chepherd-hub HTTP listening on %s://%s (version=%s, allowed-orgs=%q)\n",
 		scheme, cfg.listen, hubVersion, cfg.allowedOrgs)
 
-	// STUN + TURN pseudo-listeners (F1 stubs — F3/F6 wire real
-	// pion handlers behind these slots).
+	// STUN pseudo-listener (F1 stub — F3 wires real pion behind it).
 	stunStop := startSTUNStub(cfg)
-	turnStop := startTURNStub(cfg)
+	// #496 Wave F6 — real pion/turn server replaces F1's log-only stub.
+	turn, turnStop := startTURN(cfg)
+	srv.turn = turn
 
 	// Graceful shutdown.
 	sigs := make(chan os.Signal, 1)
@@ -166,6 +190,14 @@ func parseFlags(args []string) *config {
 	fs.StringVar(&cfg.turnListen, "turn-listen", cfg.turnListen, "TURN UDP listener (default :3478; empty disables)")
 	fs.StringVar(&cfg.allowedOrgs, "allowed-orgs", cfg.allowedOrgs, "comma-separated org allowlist (dev-empty; production REQUIRED)")
 	fs.StringVar(&cfg.turnSecret, "turn-secret", cfg.turnSecret, "TURN shared secret (env CHEPHERD_HUB_TURN_SECRET)")
+	fs.StringVar(&cfg.turnRealm, "turn-realm", envOr("CHEPHERD_HUB_TURN_REALM", ""),
+		"#496 Wave F6 — TURN realm (RFC 5389); empty defaults to \"chepherd-hub\"")
+	fs.StringVar(&cfg.turnRelayIP, "turn-relay-ip", envOr("CHEPHERD_HUB_TURN_RELAY_IP", ""),
+		"#496 Wave F6 — public IP pion advertises to clients; empty derives from listen addr (production REQUIRED on multi-homed hosts)")
+	fs.StringVar(&cfg.turnTCPListen, "turn-tcp-listen", envOr("CHEPHERD_HUB_TURN_TCP_LISTEN", ""),
+		"#496 Wave F6 — optional TURN-over-TCP listener for UDP-blocked networks (e.g. :443)")
+	fs.StringVar(&cfg.turnPublicHost, "turn-public-host", envOr("CHEPHERD_HUB_TURN_PUBLIC_HOST", ""),
+		"#496 Wave F6 — host:port runners receive in the TURN URI list (default: derive from listen addr)")
 	if err := fs.Parse(args); err != nil {
 		return cfg
 	}
@@ -180,11 +212,13 @@ func envOr(key, fallback string) string {
 }
 
 // server holds runtime state for the hub binary. F1 kept it
-// minimal; F5 #495 added the signaling queue. F6/F7/F8 will add
-// TURN allocations + cached cards here.
+// minimal; F5 #495 added the signaling queue; F6 #496 added the
+// TURN relay handle. F7/F8 will add cached cards + JWT federation
+// state here.
 type server struct {
 	cfg       *config
 	signaling *signalingQueue
+	turn      *turnRelay // nil when TURN disabled (no --turn-secret)
 }
 
 func newServer(cfg *config) *server {
@@ -204,6 +238,8 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/v1/signaling/answer", s.makeSignalingHandler(SignalingAnswer))
 	mux.HandleFunc("/v1/signaling/ice", s.makeSignalingHandler(SignalingICE))
 	mux.HandleFunc("/v1/signaling/pending", s.handleSignalingPending)
+	// #496 Wave F6 — TURN credentials mint endpoint.
+	mux.HandleFunc("/v1/turn/credentials", s.handleTURNCredentials)
 	mux.HandleFunc("/v1/relay/", s.handleRelay)
 	return mux
 }
@@ -219,12 +255,13 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"stubs": map[string]string{
 			"cards": "F5",
 			"stun":  "F3",
-			"turn":  "F6",
 			"relay": "F7+F8",
 		},
 		"implemented": map[string]string{
 			"signaling": "F5 #495",
+			"turn":      "F6 #496",
 		},
+		"turn": s.turnStatus(),
 	})
 }
 
@@ -280,20 +317,5 @@ func startSTUNStub(cfg *config) func() {
 	return func() { close(stop) }
 }
 
-// startTURNStub starts a log-only placeholder for the TURN relay.
-// F6 #496 wires the real pion/turn server behind this slot.
-func startTURNStub(cfg *config) func() {
-	if cfg.turnListen == "" {
-		return func() {}
-	}
-	if cfg.turnSecret == "" {
-		log.Printf("[chepherd-hub] TURN stub disabled (F1 scaffold; --turn-secret empty; F6 will wire pion/turn on udp:%s)", cfg.turnListen)
-	} else {
-		log.Printf("[chepherd-hub] TURN stub (F6 will wire pion/turn on udp:%s)", cfg.turnListen)
-	}
-	stop := make(chan struct{})
-	go func() {
-		<-stop
-	}()
-	return func() { close(stop) }
-}
+// startTURNStub removed in #496 Wave F6 — replaced by startTURN in
+// turn.go which wires the real pion/turn/v5 server.
