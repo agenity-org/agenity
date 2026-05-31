@@ -112,14 +112,15 @@ func (m *MethodBodies) handleGetAuthenticatedExtendedCard(req JSONRPCRequest) JS
 		return errorResp(req.ID, ErrCodeInternalError, "AgentCard provider not wired")
 	}
 	if req.AuthSubject == "" {
-		// -32001 is the established auth-failure JSON-RPC code per the
-		// §15.3 auth-required chain + routes.go AuthMiddleware's
-		// writeAuthError shape. Returned with HTTP 200 in the JSON-RPC
-		// envelope; AuthMiddleware never let an unauthenticated request
-		// reach the body when fully wired, so this branch only fires
-		// when the middleware is unwired (dev mode) AND the caller is
-		// asking for the extended card anyway. Conservative: deny.
-		return errorResp(req.ID, -32001, "authentication required: agent/getAuthenticatedExtendedCard needs a valid Bearer JWT")
+		// #576 — ErrCodeAuthRequired = -32011 (chepherd transport
+		// code) per routes.go writeAuthError. Pre-#576 used -32001
+		// here which collides with the A2A v1.0 §5.4 TaskNotFoundError.
+		// Returned with HTTP 200 in the JSON-RPC envelope; AuthMiddleware
+		// never let an unauthenticated request reach the body when fully
+		// wired, so this branch only fires when the middleware is
+		// unwired (dev mode) AND the caller is asking for the extended
+		// card anyway. Conservative: deny.
+		return errorResp(req.ID, ErrCodeAuthRequired, "authentication required: agent/getAuthenticatedExtendedCard needs a valid Bearer JWT")
 	}
 	card := m.AgentCardFn()
 	ext := &AuthenticatedExtension{

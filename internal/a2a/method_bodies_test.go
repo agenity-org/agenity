@@ -48,12 +48,12 @@ func call(t *testing.T, r *Router, method string, params any) JSONRPCResponse {
 	return h(req)
 }
 
-// TestGetTask_NotFound pins the not-found error code — A2A §5.4 -32001.
+// TestGetTask_NotFound pins the not-found error code.
 func TestGetTask_NotFound(t *testing.T) {
 	r, _ := newTestRouter(t)
 	resp := call(t, r, "tasks/get", getTaskParams{TaskID: "missing"})
 	if resp.Error == nil || resp.Error.Code != ErrCodeTaskNotFound {
-		t.Errorf("expected ErrCodeTaskNotFound (-32001), got %+v", resp.Error)
+		t.Errorf("expected -32001 TaskNotFound, got %+v", resp.Error)
 	}
 }
 
@@ -90,21 +90,19 @@ func TestSendStreamingMessage_PersistsAndStreams(t *testing.T) {
 	}
 }
 
-// TestCancelTask_TerminalStateIsNoOp pins the spec invariant: terminal
-// states (completed / failed / canceled) are not transitioned again.
-func TestCancelTask_TerminalStateIsNoOp(t *testing.T) {
+// TestCancelTask_TerminalStateReturnsTaskNotCancelable — #576 pins the
+// spec invariant: A2A v1.0 §3.1.5 + §5.4 mandate
+// TaskNotCancelableError (-32002) when canceling a task already in
+// a terminal state. Pre-#576 chepherd silently returned the task as
+// success, masking the invalid transition.
+func TestCancelTask_TerminalStateReturnsTaskNotCancelable(t *testing.T) {
 	r, mb := newTestRouter(t)
-	// Seed a completed task directly.
 	if err := mb.Store.Tasks().Save(context.Background(), seedTask("t-completed", string(TaskStateCompleted))); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	resp := call(t, r, "tasks/cancel", cancelTaskParams{TaskID: "t-completed"})
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %+v", resp.Error)
-	}
-	result := resp.Result.(cancelTaskResult)
-	if result.Task.Status.State != TaskStateCompleted {
-		t.Errorf("expected COMPLETED preserved, got %q", result.Task.Status.State)
+	if resp.Error == nil || resp.Error.Code != ErrCodeTaskNotCancelable {
+		t.Errorf("expected ErrCodeTaskNotCancelable (-32002), got %+v", resp.Error)
 	}
 }
 
@@ -170,10 +168,10 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 	if !delResp.Result.(deletePushConfigResult).OK {
 		t.Errorf("Delete returned ok=false")
 	}
-	// Get-after-delete is not found — A2A §5.4 -32001.
+	// Get-after-delete is not found.
 	gone := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{ID: cfgID})
 	if gone.Error == nil || gone.Error.Code != ErrCodeTaskNotFound {
-		t.Errorf("expected ErrCodeTaskNotFound (-32001) after delete, got %+v", gone.Error)
+		t.Errorf("expected -32001 TaskNotFound after delete, got %+v", gone.Error)
 	}
 }
 
@@ -205,7 +203,10 @@ func TestGetAuthenticatedExtendedCard(t *testing.T) {
 	}
 }
 
-// TestStreamingMethods_WithoutSubscribeFn returns ErrCodeUnsupportedOperation (-32004).
+// TestStreamingMethods_WithoutSubscribeFn — streaming methods return
+// ErrCodeUnsupportedOperation (-32004) when the runner has no SSE
+// binding wired (SubscribeFn nil). Per A2A v1.0 §5.4 this is the
+// correct mapping: "operation not supported on this runner".
 func TestStreamingMethods_WithoutSubscribeFn(t *testing.T) {
 	store, err := sqlite.NewStore(context.Background(), ":memory:")
 	if err != nil {
@@ -216,7 +217,7 @@ func TestStreamingMethods_WithoutSubscribeFn(t *testing.T) {
 	r := NewRouter()
 	_ = mb.Register(r)
 	for _, m := range []string{"message/stream", "tasks/resubscribe"} {
-		resp := call(t, r, m, map[string]any{"id": "x", "message": map[string]any{"contextId": "c", "parts": []any{}}})
+		resp := call(t, r, m, map[string]any{"taskId": "x", "message": map[string]any{"contextId": "c", "parts": []any{}}})
 		if resp.Error == nil || resp.Error.Code != ErrCodeUnsupportedOperation {
 			t.Errorf("%s should return ErrCodeUnsupportedOperation (-32004) without SubscribeFn, got %+v", m, resp.Error)
 		}
