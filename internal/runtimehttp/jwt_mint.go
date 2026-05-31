@@ -63,7 +63,7 @@ func (s *Server) jwtMint(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.ES256Priv == nil {
+	if s.KeyStore == nil && s.ES256Priv == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"error": "es256 signing key unavailable",
 		})
@@ -108,7 +108,17 @@ func (s *Server) jwtMint(w http.ResponseWriter, r *http.Request) {
 		"chepherd_grant_id":     grantID,
 		"chepherd_rate_window":  rateWindow,
 	}
-	token, err := auth.SignJWS(s.ES256Priv, claims)
+	// #505 Wave T2 — prefer the KeyStore.Sign path so the JWS header
+	// carries the active key's per-key kid (enabling kid-aware
+	// verification across rotations). Fall back to the legacy single-
+	// key SignJWS when KeyStore is unwired (unit tests, smoke boots).
+	var token string
+	var err error
+	if s.KeyStore != nil {
+		token, err = s.KeyStore.Sign(claims)
+	} else {
+		token, err = auth.SignJWS(s.ES256Priv, claims)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": "sign: " + err.Error(),
