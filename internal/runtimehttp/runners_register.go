@@ -286,23 +286,46 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(raw, &f); err != nil {
 			continue
 		}
-		if f.Method != "audit" {
+		switch f.Method {
+		case "audit":
+			// R1 legacy: freeform {kind, body, at}. Used for the
+			// PTY-output stream + boot/shutdown diagnostic events.
+			var p struct {
+				Kind string    `json:"kind"`
+				Body string    `json:"body"`
+				At   time.Time `json:"at"`
+			}
+			if err := json.Unmarshal(f.Params, &p); err != nil {
+				continue
+			}
+			if p.At.IsZero() {
+				p.At = time.Now().UTC()
+			}
+			s.runnerReg().recordAudit(row.SID, auditEvent{
+				SID: row.SID, Kind: p.Kind, Body: p.Body, At: p.At,
+			})
+		case "audit.event":
+			// AU1 #488 — structured A2A call-boundary event. AU1
+			// stubs the daemon-side receiver to a stderr log line
+			// + counter increment on the runner-registry row. AU2
+			// #489 will swap this for proper persistence; AU3 #490
+			// surfaces the events in the dashboard.
+			//
+			// Wire shape locked at internal/runtime.AuditEvent —
+			// don't decode into a strict struct here (AU1's stub
+			// receiver tolerates additive evolution while AU2 is
+			// in flight); just route the body to log + counter.
+			s.runnerReg().recordAudit(row.SID, auditEvent{
+				SID:  row.SID,
+				Kind: "a2a-event",
+				Body: string(f.Params),
+				At:   time.Now().UTC(),
+			})
+			fmt.Fprintf(os.Stderr, "[chepherd-daemon AU1] runner %s audit.event: %s\n",
+				row.SID, string(f.Params))
+		default:
 			continue
 		}
-		var p struct {
-			Kind string    `json:"kind"`
-			Body string    `json:"body"`
-			At   time.Time `json:"at"`
-		}
-		if err := json.Unmarshal(f.Params, &p); err != nil {
-			continue
-		}
-		if p.At.IsZero() {
-			p.At = time.Now().UTC()
-		}
-		s.runnerReg().recordAudit(row.SID, auditEvent{
-			SID: row.SID, Kind: p.Kind, Body: p.Body, At: p.At,
-		})
 	}
 }
 

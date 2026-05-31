@@ -66,7 +66,7 @@ type a2aEndpoint struct {
 // stateDir is where the runner's task-store SQLite file lives.
 //
 // Caller must Close() the returned endpoint at shutdown.
-func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string, ptySession *session.Session, jwtCfg *auth.RunnerJWTMiddlewareConfig) (*a2aEndpoint, error) {
+func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string, ptySession *session.Session, jwtCfg *auth.RunnerJWTMiddlewareConfig, auditEmitter runtime.AuditEmitter) (*a2aEndpoint, error) {
 	if sid == "" {
 		return nil, fmt.Errorf("a2a endpoint: --sid is required (no scaffold mode for A2A — the URL path /a2a/<sid> depends on it)")
 	}
@@ -130,10 +130,12 @@ func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string
 	// daemon's directory tells siblings which sid lives at which
 	// runner address.
 	mux := http.NewServeMux()
-	// #486 Wave T1 + #465 Wave R4 — JWT verification middleware on
-	// /jsonrpc. Agent Card paths stay UNAUTHENTICATED (discovery
-	// surface per A2A v1.0 spec). jwtCfg nil = R4-only dev mode.
+	// Middleware order outer → inner: JWT → Audit → Router.
+	// JWT runs FIRST so audit middleware reads the sub claim via
+	// auth.SubjectFromRunnerContext. nil jwtCfg = dev mode; nil
+	// emitter = no daemon URL. #486 T1 + #488 AU1 + #465 R4.
 	jsonrpcHandler := http.Handler(router)
+	jsonrpcHandler = auditMiddleware(auditEmitter, sid, jsonrpcHandler)
 	if jwtCfg != nil {
 		jsonrpcHandler = auth.JWTRunnerMiddleware(jwtCfg, jsonrpcHandler)
 	}

@@ -44,6 +44,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
+	"github.com/chepherd/chepherd/internal/runtime"
 )
 
 func main() {
@@ -279,10 +280,8 @@ func run() error {
 	// depends on the sid).
 	var a2aSrv *a2aEndpoint
 	if cfg.a2aListen != "" && cfg.sid != "" {
-		// #486 Wave T1 + #465 Wave R4 — JWT verification + PTY
-		// session both threaded into startA2AEndpoint. Activated
-		// when --require-jwt set; defaults disabled for dev/scaffold
-		// back-compat.
+		// #486 T1 + #465 R4 + #488 AU1 — JWT + PTY + audit-emitter
+		// all threaded into startA2AEndpoint.
 		var jwtCfg *auth.RunnerJWTMiddlewareConfig
 		if cfg.requireJWT {
 			jwtCfg = &auth.RunnerJWTMiddlewareConfig{
@@ -290,7 +289,11 @@ func run() error {
 				JWKSClient: auth.NewJWKSClient(nil, 0),
 			}
 		}
-		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.name, cfg.a2aBaseURL, cfg.daemonURL, cfg.stateDir, ptySession, jwtCfg)
+		var emitter runtime.AuditEmitter
+		if dc != nil {
+			emitter = dc
+		}
+		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.name, cfg.a2aBaseURL, cfg.daemonURL, cfg.stateDir, ptySession, jwtCfg, emitter)
 		if err != nil {
 			return fmt.Errorf("a2a endpoint: %w", err)
 		}

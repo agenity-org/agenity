@@ -13,16 +13,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/chepherd/chepherd/internal/runtime"
 )
 
 // daemonClient wraps the WS connection to chepherd-daemon.
 type daemonClient struct {
-	conn   *websocket.Conn
-	closed chan struct{}
+	conn    *websocket.Conn
+	closed  chan struct{}
+	writeMu sync.Mutex // serialise concurrent WriteJSON from audit emitters + pty pump
 }
 
 // registerWithDaemon dials the daemon's /api/v1/runners/register
@@ -99,7 +104,9 @@ func registerWithDaemon(daemonURL, authToken string, req runnerRegisterReq) (*da
 	return &daemonClient{conn: conn, closed: make(chan struct{})}, resp.Result, nil
 }
 
-// SendAudit pushes a notification frame to the daemon.
+// SendAudit pushes a notification frame to the daemon. R1 contract
+// — used for PTY-output stream + freeform diagnostic events. AU1
+// adds SendAuditEvent for structured §10-step-24 events.
 func (c *daemonClient) SendAudit(kind, body string) error {
 	if c == nil || c.conn == nil {
 		return nil
@@ -113,7 +120,41 @@ func (c *daemonClient) SendAudit(kind, body string) error {
 			"at":   time.Now().UTC().Format(time.RFC3339Nano),
 		},
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.conn.WriteJSON(frame)
+}
+
+// SendAuditEvent pushes a structured §10-step-24 audit event to the
+// daemon as a JSON-RPC notification with method="audit.event". This
+// is AU1's wire transport for the audit.sent / audit.received events
+// the runner emits on A2A call boundaries.
+//
+// Fire-and-forget at the caller: writes errors are returned for the
+// caller to log if they want, but the A2A response path SHOULD NOT
+// block on this (caller wraps in a goroutine).
+func (c *daemonClient) SendAuditEvent(e runtime.AuditEvent) error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	frame := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "audit.event",
+		"params":  e,
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteJSON(frame)
+}
+
+// EmitAuditEvent satisfies the runtime.AuditEmitter interface so the
+// runner's inbound A2A middleware + outbound client wrapper can push
+// events without coupling to daemonClient. Fire-and-forget — errors
+// are logged to stderr but never returned.
+func (c *daemonClient) EmitAuditEvent(e runtime.AuditEvent) {
+	if err := c.SendAuditEvent(e); err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-runner] audit.event write failed: %v\n", err)
+	}
 }
 
 // Close shuts down the underlying WS conn. Idempotent.
