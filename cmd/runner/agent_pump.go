@@ -1,87 +1,87 @@
-// cmd/runner/agent_pump.go — chepherd-runner's child-process spawn +
-// stdout/stderr → daemon audit-event pump. #504 Wave R1.
+// cmd/runner/agent_pump.go — Wave R4 #465 PTY-backed agent spawn
+// inside the runner process. Replaces R1's exec-with-StdoutPipe
+// path so the runner is the canonical PTY-owner per
+// V0.9.2-ARCHITECTURE §5 #3 + §22.
 //
-// SCOPE: simplest realisation of "runner hosts the agent + streams
-// PTY output to daemon". For R1 we exec the configured flavor via
-// agentcatalog.Lookup (resolves the binary + default argv), wire its
-// stdout/stderr into a single bytes channel, and forward each chunk as
-// a `kind: "pty_output"` audit notification. Real PTY ownership
-// (creack/pty TTY allocation, ANSI-clean streaming, attach-WS sharing
-// with dashboard) lands in Waves R3/R4 — R1 ships the daemon-side
-// fan-out wiring that those Waves consume.
+// One PTY, two consumers:
+//   - audit fan-out to daemon (R1 contract via daemonClient.SendAudit)
+//   - StreamBroker fan-out to A2A SSE consumers (R4 contract via
+//     a2a.StreamBroker, wired by cmd/runner/a2a_endpoint.go)
 //
-// Refs #504 Wave R1.
+// Refs #465 #504.
 package main
 
 import (
-	"bufio"
-	"io"
 	"log"
-	"os/exec"
 
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
+	"github.com/chepherd/chepherd/internal/ptyhost/session"
 )
 
-// runAgentAndPump exec's the agent flavor + streams its output to the
-// daemon via dc.SendAudit. Blocks until the agent exits.
+// spawnAgentSession allocates a PTY-backed session.Session for the
+// configured agent flavor. Returns nil + nil if no agent is
+// configured — that path stays valid for the scaffold / e2e modes
+// where the runner is exercised without a real agent.
 //
-// Errors are logged (not fatal) — Wave R1 stays robust against an
-// unknown agent slug or missing binary; the runner just doesn't pump.
-// Subsequent Waves can hard-fail or restart depending on operator
-// policy.
-func runAgentAndPump(cfg *runnerConfig, dc *daemonClient) {
+// Caller closes the returned session on shutdown.
+func spawnAgentSession(cfg *runnerConfig) (*session.Session, error) {
+	if cfg.agentSlug == "" {
+		return nil, nil
+	}
 	agent, err := agentcatalog.Lookup(cfg.agentSlug)
 	if err != nil {
 		log.Printf("[chepherd-runner] agentcatalog.Lookup %q: %v — skipping agent spawn", cfg.agentSlug, err)
-		return
+		return nil, nil
 	}
-	argv := append([]string{}, agent.DefaultArgs...)
+	argv := append([]string{agent.Binary}, agent.DefaultArgs...)
 	if len(cfg.agentArgs) > 0 {
-		argv = cfg.agentArgs
+		argv = append([]string{agent.Binary}, cfg.agentArgs...)
 	}
-	cmd := exec.Command(agent.Binary, argv...)
-	stdout, err := cmd.StdoutPipe()
+	id := cfg.sid
+	if id == "" {
+		id = "runner-pty"
+	}
+	sess, err := session.New(id, session.Spec{
+		Command: argv,
+		Rows:    24,
+		Cols:    80,
+	})
 	if err != nil {
-		log.Printf("[chepherd-runner] StdoutPipe: %v", err)
-		return
+		return nil, err
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		log.Printf("[chepherd-runner] StderrPipe: %v", err)
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		log.Printf("[chepherd-runner] start %s: %v", agent.Binary, err)
-		return
-	}
-	log.Printf("[chepherd-runner] agent started: pid=%d binary=%s argv=%v", cmd.Process.Pid, agent.Binary, argv)
-	if dc != nil {
-		_ = dc.SendAudit("event", "[chepherd-runner] agent started")
-	}
-
-	go pumpStream("stdout", stdout, dc)
-	go pumpStream("stderr", stderr, dc)
-
-	if err := cmd.Wait(); err != nil {
-		log.Printf("[chepherd-runner] agent exited: %v", err)
-	} else {
-		log.Printf("[chepherd-runner] agent exited cleanly")
-	}
-	if dc != nil {
-		_ = dc.SendAudit("event", "[chepherd-runner] agent exited")
-	}
+	log.Printf("[chepherd-runner] agent PTY-session started: sid=%s binary=%s argv=%v", id, agent.Binary, argv)
+	return sess, nil
 }
 
-// pumpStream reads lines from r and forwards each as a pty_output
-// audit event. Line-by-line for human readability; raw-chunk
-// streaming would lose word-wrap context the dashboard cares about.
-func pumpStream(streamName string, r io.Reader, dc *daemonClient) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if dc != nil {
-			_ = dc.SendAudit("pty_output", line)
-		}
+// pumpSessionToAudit forwards each chunk read from the PTY session
+// to the daemon as a `pty_output` audit event. R1's contract — kept
+// alongside R4's broker fan-out so the daemon's audit log doesn't
+// regress.
+//
+// Caller subscribes to sess.Subscribe(N) and passes the resulting
+// Subscriber. nil sub disables the pump. nil dc disables the fan-out
+// (back-compat for runner started without --daemon-url).
+func pumpSessionToAudit(sess *session.Session, dc *daemonClient) {
+	if sess == nil || dc == nil {
+		return
 	}
+	sub, _, err := sess.Subscribe(64)
+	if err != nil {
+		log.Printf("[chepherd-runner] pumpSessionToAudit subscribe: %v", err)
+		return
+	}
+	go func() {
+		defer sess.Unsubscribe(sub)
+		for {
+			select {
+			case chunk, ok := <-sub.Ch:
+				if !ok {
+					return
+				}
+				_ = dc.SendAudit("pty_output", string(chunk))
+			case <-sub.Done:
+				return
+			}
+		}
+	}()
 }
