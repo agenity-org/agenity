@@ -41,9 +41,15 @@ type Backend interface {
 	Delete(key string) error
 }
 
+// #522 — single mutex protects ALL keychain globals (installed +
+// chosen). Pre-#522 install.go's installedMu protected `installed`
+// while `chosen` was read here under once.Do (which doesn't lock-
+// out concurrent reads), AND Install() wrote `chosen = nil` outside
+// any lock. -race detector found the data race.
 var (
-	once    sync.Once
-	chosen  Backend
+	mu       sync.Mutex
+	chosen   Backend
+	chosenOK bool
 )
 
 // Active returns the backend selected for this host. Selects lazily on
@@ -54,20 +60,24 @@ var (
 //	Windows: file fallback (Win32 binding pending)
 //	other:   file fallback
 func Active() Backend {
+	mu.Lock()
+	defer mu.Unlock()
 	// #322 H6.1 — explicit install bypasses the platform chain.
-	if override := activeOverride(); override != nil {
-		return override
+	if installed != nil {
+		return installed
 	}
-	once.Do(func() {
+	if !chosenOK {
 		candidates := platformBackends()
 		for _, b := range candidates {
 			if b.Available() {
 				chosen = b
-				return
+				chosenOK = true
+				return chosen
 			}
 		}
 		chosen = newFileBackend()
-	})
+		chosenOK = true
+	}
 	return chosen
 }
 

@@ -38,6 +38,11 @@ import (
 )
 
 func TestP0_474_ListPeersMCP_TeamScope(t *testing.T) {
+	// #522 — opt into BareExec spawn so the test doesn't depend on
+	// rootless-podman keyring quota / chepherd-agent image avail.
+	// K3's team-filter contract is what's being tested; the agent
+	// process is incidental.
+	t.Setenv("CHEPHERD_FORCE_BAREEXEC", "1")
 	h := bootE2EHarness(t)
 	const team = "p0-474-team"
 	const caller = "p0-474-caller"
@@ -165,6 +170,8 @@ func TestP0_474_ListPeersMCP_TeamScope(t *testing.T) {
 // the spawn handler's JoinTeam call; the test asserts the
 // real-world result rather than the un-reachable empty-team path.
 func TestP0_474_ListPeersMCP_NoPeersInTeam(t *testing.T) {
+	// #522 — see TestP0_474_ListPeersMCP_TeamScope comment.
+	t.Setenv("CHEPHERD_FORCE_BAREEXEC", "1")
 	h := bootE2EHarness(t)
 	const caller = "p0-474-lonely"
 	const teamWithOnlyCaller = "p0-474-solo-team"

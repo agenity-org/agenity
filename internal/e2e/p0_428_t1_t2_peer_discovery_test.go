@@ -252,6 +252,16 @@ func bootE2EHarness(t *testing.T) *e2eHarness {
 		"CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns",
 		fmt.Sprintf("CHEPHERD_MCP_URL=ws://host.containers.internal:%d/mcp/ws", mcpPort),
 	)
+	// #522 — when CHEPHERD_FORCE_BAREEXEC=1 is set by a specific
+	// test BEFORE calling bootE2EHarness (via t.Setenv), forward it
+	// to the spawned chepherd binary so its DetectRuntime() picks
+	// BareExec. Tests asserting team-routing / MCP envelope
+	// CONTRACTS (P0_474, T5) opt in this way without forcing it on
+	// tests that exercise PodmanRuntime materialization paths (T1,
+	// T2, T7, T9 read CLAUDE.md from agent home dirs).
+	if os.Getenv("CHEPHERD_FORCE_BAREEXEC") == "1" {
+		env = append(env, "CHEPHERD_FORCE_BAREEXEC=1")
+	}
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
