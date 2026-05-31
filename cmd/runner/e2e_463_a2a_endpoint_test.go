@@ -201,7 +201,7 @@ func postRPC(t *testing.T, url string, body map[string]any, assertion string) st
 	if parsed.Error != nil {
 		t.Fatalf("%s FAIL: RPC error %d: %s", assertion, parsed.Error.Code, parsed.Error.Message)
 	}
-	if parsed.Result.Task.Status.State != "working" {
+	if parsed.Result.Task.Status.State != "TASK_STATE_WORKING" {
 		t.Errorf("%s FAIL: task state = %q, want working (body=%s)", assertion, parsed.Result.Task.Status.State, rawBody)
 	}
 	return parsed.Result.Task.ID

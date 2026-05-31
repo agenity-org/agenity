@@ -561,7 +561,10 @@ func rewriteResultStateToFailed(path, reason string) error {
 	if status == nil {
 		status = map[string]any{}
 	}
-	status["state"] = "failed"
+	// #573 — write the spec-conformant ProtoJSON state per A2A v1.0
+	// §5.5. The on-disk envelope must stay in the same format as the
+	// agent runner originally emitted (SCREAMING_SNAKE_CASE).
+	status["state"] = "TASK_STATE_FAILED"
 	status["message"] = map[string]any{
 		"role": "agent",
 		"kind": "message",

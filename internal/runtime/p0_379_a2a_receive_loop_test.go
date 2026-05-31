@@ -137,7 +137,7 @@ func TestP0_379_TaskCompleter_FlipsStateAndAppendsHistory(t *testing.T) {
 	if len(repo.saved) != 1 {
 		t.Fatalf("seed: repo.saved len = %d, want 1", len(repo.saved))
 	}
-	if repo.saved[0].State != "working" {
+	if repo.saved[0].State != "TASK_STATE_WORKING" {
 		t.Fatalf("seed: State = %q, want working", repo.saved[0].State)
 	}
 
@@ -154,7 +154,7 @@ func TestP0_379_TaskCompleter_FlipsStateAndAppendsHistory(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("repo.Get after completer: %v / nil=%v", err, got == nil)
 	}
-	if got.State != "completed" {
+	if got.State != "TASK_STATE_COMPLETED" {
 		t.Errorf("after completer: State = %q, want completed", got.State)
 	}
 
@@ -208,7 +208,7 @@ func TestP0_379_TaskCompleter_IdempotentOnCompletedRow(t *testing.T) {
 	completer(working.ID, "second response — should be ignored")
 
 	got, _ := repo.Get(context.Background(), working.ID)
-	if got.State != "completed" {
+	if got.State != "TASK_STATE_COMPLETED" {
 		t.Errorf("State = %q, want completed", got.State)
 	}
 	var out struct {

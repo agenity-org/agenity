@@ -154,8 +154,8 @@ func TestV094Walk_H5_AuthRequiredAgainstRealClaude(t *testing.T) {
 	if err := json.Unmarshal(envBody, &env); err != nil {
 		t.Fatalf("decode envelope: %v\n%s", err, envBody)
 	}
-	if env.Status.State != "auth-required" {
-		t.Errorf("envelope Status.State = %q, want auth-required", env.Status.State)
+	if env.Status.State != "TASK_STATE_AUTH_REQUIRED" {
+		t.Errorf("envelope Status.State = %q, want TASK_STATE_AUTH_REQUIRED (#573 ProtoJSON)", env.Status.State)
 	}
 	if env.Status.Details == nil {
 		t.Fatalf("Status.Details = nil from real claude — H5 detector failed on real bytes")

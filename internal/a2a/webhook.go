@@ -138,7 +138,12 @@ func deliverWebhook(client *http.Client, cfg *persistence.PushNotificationConfig
 // matchesFilters reports whether the event should be delivered to
 // a config given its Filters slice. Empty filters fire on every
 // event; non-empty filters require at least one match. Filter
-// syntax: "state:<STATE>" or bare "<STATE>".
+// syntax: "state:<STATE>" or bare "<STATE>". The filter <STATE>
+// value may use either the short form ("completed", "input-required")
+// or the spec ProtoJSON form ("TASK_STATE_COMPLETED",
+// "TASK_STATE_INPUT_REQUIRED"); the matcher normalizes both ends to
+// the short form before comparing so the API stays ergonomic while
+// wire bytes follow A2A v1.0 §5.5. Refs #573.
 func matchesFilters(filters []string, ev StreamEvent) bool {
 	if len(filters) == 0 {
 		return true
@@ -146,18 +151,31 @@ func matchesFilters(filters []string, ev StreamEvent) bool {
 	if ev.Task == nil {
 		return false
 	}
-	current := strings.ToLower(string(ev.Task.Status.State))
+	current := normalizeStateForFilter(string(ev.Task.Status.State))
 	for _, f := range filters {
 		want := strings.ToLower(strings.TrimSpace(f))
 		want = strings.TrimPrefix(want, "state:")
 		if want == "" {
 			continue
 		}
+		want = normalizeStateForFilter(want)
 		if want == current || want == strings.ToLower(ev.Type) {
 			return true
 		}
 	}
 	return false
+}
+
+// normalizeStateForFilter strips the optional "task_state_" ProtoJSON
+// prefix + lowercases the remainder so filter authors can use either
+// form. "TASK_STATE_COMPLETED" → "completed"; "completed" → "completed";
+// "INPUT_REQUIRED" → "input_required"; "input-required" →
+// "input_required" (kebab normalized to underscore for round-trip).
+func normalizeStateForFilter(s string) string {
+	out := strings.ToLower(strings.TrimSpace(s))
+	out = strings.TrimPrefix(out, "task_state_")
+	out = strings.ReplaceAll(out, "-", "_")
+	return out
 }
 
 // compile-time guard that fmt is still imported for diagnostic

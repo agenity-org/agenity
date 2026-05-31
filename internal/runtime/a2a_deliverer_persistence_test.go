@@ -108,7 +108,7 @@ func TestA2ADeliverer_persistTask_StampsRunnerSIDAndState(t *testing.T) {
 	if got.RunnerSID != "runner-A" {
 		t.Errorf("saved.RunnerSID = %q, want runner-A", got.RunnerSID)
 	}
-	if got.State != "working" {
+	if got.State != "TASK_STATE_WORKING" {
 		t.Errorf("saved.State = %q, want working", got.State)
 	}
 	if got.Method != "message/send" {
@@ -137,7 +137,7 @@ func TestA2ADeliverer_persistTask_FailedStateAlsoPersists(t *testing.T) {
 	if len(repo.saved) != 1 {
 		t.Fatalf("repo.saved len = %d, want 1", len(repo.saved))
 	}
-	if repo.saved[0].State != "failed" {
+	if repo.saved[0].State != "TASK_STATE_FAILED" {
 		t.Errorf("failed Task persisted with State = %q, want failed", repo.saved[0].State)
 	}
 }

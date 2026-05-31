@@ -251,7 +251,7 @@ func TestE2E_466_EPIC453_DiscoveryToRunnerWalk(t *testing.T) {
 	if parsed.Result.Task.ID == "" {
 		t.Errorf("W5 FAIL: response missing task.id (body=%s)", raw)
 	}
-	if parsed.Result.Task.Status.State != "working" {
+	if parsed.Result.Task.Status.State != "TASK_STATE_WORKING" {
 		t.Errorf("W5 FAIL: task state = %q, want working", parsed.Result.Task.Status.State)
 	}
 }

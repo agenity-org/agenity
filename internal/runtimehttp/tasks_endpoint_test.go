@@ -52,7 +52,7 @@ func TestTasksList_ReturnsSeededTasks(t *testing.T) {
 	}
 	defer store.Close()
 	if err := store.Tasks().Save(ctx, &persistence.Task{
-		ID: "task-seeded", RunnerSID: "runner-1", State: "working",
+		ID: "task-seeded", RunnerSID: "runner-1", State: "TASK_STATE_WORKING",
 		Method: "message/send",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
