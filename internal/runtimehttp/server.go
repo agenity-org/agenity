@@ -93,6 +93,12 @@ type Server struct {
 	// the mint endpoint's wire shape.
 	GrantCheck GrantCheckFn
 
+	// GrantStore backs the §13 grant CRUD endpoints + the production
+	// GrantCheck implementation (#469 Wave D3). nil disables the CRUD
+	// surface (responds 503) — the JWT mint endpoint stays operational
+	// in stub-allow-all mode in that case.
+	GrantStore persistence.RBACGrantRepository
+
 	// v0.9.3 #225 row C1 — federation orchestrator + cached agent-card
 	// store. Federation is nil when --federation-registry-url is empty;
 	// AgentCardStore is always set when persistence is wired (used by
@@ -218,6 +224,12 @@ func (s *Server) Handler() http.Handler {
 	// Wave D3 wires the real persistence-backed check.
 	mux.HandleFunc("/api/v1/jwt/mint", s.jwtMint)
 	mux.HandleFunc("/api/v1/agent-types", s.agentsCatalog)
+	// #469 Wave D3 — RBAC grant CRUD (§13). Operator-facing surface
+	// the dashboard Federation tab consumes to create / list / revoke
+	// peering grants. The production GrantCheck is wired to this same
+	// store via cmd/run.go so JWT mint (#468) actually enforces grants.
+	mux.HandleFunc("/api/v1/grants", s.grantsRoot)
+	mux.HandleFunc("/api/v1/grants/", s.grantByID)
 	// #194 — Skill Library
 	mux.HandleFunc("/api/v1/skills", s.skillsRoot)
 	mux.HandleFunc("/api/v1/skills/", s.skillByID)

@@ -270,6 +270,25 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		rs.AgentCardStore = store.AgentCards()
 		rs.TaskStore = store.Tasks()
 		rs.SessionStore = store.Sessions()
+		// #469 Wave D3 — wire the RBAC grant store + the production
+		// GrantCheck that consults it. The mint endpoint (#468 Wave D2)
+		// goes from "stub allow-all" to "real grant-gated" the moment
+		// these two lines run.
+		rs.GrantStore = store.Grants()
+		rs.GrantCheck = runtimehttp.PersistenceGrantCheck(
+			store.Grants(),
+			func(sid string) (string, bool) {
+				if rt == nil {
+					return "", false
+				}
+				for _, info := range rt.List() {
+					if info.ID == sid || info.Name == sid {
+						return info.Team, info.Team != ""
+					}
+				}
+				return "", false
+			},
+		)
 
 		// #225 row C1 — federation peer registry. Boot Federation when
 		// `--federation-registry-url` is set; cmd/run.go derives the
