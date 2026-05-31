@@ -39,6 +39,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
 )
@@ -63,7 +64,7 @@ type a2aEndpoint struct {
 // stateDir is where the runner's task-store SQLite file lives.
 //
 // Caller must Close() the returned endpoint at shutdown.
-func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string) (*a2aEndpoint, error) {
+func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string, jwtCfg *auth.RunnerJWTMiddlewareConfig) (*a2aEndpoint, error) {
 	if sid == "" {
 		return nil, fmt.Errorf("a2a endpoint: --sid is required (no scaffold mode for A2A — the URL path /a2a/<sid> depends on it)")
 	}
@@ -116,13 +117,21 @@ func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string
 	// daemon's directory tells siblings which sid lives at which
 	// runner address.
 	mux := http.NewServeMux()
-	mux.Handle("/a2a/"+sid+"/jsonrpc", router)
+	// #486 Wave T1 — JWT verification middleware on /jsonrpc. The
+	// Agent Card paths stay UNAUTHENTICATED (discovery surface MUST
+	// be reachable without prior auth per A2A v1.0 spec). Healthz
+	// also stays open (operator smoke).
+	//
+	// jwtCfg is nil unless requireJWT was supplied (empty means
+	// back-compat with R2's open-trust mode for dev / unit tests that
+	// don't have a daemon to mint tokens against).
+	jsonrpcHandler := http.Handler(router)
+	if jwtCfg != nil {
+		jsonrpcHandler = auth.JWTRunnerMiddleware(jwtCfg, jsonrpcHandler)
+	}
+	mux.Handle("/a2a/"+sid+"/jsonrpc", jsonrpcHandler)
 	// #464 Wave R3 — per-session Agent Card at the §12.1 well-known
-	// URI. Mount BOTH the canonical AgentCardPath (the spec-mandated
-	// hyphenated form) AND AgentCardAliasPath (the suffix-less
-	// shortcut peer agents commonly try first; #378 P1). The handler
-	// just marshals the prebuilt card so both paths serve identical
-	// bytes.
+	// URI. UNAUTHENTICATED (discovery precedes auth).
 	cardHandler := a2a.ServeAgentCard(&card)
 	mux.Handle("/a2a/"+sid+a2a.AgentCardPath, cardHandler)
 	mux.Handle("/a2a/"+sid+a2a.AgentCardAliasPath, cardHandler)
