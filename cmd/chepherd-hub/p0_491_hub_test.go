@@ -59,20 +59,22 @@ func TestWaveF1_Healthz_ReportsBinaryAndVersion(t *testing.T) {
 	expected := map[string]string{
 		"cards": "F5",
 		"stun":  "F3",
-		"relay": "F7+F8",
 	}
 	for k, want := range expected {
 		if stubs[k] != want {
 			t.Errorf("stubs[%q] = %v, want %s", k, stubs[k], want)
 		}
 	}
-	// F5 #495 + F6 #496 — signaling and turn are no longer stubs.
+	// F5 #495 + F6 #496 + F7 #497 — signaling/turn/relay no longer stubs.
 	impl, _ := body["implemented"].(map[string]any)
 	if impl == nil || impl["signaling"] != "F5 #495" {
 		t.Errorf("body.implemented.signaling = %v, want F5 #495", impl)
 	}
 	if impl["turn"] != "F6 #496" {
 		t.Errorf("body.implemented.turn = %v, want F6 #496", impl["turn"])
+	}
+	if impl["relay"] != "F7 #497" {
+		t.Errorf("body.implemented.relay = %v, want F7 #497", impl["relay"])
 	}
 }
 
@@ -102,24 +104,9 @@ func TestWaveF1_Cards_Returns501WithF5TODORef(t *testing.T) {
 // real handlers (see TestWaveF5_*). The F1-era 501 assertion is
 // retired.
 
-func TestWaveF1_Relay_Returns501WithF7F8TODORef(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(newServer(&config{}).mux())
-	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/v1/relay/some/proxied/path")
-	if err != nil {
-		t.Fatalf("GET /v1/relay/...: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", resp.StatusCode)
-	}
-	var body map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	if got := fmt.Sprint(body["todo_ref"]); got != "F7 #497 + F8 #498" {
-		t.Errorf("todo_ref = %q, want F7 #497 + F8 #498", got)
-	}
-}
+// #497 Wave F7 — /v1/relay/* was a 501 stub at F1; F7 wires real
+// reverse-proxy handlers (see TestWaveF7_*). The F1-era 501
+// assertion is retired.
 
 // ─── Flag + env parsing ───────────────────────────────────────────
 
@@ -211,7 +198,9 @@ func TestV094Walk_F1_BinaryRespondsOnEveryRoute(t *testing.T) {
 		{"POST", "/v1/signaling/answer", 401, ""},
 		{"POST", "/v1/signaling/ice", 401, ""},
 		{"GET", "/v1/signaling/pending", 401, ""},
-		{"GET", "/v1/relay/anything", 501, "F7 #497 + F8 #498"},
+		// /v1/relay/{org}/* — auth-checked first, returns 401 in
+		// no-org test request. Proves the F1 501 stub was replaced.
+		{"GET", "/v1/relay/anything", 401, ""},
 	}
 	for _, c := range cases {
 		var resp *http.Response

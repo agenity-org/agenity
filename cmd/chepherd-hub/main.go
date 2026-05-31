@@ -166,6 +166,7 @@ func run() error {
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
 	srv.signaling.CloseAll()
+	srv.tunnels.closeAll()
 	stunStop()
 	turnStop()
 	return nil
@@ -213,18 +214,20 @@ func envOr(key, fallback string) string {
 
 // server holds runtime state for the hub binary. F1 kept it
 // minimal; F5 #495 added the signaling queue; F6 #496 added the
-// TURN relay handle. F7/F8 will add cached cards + JWT federation
-// state here.
+// TURN relay handle; F7 #497 added the reverse-proxy tunnel
+// manager. F8 will add JWT federation state here.
 type server struct {
 	cfg       *config
 	signaling *signalingQueue
-	turn      *turnRelay // nil when TURN disabled (no --turn-secret)
+	turn      *turnRelay     // nil when TURN disabled (no --turn-secret)
+	tunnels   *tunnelManager // #497 Wave F7 — reverse-proxy tunnels
 }
 
 func newServer(cfg *config) *server {
 	return &server{
 		cfg:       cfg,
 		signaling: newSignalingQueue(),
+		tunnels:   newTunnelManager(),
 	}
 }
 
@@ -240,7 +243,10 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/v1/signaling/pending", s.handleSignalingPending)
 	// #496 Wave F6 — TURN credentials mint endpoint.
 	mux.HandleFunc("/v1/turn/credentials", s.handleTURNCredentials)
-	mux.HandleFunc("/v1/relay/", s.handleRelay)
+	// #497 Wave F7 — reverse-proxy tunnel + tunnel control.
+	// /v1/relay/tunnel  : runner-initiated WS upgrade
+	// /v1/relay/{org}/* : inbound HTTP forwarded over tunnel
+	mux.HandleFunc("/v1/relay/", s.handleRelayInbound)
 	return mux
 }
 
@@ -255,13 +261,14 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"stubs": map[string]string{
 			"cards": "F5",
 			"stun":  "F3",
-			"relay": "F7+F8",
 		},
 		"implemented": map[string]string{
 			"signaling": "F5 #495",
 			"turn":      "F6 #496",
+			"relay":     "F7 #497",
 		},
-		"turn": s.turnStatus(),
+		"turn":    s.turnStatus(),
+		"tunnels": s.tunnelsStatus(),
 	})
 }
 
@@ -285,20 +292,7 @@ func (s *server) handleCards(w http.ResponseWriter, r *http.Request) {
 // Implemented in signaling.go per #495 Wave F5.
 
 // ─── /v1/relay/* ──────────────────────────────────────────────────
-
-const notImplRelayF7F8 = `endpoint stub — Wave F7 #497 + F8 #498 will implement the reverse-proxy fallback (peers behind hard NATs that can't reach DataChannel use HTTP relay through this hub). See V0.9.2-ARCHITECTURE.md §10 Pattern 2 Phase 9.`
-
-func (s *server) handleRelay(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":    "not implemented",
-		"todo_ref": "F7 #497 + F8 #498",
-		"detail":   notImplRelayF7F8,
-		"method":   r.Method,
-		"path":     r.URL.Path,
-	})
-}
+// Implemented in tunnel.go per #497 Wave F7.
 
 // ─── STUN + TURN stubs ────────────────────────────────────────────
 
