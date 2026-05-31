@@ -1208,6 +1208,27 @@ func (r *Runtime) snapshotPeersForBriefing(team, selfName string) []PeerBrief {
 	return out
 }
 
+// UpsertSessionInfoForTest inserts or replaces a SessionInfo record
+// in the live registry, bypassing the full Spawn path. Intended only
+// for tests that need to assert behavior dependent on SessionInfo
+// presence (e.g. the v0.9.4 §12.2 directory endpoint, #467) without
+// paying the cost of provisioning a real container.
+//
+// The bare-Server tests in runtimehttp_test.go cannot reach r.info
+// directly because it is package-private to runtime. This seam is
+// the minimum surface needed to inject SessionInfo from external
+// packages. Production code MUST NOT call it.
+//
+// Refs #467.
+func (r *Runtime) UpsertSessionInfoForTest(info *SessionInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.info == nil {
+		r.info = map[string]*SessionInfo{}
+	}
+	r.info[info.ID] = info
+}
+
 func (r *Runtime) List() []*SessionInfo {
 	r.mu.Lock()
 	type pair struct {

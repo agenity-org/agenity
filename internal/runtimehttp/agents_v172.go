@@ -4,6 +4,8 @@
 //
 //	GET    /api/v1/agents          list (filters: operator, agent_type, deleted)
 //	POST   /api/v1/agents          create (mints UUID, provisions PVC handle)
+//	GET    /api/v1/agents/         curated directory of live runners,
+//	                               v0.9.4 §12.2 shape (#467 Wave D1)
 //	GET    /api/v1/agents/{id}     fetch one
 //	PATCH  /api/v1/agents/{id}     update — label is the ONLY mutable field
 //	DELETE /api/v1/agents/{id}     soft-delete (PVC retained 7d)
@@ -19,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/agent"
 )
 
@@ -76,14 +79,20 @@ func (s *Server) agentsEntity(w http.ResponseWriter, r *http.Request) {
 }
 
 // agentEntityByID handles single-record routes: /api/v1/agents/{id}.
+// When the path is bare /api/v1/agents/ (no id), it delegates to
+// agentsDirectory to serve the v0.9.4 §12.2 curated directory.
 func (s *Server) agentEntityByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/agents/")
+	idStr := strings.SplitN(path, "/", 2)[0]
+	if idStr == "" {
+		s.agentsDirectory(w, r)
+		return
+	}
 	store := s.rt.AgentRegistry()
 	if store == nil {
 		http.Error(w, "agent registry not initialised", http.StatusInternalServerError)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/agents/")
-	idStr := strings.SplitN(path, "/", 2)[0]
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		http.Error(w, "invalid agent id", http.StatusBadRequest)
@@ -157,4 +166,54 @@ func (s *Server) agentEntityByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// directoryEntry is the v0.9.4 §12.2 wire shape for a single agent.
+// JSON field names are spec-frozen — do NOT rename without an ADR.
+type directoryEntry struct {
+	SID          string `json:"sid"`
+	Name         string `json:"name"`
+	AgentCardURL string `json:"agent_card_url"`
+}
+
+// agentsDirectory serves GET /api/v1/agents/ per V0.9.2-ARCHITECTURE.md
+// §12.2: a curated directory of all live runners in this daemon's org.
+//
+// Source: today's live session registry (rt.List()). When Wave R6/R7
+// lands the runner-WS-registration table, the data source switches
+// server-side without changing the wire shape.
+//
+// agent_card_url is a stub URL templated per §12.1 well-known URI
+// pattern, using this daemon as a stand-in until Wave R3 ships
+// per-session Agent Cards on the runner processes themselves. The
+// URL shape is stable; only the host segment migrates.
+//
+// Refs #467.
+func (s *Server) agentsDirectory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		scheme = p
+	}
+	host := r.Host
+	entries := []directoryEntry{}
+	if s.rt != nil {
+		for _, info := range s.rt.List() {
+			if info.Exited {
+				continue
+			}
+			entries = append(entries, directoryEntry{
+				SID:          info.ID,
+				Name:         info.Name,
+				AgentCardURL: scheme + "://" + host + "/a2a/" + info.ID + a2a.AgentCardPath,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": entries})
 }
