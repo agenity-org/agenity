@@ -274,7 +274,28 @@
         agent: resolvedAgent,
         team: selection?.teamName,
         role: 'worker',
-        cwd: '/home/chepherd/repos',
+        // #596 — thread Stage 2 Repo selection through to backend cwd.
+        // Was hardcoded '/home/chepherd/repos' (container-only path)
+        // which (per #594) breaks host-direct deploy: cwd doesn't
+        // exist → os/exec fork ENOENT → misleading 'fork/exec podman:
+        // no such file' error.
+        //
+        // Now: prefer operator's Stage 2 Repo selection (full_name
+        // → /home/chepherd/repos/<full_name>) so Stage 5 spawns into
+        // the actual repo dir. Backend (#594 fix) translates
+        // /home/chepherd/* → host $HOME equivalent + pre-validates
+        // cwd exists with actionable error if missing.
+        //
+        // selection.repo shape: { kind, full_name?, clone_url?, ... }
+        // — full_name is the canonical identifier across builtin +
+        // external providers (see Stage2Repo.svelte:17 doc).
+        cwd: selection?.repo?.full_name
+          ? `/home/chepherd/repos/${selection.repo.full_name}`
+          : '/home/chepherd/repos',
+        // Pass provider_id when present so backend resolveProviderCwd
+        // can do the smarter clone-path resolution for external/embedded
+        // providers. Fallback (empty) keeps the existing $HOME default.
+        provider_id: selection?.repo?.provider_id || selection?.repo?.token_id || '',
         role_id: memberRole(m),
         owned_skills: ownedSkills,
         owned_skills_scope: m.owned_skills_scope || {},
