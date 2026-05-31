@@ -361,6 +361,10 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// task state transitions. nil disables streaming (returns
 		// -32004).
 		streamBroker := a2a.NewStreamBroker()
+		// #482 Wave A3 — wire the push-notification repository so
+		// every broker.Publish call also POSTs the event to all
+		// registered webhooks for the task. async + non-blocking.
+		streamBroker.PushConfigStore = store.PushConfigs()
 		rs.StreamBroker = streamBroker
 		// #225 row A3 — wire the broker into the A2ADeliverer so
 		// PTY output for each delivered task flows through SSE
@@ -378,6 +382,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			AgentCardFn: func() a2a.AgentCard { return *newAgentCard(runFlagListen) },
 			RunnerSID:   rt.InstanceUUID(),
 			SubscribeFn: streamBroker.SubscribeFn(),
+			// #482 Wave A3 — handler-driven state transitions (cancel
+			// is the v0.9.4 example; future input-required, etc.)
+			// publish through the broker so SSE subscribers see them
+			// AND any registered push-notification webhooks fire.
+			PublishFn: func(taskID string, ev a2a.StreamEvent) {
+				streamBroker.Publish(taskID, ev)
+			},
 		}
 		if err := methodBodies.Register(a2aRouter); err != nil {
 			return fmt.Errorf("a2a: register method bodies: %w", err)
