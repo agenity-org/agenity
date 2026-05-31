@@ -154,29 +154,21 @@ func TestWaveA1_StreamingPOST_LivePublishesArriveAsFrames(t *testing.T) {
 	}
 }
 
-func TestWaveA1_JSONAccept_FallsThroughToTwoCallPattern(t *testing.T) {
+// TestWaveA1_JSONAccept_StillReturnsSSE — #569 contract: spec §9.4.2
+// mandates Content-Type: text/event-stream unconditionally for
+// SendStreamingMessage. The pre-#569 Accept-header gate that routed
+// `Accept: application/json` requests to the two-call JSON+streamId
+// pattern was a spec violation: the spec does not condition the
+// response Content-Type on the request Accept header for streaming
+// methods. With #569, when the StreamingHandler is wired, both
+// Accept values get SSE.
+func TestWaveA1_JSONAccept_StillReturnsSSE(t *testing.T) {
 	t.Parallel()
 	srv, _, _, _ := newStreamingTestServer(t)
 	resp := postStreamRequest(t, srv.URL, false) // Accept: application/json
 	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
-		t.Errorf("Content-Type = %q, want application/json (two-call fallback)", ct)
-	}
-	var rpc JSONRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpc); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if rpc.Error != nil {
-		t.Fatalf("unexpected error: %+v", rpc.Error)
-	}
-	// result has streamId — the two-call entry-point.
-	resultMap, _ := rpc.Result.(map[string]any)
-	if resultMap == nil {
-		// json.Decode into JSONRPCResponse leaves Result as map[string]any.
-		t.Fatalf("result type = %T, want map", rpc.Result)
-	}
-	if resultMap["streamId"] == nil || resultMap["streamId"] == "" {
-		t.Errorf("streamId missing in two-call fallback result: %v", resultMap)
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("Content-Type = %q, want text/event-stream (#569 spec §9.4.2)", ct)
 	}
 }
 
