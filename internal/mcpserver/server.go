@@ -57,6 +57,12 @@ type Server struct {
 	// (#208) makes this per-runner-process and passes through
 	// context.Context.
 	lastCaller string
+
+	// a2aBaseURL is the daemon's externally-reachable base URL
+	// (scheme://host[:port]) used by chepherd.list_peers to template
+	// absolute §12.1 agent_card_urls. Empty leaves URLs relative.
+	// Set via SetA2ABaseURL — wired from cmd/run.go. #474 Wave K3.
+	a2aBaseURL string
 }
 
 // SetAuthToken configures the bearer token required on every WS upgrade
@@ -255,6 +261,17 @@ func (s *Server) toolList() []map[string]any {
 			},
 		}},
 		{"name": "chepherd.list", "description": "Enumerate sessions. Args: team (string, optional filter).", "inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"team": map[string]any{"type": "string"},
+			},
+		}},
+		// #474 Wave K3 — V0.9.2-ARCHITECTURE §10 Pattern 1 step 1.
+		// Returns the §12.2 Agent Card directory shape {sid, name,
+		// agent_card_url} for peers in the CALLER's team (or the
+		// `team` arg override). Distinct from chepherd.list which
+		// returns session metadata for ALL teams.
+		{"name": "chepherd.list_peers", "description": "Enumerate Agent Cards for runners in your team. Returns {sid, name, agent_card_url} per peer (excludes yourself). The agent_card_url points at the §12.1 well-known URI; resolve with A2A's SendMessage / GetTask. Args: team (string, optional — overrides caller's own team scope). Distinct from chepherd.list which returns session metadata for ALL teams globally.", "inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"team": map[string]any{"type": "string"},
@@ -509,6 +526,35 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			})
 		}
 		resp.Result = map[string]any{"sessions": out}
+	case "list_peers":
+		// #474 Wave K3 — V0.9.2-ARCHITECTURE §10 Pattern 1 step 1.
+		// Returns the §12.2 Agent Card directory shape
+		// {sid, name, agent_card_url} for peers in the CALLER's team
+		// (or the explicit `team` arg if set).
+		//
+		// Source: rt.List() filtered by team membership + caller
+		// exclusion. Same data path as the daemon's
+		// /api/v1/agents/ directory handler (#467 Wave D1
+		// agentsDirectory) — wire shape matched verbatim. When Wave
+		// R6/R7 lands the runner-WS registration table, the data
+		// source switches server-side without changing the shape.
+		var a struct {
+			Team string `json:"team"`
+		}
+		_ = json.Unmarshal(args, &a)
+		caller := s.CurrentCaller()
+		teamFilter := a.Team
+		if teamFilter == "" {
+			// Resolve caller's own team from the runtime registry.
+			// Empty team → empty result, NOT global — list_peers is
+			// scoped by design (chepherd.list is the global tool).
+			_, callerInfo := s.rt.Get(caller)
+			if callerInfo != nil {
+				teamFilter = callerInfo.Team
+			}
+		}
+		peers := buildListPeersEntries(s.rt, caller, teamFilter, s.a2aBaseURL)
+		resp.Result = map[string]any{"peers": peers, "team": teamFilter}
 	case "set_scorecard":
 		var a struct {
 			Name           string
