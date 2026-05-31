@@ -169,8 +169,11 @@ func TestP0_504_RegisterMintsSID_AndListSurfaces(t *testing.T) {
 	if row.A2ABaseURL != "http://127.0.0.1:9091" {
 		t.Errorf("M5 FAIL: row.a2a_base_url = %q", row.A2ABaseURL)
 	}
-	if row.AuditEventsRcv != 3 {
-		t.Errorf("M5 FAIL: row.audit_events_received = %d, want 3", row.AuditEventsRcv)
+	// 3 client-sent + 1 daemon-side synchronous "registered" event
+	// (emitted in handleRunnerRegister to avoid the CI race that
+	// failed PR #507's first build).
+	if row.AuditEventsRcv != 4 {
+		t.Errorf("M5 FAIL: row.audit_events_received = %d, want 4 (3 client-sent audit + 1 synchronous daemon-side 'registered')", row.AuditEventsRcv)
 	}
 }
 

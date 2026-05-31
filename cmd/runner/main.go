@@ -177,7 +177,14 @@ func run() error {
 		if cfg.sid == "" {
 			cfg.sid = resp.SID
 		}
-		_ = dc.SendAudit("event", "[chepherd-runner] registered sid="+cfg.sid)
+		// #504 — "registered" audit event is emitted on the DAEMON
+		// side synchronously inside handleRunnerRegister (see
+		// internal/runtimehttp/runners_register.go). Previously this
+		// line client-side-emitted via fire-and-forget SendAudit,
+		// which raced SIGTERM in CI. Per V0.9.2-ARCH §5 #8 the daemon
+		// owns the audit log; "registered" is a daemon observation
+		// not a runner-uploaded event. Wave AU (later) wires runner-
+		// uploaded audits for SendMessage call events.
 	}
 
 	// #504 — agent spawn + PTY pump. The runner's reason for being

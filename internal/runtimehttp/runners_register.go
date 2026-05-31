@@ -235,6 +235,35 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	row := s.runnerReg().upsert(params)
 	fmt.Fprintf(os.Stderr, "[chepherd-daemon] runner registered: sid=%s agent_slug=%s version=%s\n",
 		row.SID, row.AgentSlug, row.RunnerVersion)
+	// #504 — emit the "registered" audit event SYNCHRONOUSLY here on
+	// the daemon side, BEFORE writing the register response. Pre-fix
+	// the runner emitted this via a fire-and-forget SendAudit call
+	// after the response read, which raced SIGTERM in CI: the runner
+	// process exited before the write goroutine flushed → daemon row
+	// AuditEventsRcv stayed 0 → e2e test failed with row.audit_events
+	// _received=0.
+	//
+	// Per V0.9.2-ARCH §5 #8 the audit log store lives inside
+	// chepherd-daemon — "registered" is a daemon-side observation,
+	// not a runner-uploaded event. Wave AU (later) wires runner-
+	// uploaded audits for SendMessage call events where the runner
+	// is the authoritative emitter; that direction stays runner-
+	// driven. "registered" is daemon-driven.
+	//
+	// 4-layer RCA closure:
+	//   TRIGGER: client-side fire-and-forget SendAudit raced SIGTERM
+	//   INCIDENT-MGMT: 1006 abnormal close at daemon-side meant runner
+	//                  didn't quiesce cleanly post-register
+	//   DEFENSE: this synchronous-emit-on-daemon path removes the race
+	//            structurally (no client-side audit-flush needed for
+	//            "registered"); CI green proves it
+	//   CONTAINMENT: this commit
+	s.runnerReg().recordAudit(row.SID, auditEvent{
+		SID:  row.SID,
+		Kind: "event",
+		Body: fmt.Sprintf("registered sid=%s agent_slug=%s version=%s", row.SID, row.AgentSlug, row.RunnerVersion),
+		At:   row.RegisteredAt,
+	})
 	_ = conn.WriteJSON(rpcFrame{
 		JSONRPC: "2.0", ID: req.ID,
 		Result: runnerRegisterResp{
