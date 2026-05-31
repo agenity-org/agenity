@@ -86,6 +86,16 @@ type Server struct {
 	JWKSBody  []byte
 	ES256Priv *ecdsa.PrivateKey
 
+	// KeyStore is the v0.9.4 #505 Wave T2 daemon-owned multi-key
+	// signing store with rotation + overlap window. When non-nil it
+	// supersedes the legacy single-key JWKSBody + ES256Priv fields:
+	// JWKS handler serves KeyStore.JWKS() dynamically, jwt mint signs
+	// via KeyStore.Sign (per-key kid). Runners never carry their own
+	// signing keys; they verify inbound JWTs by fetching this daemon's
+	// JWKS. Legacy fields are retained as fallback for unit tests that
+	// construct Server without persistence.
+	KeyStore *auth.KeyStore
+
 	// GrantCheck is the RBAC dispatch seam for POST /api/v1/jwt/mint
 	// (#468 Wave D2). nil = default allow-all so the JWT pipeline is
 	// exercisable end-to-end before the grant store lands. Wave D3
@@ -285,8 +295,15 @@ func (s *Server) Handler() http.Handler {
 			validator = &authProviderValidator{provider: s.Auth}
 		}
 		a2a.RegisterRoutes(mux, s.A2ACard, s.A2ARouter, validator, s.StreamBroker)
-		// #225 row B2 — JWKS public-key publication.
-		a2a.RegisterJWKS(mux, s.JWKSBody)
+		// #505 Wave T2 — JWKS publication. When KeyStore is wired, the
+		// JWKS endpoint serves the full multi-key document dynamically
+		// (active + retired-within-overlap). The legacy static-body
+		// path stays as fallback for unit tests + back-compat boots.
+		if s.KeyStore != nil {
+			mux.HandleFunc(a2a.JWKSPath, s.jwksDynamic)
+		} else {
+			a2a.RegisterJWKS(mux, s.JWKSBody)
+		}
 	}
 
 	// Claude OAuth credentials (the "Claude account" picker — see R5 / #136)

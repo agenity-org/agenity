@@ -383,22 +383,32 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("a2a: register method bodies: %w", err)
 		}
 		rs.A2ARouter = a2aRouter
-		// v0.9.3 #225 row B2 — ES256 keypair lifecycle. Load (or mint
-		// on first boot) the instance's signing key from
-		// AuthSecretRepository + publish the public half at
-		// /.well-known/jwks.json so peers can verify inbound JWTs
-		// without out-of-band key sharing. Failure is non-fatal — when
-		// persistence is unreachable, JWKS endpoint stays unmounted
-		// and B3 per-peer JWT signing simply falls back to the
-		// unsigned bearer (the same path as today).
-		if priv, err := auth.LoadOrCreateES256(context.Background(), store.AuthSecrets()); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: es256: %v (JWKS endpoint disabled)\n", err)
-		} else if jwks, err := auth.PublicJWK(priv); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: es256 jwks marshal: %v\n", err)
+		// #505 Wave T2 — daemon-owned ES256 KeyStore with rotation +
+		// overlap window. Supersedes the single-key LoadOrCreateES256
+		// path. The store migrates the legacy "a2a-es256-priv" row on
+		// first boot so existing instances upgrade without losing the
+		// in-flight token verification capability.
+		//
+		// Failure is non-fatal — when persistence is unreachable, JWKS
+		// stays unmounted and JWT mint reports 503 (same posture as
+		// the pre-T2 ES256-disabled path).
+		if ks, err := auth.LoadOrCreateKeyStore(context.Background(), store.AuthSecrets(), 0); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: es256 keystore: %v (JWKS endpoint disabled)\n", err)
 		} else {
-			rs.JWKSBody = jwks
-			rs.ES256Priv = priv
-			fmt.Printf("✓ ES256 signing key loaded; JWKS public at /.well-known/jwks.json (#225 B2)\n")
+			rs.KeyStore = ks
+			// Populate the legacy fields so any code path that still
+			// reads them (test fixtures, BareExec smoke) keeps
+			// functioning. The canonical sources are KeyStore.JWKS()
+			// for the JWKS endpoint and KeyStore.Sign for JWT mint.
+			if jwks, jerr := ks.JWKS(); jerr == nil {
+				rs.JWKSBody = jwks
+			}
+			if active, aerr := ks.Active(); aerr == nil {
+				if priv, perr := active.Priv(); perr == nil {
+					rs.ES256Priv = priv
+				}
+			}
+			fmt.Printf("✓ ES256 KeyStore loaded; JWKS public at /.well-known/jwks.json (#505 Wave T2)\n")
 		}
 		// Vault — open (or create) in the state directory
 		if vlt, err := vault.Open(filepath.Join(stateDir, "vault.json")); err != nil {
