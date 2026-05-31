@@ -114,9 +114,15 @@ func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string
 	// signing keys. Empty daemonURL leaves the JWKS reference
 	// relative (peers resolve against the daemon they discovered
 	// the card through).
+	//
+	// #587 — daemonURL arrives as `ws://...` / `wss://...` because
+	// the runner uses WebSocket transport to register with the
+	// daemon. But JWKS is an HTTP resource — peers can't fetch it
+	// via the ws:// scheme. Translate ws→http / wss→https so the
+	// emitted JWKS URL is dereferenceable.
 	daemonJWKSURL := ""
 	if daemonURL != "" {
-		daemonJWKSURL = joinBaseAndPath(daemonURL, a2a.JWKSPath)
+		daemonJWKSURL = joinBaseAndPath(httpFromWS(daemonURL), a2a.JWKSPath)
 	}
 	card := buildRunnerAgentCard(sid, name, baseURL, daemonJWKSURL)
 	methodBodies := &a2a.MethodBodies{
@@ -308,6 +314,28 @@ func buildRunnerAgentCard(sid, runnerName, baseURL, daemonJWKSURL string) a2a.Ag
 			return ext
 		}(),
 		XChepherdMethodAliases: a2a.MethodAliases(),
+	}
+}
+
+// httpFromWS translates ws:// → http://, wss:// → https://. Used
+// when surfacing a URL in an Agent Card field that peers will
+// dereference via HTTP (e.g. JWKS, well-known doc). Idempotent;
+// leaves non-ws schemes unchanged.
+//
+// Per #587: chepherd-runner registers with chepherd-daemon over
+// WebSocket so daemonURL arrives as ws://chepherd:9090. The
+// daemon's JWKS resource sits at the same host:port over HTTP
+// — peers can't dereference ws://...:9090/.well-known/jwks.json
+// (libcurl returns "Protocol \"ws\" not supported"). Translation
+// keeps the Agent Card's JWKS reference dereferenceable.
+func httpFromWS(u string) string {
+	switch {
+	case len(u) > 5 && u[:5] == "wss:/":
+		return "https" + u[3:]
+	case len(u) > 4 && u[:4] == "ws:/":
+		return "http" + u[2:]
+	default:
+		return u
 	}
 }
 
