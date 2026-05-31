@@ -214,7 +214,7 @@ func runDoctorMCP() error {
 	// Step 1: env vars
 	url := os.Getenv("CHEPHERD_MCP_URL")
 	if url == "" {
-		url = "ws://chepherd:9090/mcp/ws"
+		url = "ws://127.0.0.1:9090/mcp/ws"
 	}
 	tok := os.Getenv("CHEPHERD_TOKEN")
 	netMode := os.Getenv("CHEPHERD_CONTAINER_NETWORK")

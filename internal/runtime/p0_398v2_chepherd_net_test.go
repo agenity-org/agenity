@@ -27,7 +27,7 @@ import (
 
 // TestP0_398v2_AgentNetworkMode_DefaultsToChepherdNet pins the new
 // default. agentNetworkMode() with no env override should return
-// "chepherd-net", not "slirp4netns:port_handler=slirp4netns".
+// "container:chepherd", not "slirp4netns:port_handler=slirp4netns".
 func TestP0_398v2_AgentNetworkMode_DefaultsToChepherdNet(t *testing.T) {
 	// Explicit unset to defeat any inherited env from the test
 	// harness; t.Setenv("", "") would set empty val, not unset.
@@ -39,14 +39,14 @@ func TestP0_398v2_AgentNetworkMode_DefaultsToChepherdNet(t *testing.T) {
 		}
 	}()
 	got := agentNetworkMode()
-	want := "chepherd-net"
+	want := "container:chepherd"
 	if got != want {
 		t.Errorf("agentNetworkMode() = %q, want %q (#398 v2 default supersedes #365 slirp4netns)", got, want)
 	}
 }
 
 // TestP0_398v2_SpawnArgs_AttachesAgentToChepherdNet — concrete test
-// that PodmanRuntime.SpawnArgs places `--network chepherd-net` in
+// that PodmanRuntime.SpawnArgs places `--network container:chepherd` in
 // the argv. Without this, agents would be on the default per-pod
 // network + couldn't resolve the `chepherd` name.
 func TestP0_398v2_SpawnArgs_AttachesAgentToChepherdNet(t *testing.T) {
@@ -66,7 +66,7 @@ func TestP0_398v2_SpawnArgs_AttachesAgentToChepherdNet(t *testing.T) {
 			if i+1 >= len(argv) {
 				t.Fatal("--network has no value")
 			}
-			if argv[i+1] != "chepherd-net" {
+			if argv[i+1] != "container:chepherd" {
 				t.Errorf("--network value = %q, want chepherd-net", argv[i+1])
 			}
 			sawNetwork = true

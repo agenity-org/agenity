@@ -117,31 +117,33 @@ case "${NETWORK_BACKEND}" in
     done
     ;;
 esac
+# #414 architectural fix — agent containers now SHARE chepherd's network
+# namespace via --network=container:chepherd. Agent reaches MCP at
+# 127.0.0.1:9090 via loopback in the same netns. No CNI, no netavark,
+# no slirp4netns gateway hops, no port forwards. Works on every podman
+# version with shared-netns support (essentially all of them).
+#
+# The chepherd container itself still uses chepherd-net (when CNI/netavark
+# work) OR slirp4netns (fallback) — both publish 9090 to host so operator
+# can curl from host. Agents bypass this entirely via shared netns.
+#
+# AGENT_NETWORK_ENV propagates the runtime's matching defaults: when an
+# operator wants to OVERRIDE the shared-netns architecture (e.g., agents
+# on a separate K8s node, multi-host federation), they set
+# CHEPHERD_CONTAINER_NETWORK explicitly + the runtime honors it.
+AGENT_NETWORK_ENV=(-e "CHEPHERD_CONTAINER_NETWORK=container:chepherd" -e "CHEPHERD_MCP_URL=ws://127.0.0.1:9090/mcp/ws")
 if [ "${USE_CHEPHERD_NET}" -eq 1 ]; then
-  # `podman network create` is idempotent via `|| true` — re-runs
-  # across operator bounces don't error if the network already exists.
   podman network create chepherd-net 2>/dev/null || true
   NETWORK_ARGS=(--network chepherd-net)
-  AGENT_NETWORK_ENV=(-e "CHEPHERD_CONTAINER_NETWORK=chepherd-net" -e "CHEPHERD_MCP_URL=ws://chepherd:9090/mcp/ws")
   HOST_PORT_BIND="127.0.0.1"
-  echo "→ Network: chepherd-net (backend=${NETWORK_BACKEND}, agents reach MCP via container DNS)" >&2
+  echo "→ chepherd container: chepherd-net (backend=${NETWORK_BACKEND})" >&2
+  echo "→ agent containers: container:chepherd (shared netns — bypasses CNI plumbing)" >&2
 else
-  # Fallback: slirp4netns. Multi-agent MCP via chepherd-net DNS isn't
-  # available; chepherd-net fix #398v2/#395/#396 ship as advisory
-  # capability rather than guaranteed. Operators install
-  # containernetworking-plugins or upgrade to netavark for full
-  # multi-agent operation.
   NETWORK_ARGS=()
-  AGENT_NETWORK_ENV=(-e "CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns" -e "CHEPHERD_MCP_URL=ws://host.containers.internal:9090/mcp/ws")
-  HOST_PORT_BIND="0.0.0.0"  # so agents can at least reach via 10.0.2.2 (kernel-isolation caveat per #398 v1 still applies, but this is the best we can do)
-  echo "" >&2
-  echo "⚠  WARNING: podman network backend '${NETWORK_BACKEND}' lacks required plugins (#403 P0)." >&2
-  echo "   Falling back to slirp4netns. Multi-agent MCP toolkit may be degraded:" >&2
-  echo "   - Agent → chepherd MCP reachable via host.containers.internal (10.0.2.2)" >&2
-  echo "   - Kernel-level rootless-loopback isolation may still block back-connects" >&2
-  echo "   For full multi-agent capability, install containernetworking-plugins (apt:" >&2
-  echo "   containernetworking-plugins or dnf: containernetworking-plugins) OR upgrade" >&2
-  echo "   to Podman 4.x+ (netavark backend). Bounce chepherd after install." >&2
+  HOST_PORT_BIND="0.0.0.0"
+  echo "→ chepherd container: slirp4netns (CNI/netavark unavailable, host loopback fallback)" >&2
+  echo "→ agent containers: container:chepherd (shared netns — bypasses CNI entirely; #414 architectural fix)" >&2
+  echo "   (Multi-agent MCP works because agents share chepherd's netns; no host loopback hop needed.)" >&2
   echo "" >&2
 fi
 
