@@ -125,6 +125,29 @@ type runnerConfig struct {
 	// container. Defaults to /var/lib/chepherd/runner.
 	stateDir string
 
+	// HubRelayURL is the chepherd-hub WebSocket URL the runner
+	// dials to register a reverse-proxy tunnel (#556 Wave F7.1,
+	// #585). Empty disables F7.1 fallback transport entirely
+	// (default). When set, the runner spawns a reconnect-with-
+	// backoff loop that maintains an open WS to the hub; inbound
+	// proxied A2A traffic flows through the runner's local A2A
+	// http.Handler (same as the direct /a2a/<sid>/jsonrpc listener).
+	//
+	// Wire format: ws://hub.example.com:8443 or wss://...; the
+	// client appends /v1/relay/tunnel internally.
+	//
+	// Activation: today operator opts in via --hub-relay-url. A
+	// follow-up issue will wire automatic activation when ICE+TURN
+	// both fail (BlockedNAT detection).
+	hubRelayURL string
+
+	// HubRelayOrgID is the org identity the runner presents to the
+	// hub via X-Chepherd-Org header. Hub enforces it against its
+	// --allowed-orgs allowlist. Defaults to the runner's --name
+	// when empty + --name is set; otherwise the runner refuses to
+	// dial (hub will reject empty/anonymous orgs).
+	hubRelayOrgID string
+
 	// AuthToken is the bearer token the daemon issues to this
 	// runner at spawn time. Used both for outbound WS to daemon
 	// and for the local MCP socket's auth check.
@@ -323,6 +346,25 @@ func run() error {
 		}
 	}
 
+	// #556 + #585 Wave F7.1 — reverse-proxy tunnel reconnect loop.
+	// Activates when --hub-relay-url is set + a2aSrv is bound (we
+	// need the local A2A handler to route inbound proxied traffic).
+	// Runs in its own goroutine for the runner's lifetime; reconnects
+	// with exponential backoff (capped 30s) on every disconnect.
+	if cfg.hubRelayURL != "" && a2aSrv != nil {
+		orgID := cfg.hubRelayOrgID
+		if orgID == "" {
+			orgID = cfg.name
+		}
+		if orgID == "" {
+			log.Printf("[chepherd-runner] F7.1 hub-relay DISABLED: --hub-relay-url set but no org identity (need --hub-relay-org-id or --name)")
+		} else {
+			tunnelCtx, tunnelCancel := context.WithCancel(context.Background())
+			defer tunnelCancel()
+			go runHubRelayTunnel(tunnelCtx, cfg.hubRelayURL, orgID, cfg.authToken, a2aSrv.Handler())
+		}
+	}
+
 	// Wait for SIGINT / SIGTERM.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -392,6 +434,10 @@ func parseFlags() (*runnerConfig, error) {
 		"#493 Wave F3 — STUN servers for ICE srflx candidate gathering. Repeat or comma-separate (addr:port). Empty falls through to F1 DefaultICEServers (public Google STUN). Production deploys MUST populate via F5 chepherd.org-relay.")
 	fs.StringVar(&turnCSV, "turn-server", envOr("CHEPHERD_TURN_SERVERS", ""),
 		"#493 Wave F3 — TURN servers for ICE relay candidate gathering. Repeat or comma-separate (addr:port:user:pass). Credentials required — TURN without auth is a security hole.")
+	fs.StringVar(&cfg.hubRelayURL, "hub-relay-url", envOr("CHEPHERD_HUB_RELAY_URL", ""),
+		"#556 #585 Wave F7.1 — chepherd-hub WebSocket URL for reverse-proxy tunnel fallback. Empty disables (default). When set, runner dials hub /v1/relay/tunnel + maintains reconnect-with-backoff loop; inbound proxied A2A traffic routes through the runner's local A2A handler. Wire: ws://host:port or wss://...")
+	fs.StringVar(&cfg.hubRelayOrgID, "hub-relay-org-id", envOr("CHEPHERD_HUB_RELAY_ORG_ID", ""),
+		"#556 #585 Wave F7.1 — org identity presented to chepherd-hub via X-Chepherd-Org header. Defaults to --name when empty. Hub enforces against --allowed-orgs allowlist.")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, err

@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -178,6 +179,63 @@ func (c *relayTunnelClient) Close() error {
 // pump exits. Useful for callers that want to react to disconnects
 // (e.g., re-dial loop).
 func (c *relayTunnelClient) Done() <-chan struct{} { return c.done }
+
+// runHubRelayTunnel is the reconnect-with-backoff loop that keeps the
+// F7.1 tunnel open against a chepherd-hub for the runner's lifetime.
+// Activated by main.go when --hub-relay-url is set + the A2A endpoint
+// is bound. Closes the inner relayTunnelClient + retries with
+// exponential backoff on every disconnect; exits cleanly when ctx
+// is cancelled (SIGTERM / shutdown).
+//
+// Backoff starts at 1s, doubles to 30s cap. Caller-provided ctx
+// short-circuits any pending sleep. #556 #585 Wave F7.1.
+func runHubRelayTunnel(ctx context.Context, hubURL, orgID, bearer string, handler http.Handler) {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	attempt := 0
+	for {
+		attempt++
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		client := newRelayTunnelClient(hubURL, orgID, bearer, handler)
+		dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
+		err := client.Dial(dialCtx)
+		dialCancel()
+		if err != nil {
+			log.Printf("[chepherd-runner] F7.1 hub-relay dial attempt %d FAILED: %v (next retry in %s)", attempt, err, backoff)
+		} else {
+			log.Printf("[chepherd-runner] F7.1 hub-relay tunnel up: hub=%s org=%s (attempt %d)", hubURL, orgID, attempt)
+			// Reset backoff after a successful dial so the next
+			// disconnect retries quickly. Block on Done() until the
+			// readPump exits (network error, hub close, ctx cancel).
+			backoff = time.Second
+			attempt = 0
+			select {
+			case <-ctx.Done():
+				_ = client.Close()
+				return
+			case <-client.Done():
+				log.Printf("[chepherd-runner] F7.1 hub-relay tunnel CLOSED (frames=%d ok=%d); reconnecting", client.TotalFrames(), client.TotalHandlerOK())
+			}
+		}
+		// Backoff before next attempt; honor ctx cancel during sleep.
+		sleep := backoff
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(sleep):
+		}
+	}
+}
 
 // readPump runs as a goroutine. Reads frames, dispatches to the
 // runner's local A2A handler via the httptest.NewRecorder pattern
