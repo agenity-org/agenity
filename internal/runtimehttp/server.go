@@ -3114,7 +3114,92 @@ func scanForClaudeOAuthURL(data []byte) string {
 			best = m
 		}
 	}
-	return string(best)
+	// #600 — claude-code prints TUI helper text "Paste code here if
+	// prompted" immediately after the OAuth URL using ANSI cursor
+	// positioning (no \n or \r separator). After ansiAndCRStrip
+	// removes the cursor escape, the helper text concatenates
+	// directly onto the URL (no whitespace, no stop char the regex
+	// catches), corrupting the final query param (typically state=).
+	// Result: PKCE flow validation fails when chepherd echoes back
+	// 'state=<random>Paste...' vs stored '<random>'.
+	return sanitizeOAuthCallbackURL(string(best))
+}
+
+// sanitizeOAuthCallbackURL parses the captured URL and trims each
+// query param value at any TUI-helper-text suffix (e.g. claude-code's
+// "Paste code here if prompted" string that got ANSI-cursor-glued onto
+// the URL's tail end). Conservative: if URL parse fails, return input
+// unchanged.
+//
+// Per #600.
+func sanitizeOAuthCallbackURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	changed := false
+	for k, vs := range q {
+		for i, v := range vs {
+			cleaned := trimTUIHelperSuffix(v)
+			if cleaned != v {
+				vs[i] = cleaned
+				changed = true
+			}
+		}
+		q[k] = vs
+	}
+	if !changed {
+		return raw
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// trimTUIHelperSuffix removes a trailing TUI helper text suffix
+// that's been concatenated onto a base64url value via ANSI cursor
+// positioning. First tries known helper-text strings, then falls
+// back to length-cap (PKCE state from 32 random bytes ≈ 43
+// base64url chars; cap at 64 for headroom). For over-cap values,
+// truncates at first CamelCase boundary (uppercase followed by 3+
+// lowercase) — strong signal of human-readable text glued onto
+// the base64url payload.
+//
+// Per #600.
+func trimTUIHelperSuffix(v string) string {
+	knownHelperSuffixes := []string{
+		"Pastecodehereifprompted",
+		"Pastethecodehere",
+		"Paste", // very conservative — drops any trailing "Paste..." run
+	}
+	for _, suffix := range knownHelperSuffixes {
+		if idx := strings.Index(v, suffix); idx > 0 {
+			return v[:idx]
+		}
+	}
+	// CamelCase boundary defense: scan from offset 32 (covers PKCE
+	// 32-byte entropy ≈ 43 base64url chars) for an uppercase letter
+	// followed by 3+ lowercase — a strong CamelCase signal of
+	// human-readable TUI text glued onto the base64url payload.
+	// Runs regardless of total length (so it catches concat
+	// patterns even on shorter-than-cap values).
+	if len(v) > 32+4 {
+		for i := 32; i < len(v)-4; i++ {
+			if v[i] >= 'A' && v[i] <= 'Z' &&
+				v[i+1] >= 'a' && v[i+1] <= 'z' &&
+				v[i+2] >= 'a' && v[i+2] <= 'z' &&
+				v[i+3] >= 'a' && v[i+3] <= 'z' {
+				return v[:i]
+			}
+		}
+	}
+	// Length-cap fallback (PKCE state from 32 random bytes ≈ 43
+	// base64url chars; cap at 64 for any provider extension).
+	const maxBase64URLValueLen = 64
+	if len(v) > maxBase64URLValueLen {
+		return v[:maxBase64URLValueLen]
+	}
+	return v
 }
 
 // claudeLoginBegin spawns an ephemeral agent with NO Claude credentials
