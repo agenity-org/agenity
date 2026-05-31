@@ -134,6 +134,14 @@ type Server struct {
 	discovery *discovery.Service
 
 	upgrader websocket.Upgrader
+
+	// #504 Wave R1 — registry of chepherd-runner processes that have
+	// dialed in via /api/v1/runners/register. In-memory for R1; Wave
+	// R5 cutover may persist via the agent registry. Lazily-init via
+	// runnerReg() so the daemon doesn't carry the alloc when nothing
+	// has registered yet.
+	runnerRegMu    sync.Mutex
+	runnerRegistry *runnerRegistry
 }
 
 // New constructs a Server bound to the runtime.
@@ -183,6 +191,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/api/v1/sessions", s.sessionsRoot)
 	mux.HandleFunc("/api/v1/sessions/", s.sessionByName)
+	// #504 Wave R1 — chepherd-runner registration WS + read-side
+	// list. The WS endpoint accepts a register frame, assigns a SID,
+	// then receives audit notifications until the runner exits.
+	// The list endpoint is the seam Wave D1 (#467) builds the
+	// /api/v1/agents/ Agent Card directory atop.
+	mux.HandleFunc("/api/v1/runners/register", s.handleRunnerRegister)
+	mux.HandleFunc("/api/v1/runners", s.handleRunnersList)
 	mux.HandleFunc("/api/v1/inbox", s.inbox)
 	mux.HandleFunc("/api/v1/inbox/", s.inboxByID)
 	mux.HandleFunc("/api/v1/inbox/read-all", s.inboxReadAll)
