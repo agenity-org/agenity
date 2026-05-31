@@ -78,10 +78,17 @@ type runnerConfig struct {
 	// points at this path.
 	mcpSocket string
 
-	// A2AListen is the TCP host:port for the per-session A2A
-	// endpoint. Defaults to "0.0.0.0:9091" (distinct from daemon's
-	// 9090). Sibling runners reach this via the daemon's directory.
-	a2aListen string
+	// Name is the operator-visible @-handle (e.g. "iogrid-1"). Empty
+	// at register-time is allowed — daemon may echo back from spawn
+	// intent in a later Wave. Set via --name or CHEPHERD_RUNNER_NAME.
+	name string
+
+	// A2ABaseURL is the scheme://host:port (NOT host:port) the runner
+	// will host its per-session A2A endpoint on. Used by daemon to
+	// template the §12.1 well-known Agent Card URI
+	// `<a2a_base_url>/a2a/<sid>/.well-known/agent-card.json`. Empty
+	// for R1 (Wave R2 lights the A2A endpoint + populates this).
+	a2aBaseURL string
 
 	// StateDir is the per-runner state directory inside the
 	// container. Defaults to /var/lib/chepherd/runner.
@@ -107,8 +114,8 @@ func run() error {
 	// Touch point 1 scaffold: enough plumbing to start the MCP
 	// socket server + log the config. Spawn, A2A endpoint, daemon-
 	// outbound, PTY ownership wire in touch points 2-4.
-	log.Printf("[chepherd-runner] starting sid=%q agent=%q mcp-socket=%q a2a-listen=%q daemon=%q",
-		cfg.sid, cfg.agentSlug, cfg.mcpSocket, cfg.a2aListen, cfg.daemonURL)
+	log.Printf("[chepherd-runner] starting sid=%q name=%q agent=%q mcp-socket=%q a2a-base-url=%q daemon=%q",
+		cfg.sid, cfg.name, cfg.agentSlug, cfg.mcpSocket, cfg.a2aBaseURL, cfg.daemonURL)
 
 	// State dir + MCP socket dir prep. mkdir -p with restrictive
 	// modes; the socket itself ends up 0600 after listen.
@@ -144,18 +151,65 @@ func run() error {
 	}
 	log.Printf("[chepherd-runner] MCP listening on unix://%s", cfg.mcpSocket)
 
-	// Wait for SIGINT / SIGTERM. The agent child process (touch
-	// point 4) will be reaped + the runner exits with the agent's
-	// exit code so the container exit code reflects agent status.
+	// #504 — outbound WS registration with chepherd-daemon. Empty
+	// daemon-url skips registration entirely (dev mode + the
+	// scaffold unit test stay green without a daemon).
+	var dc *daemonClient
+	if cfg.daemonURL != "" {
+		req := runnerRegisterReq{
+			SID:           cfg.sid,
+			Name:          cfg.name,
+			AgentSlug:     cfg.agentSlug,
+			RunnerVersion: runnerSelfVersion,
+			A2ABaseURL:    cfg.a2aBaseURL,
+			MCPSocket:     cfg.mcpSocket,
+			Capabilities:  []string{"pty", "audit-stream"},
+		}
+		client, resp, err := registerWithDaemon(cfg.daemonURL, cfg.authToken, req)
+		if err != nil {
+			return fmt.Errorf("daemon register: %w", err)
+		}
+		dc = client
+		log.Printf("[chepherd-runner] registered with daemon: assigned-sid=%s audit-topic=%s daemon-version=%s",
+			resp.SID, resp.AuditTopic, resp.DaemonVersion)
+		// If daemon assigned a sid AND caller didn't pre-set one, adopt
+		// the daemon's. Otherwise the operator's --sid wins (test mode).
+		if cfg.sid == "" {
+			cfg.sid = resp.SID
+		}
+		_ = dc.SendAudit("event", "[chepherd-runner] registered sid="+cfg.sid)
+	}
+
+	// #504 — agent spawn + PTY pump. The runner's reason for being
+	// (eventually) is to host the agent CLI process as its child +
+	// stream PTY output to the daemon as audit events. R1 ships the
+	// simplest realisation: if --agent is set, exec the configured
+	// flavor + stream its stdout/stderr to the daemon over the WS.
+	// Real PTY ownership (creack/pty TTY allocation, ANSI-stripped
+	// streaming, attach WS sharing) lands in Waves R3-R4.
+	if cfg.agentSlug != "" {
+		go runAgentAndPump(cfg, dc)
+	}
+
+	// Wait for SIGINT / SIGTERM.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	log.Printf("[chepherd-runner] received %s; shutting down", sig)
+	if dc != nil {
+		_ = dc.SendAudit("event", "[chepherd-runner] shutdown signal="+sig.String())
+		dc.Close()
+	}
 	mcp.Stop()
 	_ = rt
-	_ = cfg.agentArgs
 	return nil
 }
+
+// runnerSelfVersion is the chepherd-runner build identifier reported
+// in the daemon register frame. Mirrors daemonRunnerVersion in the
+// daemon package; the two are not coupled — Wave R5+ may decouple via
+// ldflags.
+const runnerSelfVersion = "0.9.4-R1"
 
 // parseFlags reads flags + env into a runnerConfig.
 func parseFlags() (*runnerConfig, error) {
@@ -169,8 +223,10 @@ func parseFlags() (*runnerConfig, error) {
 		"agent flavor to launch (claude-code, sovereign-shell, ...)")
 	fs.StringVar(&cfg.mcpSocket, "mcp-socket", envOr("CHEPHERD_MCP_SOCKET", "/run/chepherd/mcp.sock"),
 		"MCP HTTP-over-Unix-socket path inside the container")
-	fs.StringVar(&cfg.a2aListen, "a2a-listen", envOr("CHEPHERD_A2A_LISTEN", "0.0.0.0:9091"),
-		"per-session A2A endpoint TCP bind (host:port). Sibling runners reach this via daemon directory.")
+	fs.StringVar(&cfg.name, "name", envOr("CHEPHERD_RUNNER_NAME", ""),
+		"operator-visible @-handle for this runner (e.g. \"iogrid-1\"). Empty fine; daemon may echo back from spawn intent.")
+	fs.StringVar(&cfg.a2aBaseURL, "a2a-base-url", envOr("CHEPHERD_A2A_BASE_URL", ""),
+		"scheme://host:port the runner serves its A2A endpoint on. Daemon templates the §12.1 well-known URI off this. Empty for R1; Wave R2 lights it.")
 	fs.StringVar(&cfg.stateDir, "state-dir", envOr("CHEPHERD_RUNNER_STATE", "/var/lib/chepherd/runner"),
 		"per-runner state directory inside the container")
 	fs.StringVar(&cfg.authToken, "auth-token", envOr("CHEPHERD_TOKEN", ""),
