@@ -83,12 +83,27 @@ case "${NETWORK_BACKEND}" in
     USE_CHEPHERD_NET=1
     ;;
   cni)
-    # CNI requires /opt/cni/bin/bridge etc. Probe one canonical plugin
+    # CNI requires bridge + firewall plugins. Probe canonical locations
     # before trusting CNI; missing plugins are the most common cause
     # of "failed to mount netns directory" (#403 P0).
-    if [ -x /opt/cni/bin/bridge ] && [ -x /opt/cni/bin/firewall ]; then
-      USE_CHEPHERD_NET=1
-    fi
+    #
+    # Locations checked:
+    #   /opt/cni/bin/            — upstream containernetworking-plugins default
+    #   /usr/lib/cni/            — Debian/Ubuntu apt package location
+    #   /usr/libexec/cni/        — Fedora/RHEL location
+    # First location with BOTH bridge + firewall wins. #406 originally
+    # only checked /opt/cni/bin — false-negative on stock Debian/Ubuntu
+    # hosts where the apt package installs to /usr/lib/cni/, forcing
+    # unnecessary slirp4netns fallback + MCP-transport caveat that
+    # surfaces as operator-visible "-32000" on cross-container MCP
+    # calls (#414).
+    for cni_dir in /opt/cni/bin /usr/lib/cni /usr/libexec/cni; do
+      if [ -x "$cni_dir/bridge" ] && [ -x "$cni_dir/firewall" ]; then
+        USE_CHEPHERD_NET=1
+        echo "→ CNI plugins detected at $cni_dir — using chepherd-net" >&2
+        break
+      fi
+    done
     ;;
 esac
 if [ "${USE_CHEPHERD_NET}" -eq 1 ]; then
