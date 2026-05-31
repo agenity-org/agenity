@@ -257,16 +257,32 @@ func run() error {
 		// uploaded audits for SendMessage call events.
 	}
 
+	// #465 Wave R4 — spawn the agent PTY-session FIRST so it can be
+	// threaded into the A2A endpoint's runnerDeliverer for
+	// SendMessage-drives-PTY behavior. nil session is OK (no --agent
+	// flag, or agentcatalog miss) — the deliverer falls back to R2's
+	// persist-only path.
+	ptySession, err := spawnAgentSession(cfg)
+	if err != nil {
+		return fmt.Errorf("agent PTY-session spawn: %w", err)
+	}
+	if ptySession != nil {
+		// R1 contract — fan PTY bytes to daemon as audit events when
+		// --daemon-url is wired. Coexists with R4's broker fan-out
+		// via session's multi-subscriber model.
+		pumpSessionToAudit(ptySession, dc)
+	}
+
 	// #463 Wave R2 — per-session A2A endpoint. Off by default for
 	// back-compat with R1 scaffold mode; activates when --a2a-listen
 	// is non-empty AND --sid is non-empty (the URL path /a2a/<sid>
 	// depends on the sid).
 	var a2aSrv *a2aEndpoint
 	if cfg.a2aListen != "" && cfg.sid != "" {
-		// #486 Wave T1 — JWT verification on /jsonrpc. Activated when
-		// --require-jwt is set. Defaults to disabled so existing dev
-		// flows + the R2/R3 e2e tests keep working without wiring up
-		// a token-minting daemon. Production deploys MUST set it.
+		// #486 Wave T1 + #465 Wave R4 — JWT verification + PTY
+		// session both threaded into startA2AEndpoint. Activated
+		// when --require-jwt set; defaults disabled for dev/scaffold
+		// back-compat.
 		var jwtCfg *auth.RunnerJWTMiddlewareConfig
 		if cfg.requireJWT {
 			jwtCfg = &auth.RunnerJWTMiddlewareConfig{
@@ -274,22 +290,11 @@ func run() error {
 				JWKSClient: auth.NewJWKSClient(nil, 0),
 			}
 		}
-		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.name, cfg.a2aBaseURL, cfg.daemonURL, cfg.stateDir, jwtCfg)
+		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.name, cfg.a2aBaseURL, cfg.daemonURL, cfg.stateDir, ptySession, jwtCfg)
 		if err != nil {
 			return fmt.Errorf("a2a endpoint: %w", err)
 		}
 		a2aSrv = srv
-	}
-
-	// #504 — agent spawn + PTY pump. The runner's reason for being
-	// (eventually) is to host the agent CLI process as its child +
-	// stream PTY output to the daemon as audit events. R1 ships the
-	// simplest realisation: if --agent is set, exec the configured
-	// flavor + stream its stdout/stderr to the daemon over the WS.
-	// Real PTY ownership (creack/pty TTY allocation, ANSI-stripped
-	// streaming, attach WS sharing) lands in Waves R3-R4.
-	if cfg.agentSlug != "" {
-		go runAgentAndPump(cfg, dc)
 	}
 
 	// Wait for SIGINT / SIGTERM.
@@ -303,6 +308,9 @@ func run() error {
 	}
 	mcp.Stop()
 	a2aSrv.Close()
+	if ptySession != nil {
+		_ = ptySession.Close()
+	}
 	return nil
 }
 

@@ -42,6 +42,8 @@ import (
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/chepherd/chepherd/internal/runtime"
 )
 
 // a2aEndpoint is the runner's HTTP server hosting /a2a/<sid>/jsonrpc.
@@ -64,7 +66,7 @@ type a2aEndpoint struct {
 // stateDir is where the runner's task-store SQLite file lives.
 //
 // Caller must Close() the returned endpoint at shutdown.
-func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string, jwtCfg *auth.RunnerJWTMiddlewareConfig) (*a2aEndpoint, error) {
+func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string, ptySession *session.Session, jwtCfg *auth.RunnerJWTMiddlewareConfig) (*a2aEndpoint, error) {
 	if sid == "" {
 		return nil, fmt.Errorf("a2a endpoint: --sid is required (no scaffold mode for A2A — the URL path /a2a/<sid> depends on it)")
 	}
@@ -77,10 +79,21 @@ func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string
 	// Build the router + wire all 11 methods.
 	router := a2a.NewRouter()
 
-	// SendMessage uses a runner-local Deliverer that just persists
-	// the Task as "submitted". Wave R4 replaces this with a PTY-
-	// owning Deliverer that drives the agent process.
+	// #465 Wave R4 — runner-local StreamBroker for SSE fan-out.
+	// SendMessage handlers + tasks/resubscribe etc. consume this
+	// broker; PumpPTYToBroker (spawned per Deliver call) publishes
+	// to it as PTY chunks arrive from the agent process.
+	broker := a2a.NewStreamBroker()
+
+	// SendMessage uses a runner-local Deliverer.
 	deliverer := newRunnerDeliverer(store, sid)
+	// #465 Wave R4 — when ptySession is wired, the deliverer drives
+	// the PTY directly (write → MarkSendNow → silence-finalize
+	// completer flips state→completed). Otherwise R2's persist-only
+	// fallback runs.
+	if ptySession != nil {
+		deliverer = deliverer.withPTY(ptySession, ptySession, broker)
+	}
 	if err := router.WireDeliverer(deliverer); err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("a2a endpoint: wire deliverer: %w", err)
@@ -117,24 +130,22 @@ func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string
 	// daemon's directory tells siblings which sid lives at which
 	// runner address.
 	mux := http.NewServeMux()
-	// #486 Wave T1 — JWT verification middleware on /jsonrpc. The
-	// Agent Card paths stay UNAUTHENTICATED (discovery surface MUST
-	// be reachable without prior auth per A2A v1.0 spec). Healthz
-	// also stays open (operator smoke).
-	//
-	// jwtCfg is nil unless requireJWT was supplied (empty means
-	// back-compat with R2's open-trust mode for dev / unit tests that
-	// don't have a daemon to mint tokens against).
+	// #486 Wave T1 + #465 Wave R4 — JWT verification middleware on
+	// /jsonrpc. Agent Card paths stay UNAUTHENTICATED (discovery
+	// surface per A2A v1.0 spec). jwtCfg nil = R4-only dev mode.
 	jsonrpcHandler := http.Handler(router)
 	if jwtCfg != nil {
 		jsonrpcHandler = auth.JWTRunnerMiddleware(jwtCfg, jsonrpcHandler)
 	}
 	mux.Handle("/a2a/"+sid+"/jsonrpc", jsonrpcHandler)
-	// #464 Wave R3 — per-session Agent Card at the §12.1 well-known
-	// URI. UNAUTHENTICATED (discovery precedes auth).
+	// #464 Wave R3 — per-session Agent Card mounts (unauthenticated).
 	cardHandler := a2a.ServeAgentCard(&card)
 	mux.Handle("/a2a/"+sid+a2a.AgentCardPath, cardHandler)
 	mux.Handle("/a2a/"+sid+a2a.AgentCardAliasPath, cardHandler)
+	// #465 Wave R4 — SSE stream endpoint mounted under the per-
+	// session URL prefix so subscribers fetch chunks from the same
+	// host they discovered the Agent Card on.
+	mux.Handle("/a2a/"+sid+"/stream/", broker.Handler())
 	// Healthz so callers (operator curl, R5 cutover smoke tests) can
 	// confirm the endpoint is up without a JSON-RPC roundtrip.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -282,30 +293,71 @@ func joinBaseAndPath(base, path string) string {
 	return base + path
 }
 
-// ─── runnerDeliverer ──────────────────────────────────────────────
+// ─── runnerDeliverer (Wave R4) ────────────────────────────────────
 
-// runnerDeliverer is the stub a2a.Deliverer the runner uses for
-// message/send in R2. It persists the Task as "submitted" + returns
-// the working task immediately. Wave R4 (#465) replaces this with
-// a PTY-owning Deliverer that actually drives the agent process +
-// completes the Task via the silence-finalize completer.
+// runnerDeliverer is the runner-side a2a.Deliverer. R4 evolution:
 //
-// IMPORTANT: this is not a workaround — it's the architecturally-
-// correct shape for R2 scope. The runner OWNS the task lifecycle now
-// (via its sqlite store); R4 just adds the PTY transport leg. Sibling
-// peers can SendMessage + GetTask today; the message body sits as
-// "submitted" until R4 lights the agent-process leg.
+//   - R2 #463: persisted Task as "working" + returned immediately
+//     (no agent process integration)
+//   - R4 #465: when a PTY session is wired, writes msg → PTY stdin,
+//     spawns PumpPTYToBroker goroutine, completer transitions Task
+//     to "completed" + persists agent response when silence-finalize
+//     fires
+//
+// When pty == nil (e.g. runner started without --agent flag, or
+// agentcatalog.Lookup failed), the deliverer falls back to R2's
+// persist-only path. Sibling peers can still SendMessage + GetTask;
+// the response stays empty.
+//
+// IMPORTANT: this is NOT a workaround per principle 14. The PTY-on
+// path is the architecturally-correct target shape; the persist-only
+// fallback is honest about not having an agent to drive. Tests can
+// exercise either path.
 type runnerDeliverer struct {
 	store     *sqlite.Store
 	runnerSID string
+
+	// pty + broker arrive in R4 — they're nil for the R2-style
+	// persist-only path. Both non-nil ⇒ Deliver drives the PTY +
+	// pumps to the broker.
+	pty    runtime.SubscriberSource // *session.Session in production
+	ptyW   ptyWriter                // *session.Session also satisfies this
+	broker runtime.BrokerPublisher  // *a2a.StreamBroker in production
+}
+
+// ptyWriter is the minimal write seam — *session.Session satisfies
+// it. Lets unit tests inject a fake that records what was written
+// without needing a real PTY.
+type ptyWriter interface {
+	Write(p []byte) (int, error)
 }
 
 func newRunnerDeliverer(store *sqlite.Store, runnerSID string) *runnerDeliverer {
 	return &runnerDeliverer{store: store, runnerSID: runnerSID}
 }
 
-// Deliver implements a2a.Deliverer. Persists the input Message + the
-// issued Task, returns the Task with state="working".
+// withPTY returns a copy of d with pty + broker wired. Caller passes
+// the runner's singleton session + broker.
+func (d *runnerDeliverer) withPTY(pty runtime.SubscriberSource, ptyW ptyWriter, broker runtime.BrokerPublisher) *runnerDeliverer {
+	out := *d
+	out.pty = pty
+	out.ptyW = ptyW
+	out.broker = broker
+	return &out
+}
+
+// Deliver implements a2a.Deliverer.
+//
+// Persists the input Message + the issued Task. When pty + broker
+// are wired (R4 path):
+//   - Spawns PumpPTYToBroker goroutine FIRST (subscribes the broker
+//     before any writes so banner chrome doesn't get attributed to
+//     this task — #387 P0 send-mark coordinates the boundary)
+//   - Waits for pump's Subscribed signal
+//   - Writes msg's user-text Parts → PTY stdin
+//   - Signals MarkSendNow to the pump
+//   - Returns the Task in state="working"; silence-finalize will
+//     flip it to "completed" via the completer
 func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task, error) {
 	taskID := msg.TaskID
 	if taskID == "" {
@@ -321,9 +373,6 @@ func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Ta
 		Kind:      "task",
 		Status:    a2a.TaskStatus{State: a2a.TaskStateWorking},
 	}
-	// Persist the input Message + outbound Task so subsequent
-	// tasks/get returns the envelope. Failure persists the task as
-	// failed instead so siblings see the error rather than a 5xx.
 	inputBlob, _ := json.Marshal(msg)
 	outputBlob, _ := json.Marshal(task)
 	now := time.Now().UTC()
@@ -338,10 +387,86 @@ func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Ta
 		UpdatedAt:  now,
 	}
 	if err := d.store.Tasks().Save(ctx, rec); err != nil {
-		// Persistence failed — return a failed-state Task envelope
-		// so the caller sees a structured error rather than HTTP 5xx.
 		task.Status.State = a2a.TaskStateFailed
 		return task, fmt.Errorf("runnerDeliverer: persist: %w", err)
 	}
+
+	// R4 PTY-driving path. pty + ptyW + broker must all be set;
+	// otherwise fall back to R2's persist-only behavior.
+	if d.pty != nil && d.ptyW != nil && d.broker != nil {
+		mark := runtime.NewPumpSendMark()
+		completer := d.completer()
+		go runtime.PumpPTYToBroker(d.broker, d.pty, task, completer, mark)
+		// Wait for the pump to subscribe so the byte stream from the
+		// upcoming Write lands on the live channel (not just the
+		// pre-subscribe ring snapshot). #387 P0.
+		<-mark.Subscribed
+		// Compose msg.Parts → PTY input. Append \n so claude-TUI-style
+		// agents trigger their submit.
+		input := extractMessageText(msg) + "\n"
+		if _, err := d.ptyW.Write([]byte(input)); err != nil {
+			task.Status.State = a2a.TaskStateFailed
+			return task, fmt.Errorf("runnerDeliverer: PTY write: %w", err)
+		}
+		mark.MarkSendNow()
+	}
 	return task, nil
+}
+
+// completer returns the callback PumpPTYToBroker invokes when
+// silence-finalize fires (or sub.Done / chan close). It:
+//   - strips ANSI chrome
+//   - persists the agent's response as a Message{role:"agent"} into
+//     the Task's history (TODO: requires Task.History column
+//     evolution — for R4 we just flip Task state to "completed"
+//     and store the response in the OutputBlob)
+//   - flips Task state to "completed"
+//
+// Wave A5 (#485) will extend Task persistence with full history.
+func (d *runnerDeliverer) completer() func(taskID, response string) {
+	return func(taskID, response string) {
+		clean := runtime.StripANSI(response)
+		ctx := context.Background()
+		rec, err := d.store.Tasks().Get(ctx, taskID)
+		if err != nil || rec == nil {
+			return
+		}
+		rec.State = string(a2a.TaskStateCompleted)
+		rec.UpdatedAt = time.Now().UTC()
+		// Extract contextId from the persisted input Message so the
+		// completed-task envelope keeps it (consumers correlate per
+		// context). persistence.Task doesn't carry contextID as a
+		// column today (Wave A5 #485 may add it); decoding the
+		// InputBlob is the source of truth.
+		contextID := ""
+		var inputMsg a2a.Message
+		if err := json.Unmarshal(rec.InputBlob, &inputMsg); err == nil {
+			contextID = inputMsg.ContextID
+		}
+		completedTask := &a2a.Task{
+			ID:        taskID,
+			ContextID: contextID,
+			Kind:      "task",
+			Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
+			Artifacts: []a2a.Artifact{{
+				ArtifactID: taskID + "-response",
+				Parts:      []a2a.Part{{Kind: "text", Text: clean}},
+			}},
+		}
+		rec.OutputBlob, _ = json.Marshal(completedTask)
+		_ = d.store.Tasks().Save(ctx, rec)
+	}
+}
+
+// extractMessageText walks msg.Parts and concatenates all text parts.
+// Non-text parts (file, data) are ignored — R4 PTY input is line-mode
+// only.
+func extractMessageText(msg a2a.Message) string {
+	var b []byte
+	for _, p := range msg.Parts {
+		if p.Kind == "text" {
+			b = append(b, p.Text...)
+		}
+	}
+	return string(b)
 }
