@@ -382,6 +382,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		if err := methodBodies.Register(a2aRouter); err != nil {
 			return fmt.Errorf("a2a: register method bodies: %w", err)
 		}
+		// #480 Wave A1 — single-call POST→SSE binding. When the client
+		// POSTs /jsonrpc with method=message/stream + Accept header
+		// text/event-stream, the router branches into this handler
+		// which streams Task events inline. Falls through to the
+		// two-call pattern (returns {task, streamId} JSON) for
+		// non-streaming Accept headers.
+		a2aRouter.StreamingHandler = a2a.MakeStreamingHandler(store, streamBroker, rt.InstanceUUID())
 		rs.A2ARouter = a2aRouter
 		// v0.9.3 #225 row B2 — ES256 keypair lifecycle. Load (or mint
 		// on first boot) the instance's signing key from
