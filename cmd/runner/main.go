@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 )
 
@@ -108,6 +109,13 @@ type runnerConfig struct {
 	// internal/a2a.Router at /a2a/<sid>/jsonrpc serving all 11 A2A
 	// methods. Set via --a2a-listen or CHEPHERD_A2A_LISTEN. #463.
 	a2aListen string
+
+	// requireJWT enables Wave T1 #486 JWT verification on the runner's
+	// /a2a/<sid>/jsonrpc endpoint. Set via --require-jwt or
+	// CHEPHERD_REQUIRE_JWT=1. Production deploys MUST set it; dev/
+	// scaffold/e2e tests typically leave it off so they can hit the
+	// endpoint unauthenticated.
+	requireJWT bool
 
 	// StateDir is the per-runner state directory inside the
 	// container. Defaults to /var/lib/chepherd/runner.
@@ -233,7 +241,18 @@ func run() error {
 	// depends on the sid).
 	var a2aSrv *a2aEndpoint
 	if cfg.a2aListen != "" && cfg.sid != "" {
-		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.name, cfg.a2aBaseURL, cfg.daemonURL, cfg.stateDir)
+		// #486 Wave T1 — JWT verification on /jsonrpc. Activated when
+		// --require-jwt is set. Defaults to disabled so existing dev
+		// flows + the R2/R3 e2e tests keep working without wiring up
+		// a token-minting daemon. Production deploys MUST set it.
+		var jwtCfg *auth.RunnerJWTMiddlewareConfig
+		if cfg.requireJWT {
+			jwtCfg = &auth.RunnerJWTMiddlewareConfig{
+				RunnerSID:  cfg.sid,
+				JWKSClient: auth.NewJWKSClient(nil, 0),
+			}
+		}
+		srv, err := startA2AEndpoint(cfg.a2aListen, cfg.sid, cfg.name, cfg.a2aBaseURL, cfg.daemonURL, cfg.stateDir, jwtCfg)
 		if err != nil {
 			return fmt.Errorf("a2a endpoint: %w", err)
 		}
@@ -291,6 +310,8 @@ func parseFlags() (*runnerConfig, error) {
 		"scheme://host:port the runner serves its A2A endpoint on. Daemon templates the §12.1 well-known URI off this. Empty for R1; Wave R2 lights it.")
 	fs.StringVar(&cfg.a2aListen, "a2a-listen", envOr("CHEPHERD_A2A_LISTEN", ""),
 		"per-session A2A endpoint TCP bind address (host:port). Empty disables. When set + --sid non-empty, mounts /a2a/<sid>/jsonrpc serving all 11 A2A methods. (#463 Wave R2)")
+	fs.BoolVar(&cfg.requireJWT, "require-jwt", envOr("CHEPHERD_REQUIRE_JWT", "") == "1",
+		"enable Wave T1 JWT verification on /a2a/<sid>/jsonrpc. Off by default for dev/scaffold; production deploys MUST enable. (#486 Wave T1)")
 	fs.StringVar(&cfg.stateDir, "state-dir", envOr("CHEPHERD_RUNNER_STATE", "/var/lib/chepherd/runner"),
 		"per-runner state directory inside the container")
 	fs.StringVar(&cfg.authToken, "auth-token", envOr("CHEPHERD_TOKEN", ""),
