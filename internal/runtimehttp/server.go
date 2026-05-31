@@ -96,6 +96,13 @@ type Server struct {
 	// construct Server without persistence.
 	KeyStore *auth.KeyStore
 
+	// OrgID identifies this daemon's organization. Surfaced as the
+	// iss claim in cross-org JWTs minted via /api/v1/federation/jwt
+	// (#557 Wave F8.1). When empty, the cross-org mint endpoint
+	// returns 503 ("not configured"). Production deploys set this
+	// from cmd/run.go's --org-id flag / CHEPHERD_ORG_ID env.
+	OrgID string
+
 	// GrantCheck is the RBAC dispatch seam for POST /api/v1/jwt/mint
 	// (#468 Wave D2). nil = default allow-all so the JWT pipeline is
 	// exercisable end-to-end before the grant store lands. Wave D3
@@ -274,6 +281,9 @@ func (s *Server) Handler() http.Handler {
 	// 60s expiry, RBAC-gated. The grant check is a no-op stub until
 	// Wave D3 wires the real persistence-backed check.
 	mux.HandleFunc("/api/v1/jwt/mint", s.jwtMint)
+	// #557 Wave F8.1 — cross-org JWT mint endpoint (daemon-Y side).
+	// Hub /v1/federation/auth (F8 #498) forwards here.
+	s.mountCrossOrgFederationMint(mux)
 	mux.HandleFunc("/api/v1/agent-types", s.agentsCatalog)
 	// #469 Wave D3 — RBAC grant CRUD (§13). Operator-facing surface
 	// the dashboard Federation tab consumes to create / list / revoke
