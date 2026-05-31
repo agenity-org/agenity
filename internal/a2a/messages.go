@@ -102,6 +102,38 @@ type Task struct {
 type TaskStatus struct {
 	State   TaskState `json:"state"`
 	Message *Message  `json:"message,omitempty"`
+	// Details carries state-specific context. v0.9.4 §15.3 (#503
+	// Wave H5) populates AuthProvider+AuthMessage (+optional AuthURL)
+	// when State == auth-required so SSE/push/poll consumers can
+	// surface a useful operator-facing prompt without re-parsing
+	// agent bytes.
+	Details *TaskStatusDetails `json:"details,omitempty"`
+}
+
+// TaskStatusDetails carries state-specific structured context. Today
+// it only describes the AUTH_REQUIRED chain (#503 Wave H5 / §15.3);
+// future states can add fields under their own zero-value defaults.
+//
+// §15.3 contract surface (decided during H5 escalation 2026-05-31 vs
+// the original spec's "MCP server returns OAuth challenge URL" framing):
+//
+//   - AuthProvider (REQUIRED when AUTH_REQUIRED): human-readable name
+//     of the auth scope. For Anthropic-managed connectors this is the
+//     MCP server name (e.g. "claude.ai Google Drive"); for third-party
+//     OAuth-emitting tools it's the tool/service name.
+//
+//   - AuthMessage (REQUIRED when AUTH_REQUIRED): operator-facing
+//     instruction. Empirically captured for claude.ai connectors as
+//     "Ask the user to run /mcp and select \"<server>\" to authenticate."
+//
+//   - AuthURL (OPTIONAL): direct OAuth start URL when the MCP server
+//     emits one (Sentry-style, GitHub-OAuth-style). EMPTY for
+//     Anthropic-managed connectors that route through claude.ai's
+//     own /mcp UI — that's a structural ceiling, not a code gap.
+type TaskStatusDetails struct {
+	AuthProvider string `json:"authProvider,omitempty"`
+	AuthMessage  string `json:"authMessage,omitempty"`
+	AuthURL      string `json:"authUrl,omitempty"`
 }
 
 // TaskState enumerates the A2A v1.0 task lifecycle states.

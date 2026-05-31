@@ -440,14 +440,21 @@ func decodeTask(rec *persistence.Task) (*Task, error) {
 	}
 	if len(rec.OutputBlob) > 0 {
 		var out struct {
-			Artifacts []Artifact `json:"artifacts"`
-			History   []Message  `json:"history"`
+			Artifacts     []Artifact         `json:"artifacts"`
+			History       []Message          `json:"history"`
+			StatusDetails *TaskStatusDetails `json:"statusDetails,omitempty"`
 		}
 		if err := json.Unmarshal(rec.OutputBlob, &out); err == nil {
 			if len(out.History) > 0 {
 				t.History = append(t.History, out.History...)
 			}
 			t.Artifacts = out.Artifacts
+			// #503 Wave H5 — surface AUTH_REQUIRED details so
+			// SSE/push/poll consumers can render the operator
+			// prompt without re-parsing agent bytes.
+			if out.StatusDetails != nil {
+				t.Status.Details = out.StatusDetails
+			}
 		}
 	}
 	return t, nil

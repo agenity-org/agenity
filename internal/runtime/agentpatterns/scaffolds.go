@@ -28,33 +28,36 @@ func init() {
 // Codex is the OpenAI codex CLI flavor — scaffold only.
 type Codex struct{}
 
-func (Codex) Slug() string                                              { return "codex" }
-func (Codex) DetectIdle(_ []byte, _ time.Duration) DetectionResult      { return DetectionResult{} }
-func (Codex) IsCompleted(_ []byte) DetectionResult                      { return DetectionResult{} }
-func (Codex) IsInputRequired(_ []byte) DetectionResult                  { return DetectionResult{} }
-func (Codex) IsAuthRequired(_ []byte) DetectionResult                   { return DetectionResult{} }
-func (Codex) ExtractToolCalls(_ []byte) []ToolCall                      { return nil }
+func (Codex) Slug() string                                         { return "codex" }
+func (Codex) DetectIdle(_ []byte, _ time.Duration) DetectionResult { return DetectionResult{} }
+func (Codex) IsCompleted(_ []byte) DetectionResult                 { return DetectionResult{} }
+func (Codex) IsInputRequired(_ []byte) DetectionResult             { return DetectionResult{} }
+func (Codex) IsAuthRequired(_ []byte) DetectionResult              { return DetectionResult{} }
+func (Codex) ExtractAuthChallenge(_ []byte) *AuthChallenge         { return nil }
+func (Codex) ExtractToolCalls(_ []byte) []ToolCall                 { return nil }
 
 // ─── gemini-cli ───────────────────────────────────────────────────
 
 // GeminiCLI is Google's gemini-cli flavor — scaffold only.
 type GeminiCLI struct{}
 
-func (GeminiCLI) Slug() string                                              { return "gemini-cli" }
-func (GeminiCLI) DetectIdle(_ []byte, _ time.Duration) DetectionResult      { return DetectionResult{} }
-func (GeminiCLI) IsCompleted(_ []byte) DetectionResult                      { return DetectionResult{} }
-func (GeminiCLI) IsInputRequired(_ []byte) DetectionResult                  { return DetectionResult{} }
-func (GeminiCLI) IsAuthRequired(_ []byte) DetectionResult                   { return DetectionResult{} }
-func (GeminiCLI) ExtractToolCalls(_ []byte) []ToolCall                      { return nil }
+func (GeminiCLI) Slug() string                                         { return "gemini-cli" }
+func (GeminiCLI) DetectIdle(_ []byte, _ time.Duration) DetectionResult { return DetectionResult{} }
+func (GeminiCLI) IsCompleted(_ []byte) DetectionResult                 { return DetectionResult{} }
+func (GeminiCLI) IsInputRequired(_ []byte) DetectionResult             { return DetectionResult{} }
+func (GeminiCLI) IsAuthRequired(_ []byte) DetectionResult              { return DetectionResult{} }
+func (GeminiCLI) ExtractAuthChallenge(_ []byte) *AuthChallenge         { return nil }
+func (GeminiCLI) ExtractToolCalls(_ []byte) []ToolCall                 { return nil }
 
 // ─── opencode ─────────────────────────────────────────────────────
 
 // OpenCode is the opencode CLI flavor — scaffold only.
 type OpenCode struct{}
 
-func (OpenCode) Slug() string                                              { return "opencode" }
-func (OpenCode) DetectIdle(_ []byte, _ time.Duration) DetectionResult      { return DetectionResult{} }
-func (OpenCode) IsCompleted(_ []byte) DetectionResult                      { return DetectionResult{} }
-func (OpenCode) IsInputRequired(_ []byte) DetectionResult                  { return DetectionResult{} }
-func (OpenCode) IsAuthRequired(_ []byte) DetectionResult                   { return DetectionResult{} }
-func (OpenCode) ExtractToolCalls(_ []byte) []ToolCall                      { return nil }
+func (OpenCode) Slug() string                                         { return "opencode" }
+func (OpenCode) DetectIdle(_ []byte, _ time.Duration) DetectionResult { return DetectionResult{} }
+func (OpenCode) IsCompleted(_ []byte) DetectionResult                 { return DetectionResult{} }
+func (OpenCode) IsInputRequired(_ []byte) DetectionResult             { return DetectionResult{} }
+func (OpenCode) IsAuthRequired(_ []byte) DetectionResult              { return DetectionResult{} }
+func (OpenCode) ExtractAuthChallenge(_ []byte) *AuthChallenge         { return nil }
+func (OpenCode) ExtractToolCalls(_ []byte) []ToolCall                 { return nil }

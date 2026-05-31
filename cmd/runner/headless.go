@@ -42,6 +42,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/runtime/agentpatterns"
 )
 
 // headlessConfig collects flags specific to --headless mode.
@@ -134,6 +135,22 @@ func runHeadless(ctx context.Context, hc *headlessConfig) (int, error) {
 		return 2, nil
 	}
 
+	// #503 Wave H5 — detect AUTH_REQUIRED from agent output. The
+	// detector runs on the full stdout (which includes the JSON
+	// envelope's `result` prose) so both stream-json structured
+	// markers AND headless prose patterns are covered.
+	slug := hc.agentSlug
+	if slug == "" {
+		slug = "claude-code"
+	}
+	flavor := agentpatterns.ByAgentSlug(slug)
+	if flavor.IsAuthRequired(stdout).Match {
+		envelope := authRequiredTaskEnvelope(taskID, msg, agentResult.Result,
+			flavor.ExtractAuthChallenge(stdout))
+		writeResult(hc, envelope)
+		return 4, nil
+	}
+
 	envelope := completedTaskEnvelope(taskID, msg, agentResult.Result)
 	writeResult(hc, envelope)
 	return 0, nil
@@ -204,6 +221,39 @@ func completedTaskEnvelope(taskID string, in a2a.Message, output string) a2a.Tas
 		ContextID: in.ContextID,
 		Kind:      "task",
 		Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
+		History:   []a2a.Message{in, out},
+	}
+}
+
+// authRequiredTaskEnvelope wraps the agent's auth-required response
+// into a v0.9.4 §16 A2A Task in TaskStateAuthRequired. Status.Details
+// carries the per-flavor AuthChallenge so iogrid consumers can
+// surface the operator prompt without re-parsing agent bytes.
+// (#503 Wave H5 / §15.3)
+func authRequiredTaskEnvelope(taskID string, in a2a.Message, output string,
+	ch *agentpatterns.AuthChallenge) a2a.Task {
+	in.Kind = "message"
+	if in.Role == "" {
+		in.Role = "user"
+	}
+	out := a2a.Message{
+		Role:  "agent",
+		Kind:  "message",
+		Parts: []a2a.Part{{Kind: "text", Text: output}},
+	}
+	status := a2a.TaskStatus{State: a2a.TaskStateAuthRequired}
+	if ch != nil {
+		status.Details = &a2a.TaskStatusDetails{
+			AuthProvider: ch.Provider,
+			AuthMessage:  ch.Message,
+			AuthURL:      ch.URL,
+		}
+	}
+	return a2a.Task{
+		ID:        taskID,
+		ContextID: in.ContextID,
+		Kind:      "task",
+		Status:    status,
 		History:   []a2a.Message{in, out},
 	}
 }

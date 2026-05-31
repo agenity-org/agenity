@@ -263,31 +263,43 @@ func (d *A2ADeliverer) taskCompleter(agentSlug string) func(taskID, response str
 				{Kind: "text", Text: stripANSI(response)},
 			},
 		}
-		// OutputBlob shape per a2a.decodeTask: {artifacts, history}.
-		// Preserve any prior history that was written.
+		// OutputBlob shape per a2a.decodeTask: {artifacts, history,
+		// statusDetails}. Preserve any prior history + details that
+		// were written.
 		var out struct {
-			Artifacts []a2a.Artifact `json:"artifacts,omitempty"`
-			History   []a2a.Message  `json:"history,omitempty"`
+			Artifacts     []a2a.Artifact         `json:"artifacts,omitempty"`
+			History       []a2a.Message          `json:"history,omitempty"`
+			StatusDetails *a2a.TaskStatusDetails `json:"statusDetails,omitempty"`
 		}
 		if len(rec.OutputBlob) > 0 {
 			_ = json.Unmarshal(rec.OutputBlob, &out)
 		}
 		out.History = append(out.History, agentMsg)
-		blob, _ := json.Marshal(out)
-		rec.OutputBlob = blob
-		// #484 Wave A5 — decide the post-silence state via the
-		// per-flavor pattern-match library. Order: AUTH_REQUIRED >
-		// INPUT_REQUIRED > COMPLETED. AUTH wins over INPUT when both
-		// fire because an OAuth challenge is the stronger signal —
-		// the user needs to satisfy the auth before clarifying
-		// questions become answerable.
+		// #484 Wave A5 + #503 Wave H5 — decide the post-silence
+		// state via the per-flavor pattern-match library. Order:
+		// AUTH_REQUIRED > INPUT_REQUIRED > COMPLETED. AUTH wins
+		// over INPUT when both fire because an OAuth challenge is
+		// the stronger signal — the user needs to satisfy the auth
+		// before clarifying questions become answerable.
 		nextState := a2a.TaskStateCompleted
 		responseBytes := []byte(response)
 		if flavor.IsAuthRequired(responseBytes).Match {
 			nextState = a2a.TaskStateAuthRequired
+			// #503 Wave H5 — surface AUTH_REQUIRED details via
+			// the OutputBlob so SSE/push/poll consumers can render
+			// the operator prompt without re-parsing agent bytes.
+			if ch := flavor.ExtractAuthChallenge(responseBytes); ch != nil {
+				out.StatusDetails = &a2a.TaskStatusDetails{
+					AuthProvider: ch.Provider,
+					AuthMessage:  ch.Message,
+					AuthURL:      ch.URL,
+				}
+			}
 		} else if flavor.IsInputRequired(responseBytes).Match {
 			nextState = a2a.TaskStateInputRequired
 		}
+		blob, _ := json.Marshal(out)
+		rec.OutputBlob = blob
 		if err := a2a.TransitionTask(rec, nextState, "silence-finalize via "+agentSlug); err != nil {
 			// Illegal transition — log via UpdatedAt+state-unchanged.
 			// Falls back to whatever state was already persisted.
