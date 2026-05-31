@@ -46,7 +46,26 @@ func init() {
 	rootCmd.AddCommand(mcpCmd)
 }
 
+// m3DeprecationNotice is the stderr warning every `chepherd mcp`
+// invocation emits per #479 Wave M3. Kept as a package-level const
+// so the test can assert verbatim presence.
+//
+// The bridge stays FUNCTIONAL (won't break existing chepherd-v0.5
+// agent configs); the warning just nudges operators to migrate. A
+// future release removes the subcommand entirely — by then every
+// supported chepherd version will have shipped with the M2 HTTP
+// transport as the canonical path.
+//
+// Suppress via CHEPHERD_MCP_DEPRECATION_SILENT=1 (some CI runs the
+// bridge on every spawn and don't need the noise).
+const m3DeprecationNotice = "WARNING: 'chepherd mcp' stdio bridge is DEPRECATED — use MCP HTTP transport via /run/chepherd/mcp.sock per V0.9.2-ARCH §22 (M2 #525). This subcommand will be removed in a future release. Set CHEPHERD_MCP_DEPRECATION_SILENT=1 to suppress this warning.\n"
+
 func runMCPCmd(_ *cobra.Command, _ []string) error {
+	// #479 Wave M3 — deprecation warning. Emit BEFORE dialing the
+	// bridge URL so even fast-failing invocations see it.
+	if os.Getenv("CHEPHERD_MCP_DEPRECATION_SILENT") != "1" {
+		fmt.Fprint(os.Stderr, m3DeprecationNotice)
+	}
 	url := mcpFlagURL
 	if url == "" {
 		url = os.Getenv("CHEPHERD_MCP_URL")
