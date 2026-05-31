@@ -148,12 +148,14 @@ type server struct {
 	cfg     *config
 	mu      sync.Mutex
 	runners map[string]*runnerInfo
+	recipes *recipeStore // #502 Wave H4 — task-recipe catalog
 }
 
 func newServer(cfg *config) *server {
 	return &server{
 		cfg:     cfg,
 		runners: map[string]*runnerInfo{},
+		recipes: newRecipeStore(),
 	}
 }
 
@@ -161,7 +163,12 @@ func (s *server) mux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/v1/runners", s.requireAuth(s.handleRunnersRoot))
-	mux.HandleFunc("/v1/runners/", s.requireAuth(s.handleRunnerByID))
+	mux.HandleFunc("/v1/runners/", s.requireAuth(s.handleRunnersDispatch))
+	// #502 Wave H4 — recipe surface.
+	mux.HandleFunc("/api/v1/recipes", s.requireAuth(s.handleRecipesRoot))
+	mux.HandleFunc("/api/v1/recipes/", s.requireAuth(s.handleRecipeByName))
+	// Public virtual Agent Card per A2A discovery convention.
+	mux.HandleFunc("/a2a/recipe/", s.handleVirtualAgentCard)
 	return mux
 }
 
@@ -170,6 +177,18 @@ func (s *server) mux() http.Handler {
 // has this much wall-clock time to complete the out-of-band OAuth
 // flow + POST credentials/inject. Per #503 Wave H5 / §15.3 dispatch.
 const authRequiredTimeout = 10 * time.Minute
+
+// handleRunnersDispatch routes /v1/runners/{id}, /v1/runners/{id}/result,
+// AND /v1/runners/recipe/{name} (which H4 added). The recipe path is
+// dispatched here to keep the mux pattern count minimal.
+func (s *server) handleRunnersDispatch(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/runners/")
+	if strings.HasPrefix(rest, "recipe/") {
+		s.handleRecipeExecution(w, r)
+		return
+	}
+	s.handleRunnerByID(w, r)
+}
 
 func (s *server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
