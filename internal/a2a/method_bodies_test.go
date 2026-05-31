@@ -173,15 +173,30 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 }
 
 // TestGetAuthenticatedExtendedCard returns the wired card body.
+// #483 Wave A4 turned the stub into an auth-gated extended-card
+// handler — the test now requires a non-empty AuthSubject + asserts
+// the ExtendedAgentCard wrapper shape.
 func TestGetAuthenticatedExtendedCard(t *testing.T) {
 	r, _ := newTestRouter(t)
-	resp := call(t, r, "agent/getAuthenticatedExtendedCard", struct{}{})
+	body, _ := json.Marshal(struct{}{})
+	req := JSONRPCRequest{
+		JSONRPC: "2.0", ID: json.RawMessage(`"1"`),
+		Method: "agent/getAuthenticatedExtendedCard", Params: body,
+		AuthSubject: "operator",
+	}
+	resp := r.handlers["agent/getAuthenticatedExtendedCard"](req)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
-	card := resp.Result.(getAgentCardResult).Card
-	if card.ProtocolVersion != "1.0.0" || card.Name != "test-runner" {
-		t.Errorf("unexpected card payload: %+v", card)
+	result, ok := resp.Result.(getExtendedAgentCardResult)
+	if !ok {
+		t.Fatalf("Result type = %T, want getExtendedAgentCardResult", resp.Result)
+	}
+	if result.Card.ProtocolVersion != "1.0.0" || result.Card.Name != "test-runner" {
+		t.Errorf("unexpected card payload: %+v", result.Card)
+	}
+	if result.Card.XChepherdAuth == nil || result.Card.XChepherdAuth.Subject != "operator" {
+		t.Errorf("x-chepherd-auth missing or wrong: %+v", result.Card.XChepherdAuth)
 	}
 }
 
