@@ -83,9 +83,16 @@ func (s *Server) StartHTTP(addr string) error {
 	if err != nil {
 		return err
 	}
+	// Capture the *http.Server into a local BEFORE spawning the
+	// Serve goroutine. The struct-field s.httpServer can be nilled
+	// by Stop() concurrently — if Stop runs before the goroutine
+	// reads s.httpServer.Serve(), the goroutine deref's nil + panics
+	// (#538 follow-up — observed on the post-D5 CI flake where the
+	// test's Stop() raced StartHTTP's goroutine schedule-in).
+	srv := &http.Server{Handler: s.buildMux(), ReadHeaderTimeout: 10 * time.Second}
 	s.httpListener = ln
-	s.httpServer = &http.Server{Handler: s.buildMux(), ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = s.httpServer.Serve(ln) }()
+	s.httpServer = srv
+	go func() { _ = srv.Serve(ln) }()
 	return nil
 }
 
