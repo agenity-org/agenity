@@ -247,7 +247,16 @@ func buildRunnerAgentCard(sid, runnerName, baseURL, daemonJWKSURL string) a2a.Ag
 				Description:  "Per-call JWT minted by chepherd-daemon (POST /api/v1/jwt/mint, Wave D2). Verify against daemon JWKS at " + jwksRef + " (Wave T2). ES256 signing.",
 			},
 		},
-		XChepherdP2P: a2a.DefaultExtension(),
+		XChepherdP2P: func() *a2a.ChepherdP2PExtension {
+			// #488 Wave F1 — populate the x-chepherd-p2p extension's
+			// signaling endpoint with this runner's reachable
+			// /webrtc/offer URL so chepherd-aware peers can dial
+			// the SDP exchange directly. Empty a2aBaseURL → empty
+			// SignalingEndpoint (R1 scaffold mode).
+			ext := a2a.DefaultExtension()
+			ext.PopulateSignalingEndpoint(baseURL)
+			return ext
+		}(),
 	}
 }
 
