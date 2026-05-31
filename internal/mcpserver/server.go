@@ -23,19 +23,14 @@
 package mcpserver
 
 import (
-
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
-
-	"github.com/google/uuid"
 
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/runtime"
@@ -62,24 +57,6 @@ type Server struct {
 	// (#208) makes this per-runner-process and passes through
 	// context.Context.
 	lastCaller string
-
-	// #447 PR1 — agent-name → live WS conn registry. Indexed by the
-	// connAgent set in handleWS (either ?agent= query OR $/chepherd/
-	// identify). chepherd.send_to_session uses this to push
-	// notifications/peer-message frames to the recipient out-of-band
-	// of the sender's tools/call response. NOT touched by PTY writes —
-	// the body delivery NEVER reaches stdin.
-	peersMu sync.Mutex
-	peers   map[string]peerConn
-}
-
-// peerConn is a registered agent's MCP WS connection + the write mutex
-// guarding gorilla/websocket's single-writer requirement. Multiple
-// goroutines (dispatch responses, server-initiated notifications) can
-// race on the same conn; the mutex serializes WriteJSON calls.
-type peerConn struct {
-	c  *websocket.Conn
-	mu *sync.Mutex
 }
 
 // SetAuthToken configures the bearer token required on every WS upgrade
@@ -652,30 +629,37 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			NoSubmit   bool `json:"no_submit"`
 		}
 		_ = json.Unmarshal(args, &a)
+		if s.deliverer == nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "send_to_session shim unavailable: mcpserver constructed without a2a.Deliverer (use mcpserver.NewWithDeliverer)"}
+			return resp
+		}
 		sess, _ := s.rt.Get(a.Name)
 		if sess == nil {
 			resp.Error = &rpcErr{Code: -32000, Message: "no such session: " + a.Name}
 			return resp
 		}
-		// #447 PR1 — two-channel delivery (operator-confirmed agreement
-		// 2026-05-31). Body travels OUT-OF-BAND via MCP notifications/
-		// peer-message; PTY receives ONLY a status-line observability
-		// ping in PR2. NEVER writes body to PTY stdin (that's what
-		// pre-#447 did + raced with operator typing + did not actually
-		// submit because claude TUI doesn't treat bare CR as submit).
+		// Typing-skip preserved at the shim layer (operator-vs-shepherd
+		// race condition was a v0.9.1 chepherd-specific concern).
+		const founderTypingSkipSec = 15
+		if last := sess.LastOperatorWrite(); !last.IsZero() && time.Since(last) < founderTypingSkipSec*time.Second {
+			remaining := founderTypingSkipSec*time.Second - time.Since(last)
+			time.Sleep(remaining)
+		}
 		body := strings.TrimRight(a.Body, "\r\n")
-		taskID := uuid.NewString()
-		from := s.CurrentCaller()
-		if err := s.PushPeerMessage(a.Name, from, body, taskID); err != nil {
-			resp.Error = &rpcErr{Code: -32000, Message: "peer-message push failed: " + err.Error()}
+		task, err := s.deliverer.Deliver(context.Background(), a2a.Message{
+			Role:      "user",
+			Kind:      "message",
+			ContextID: a.Name,
+			Parts:     []a2a.Part{{Kind: "text", Text: body}},
+		})
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
 			return resp
 		}
 		resp.Result = map[string]any{
-			"ok":        true,
-			"taskId":    taskID,
-			"delivered": "mcp",
+			"ok":     task != nil && task.Status.State == a2a.TaskStateWorking,
+			"taskId": taskIDOrEmpty(task),
 		}
-		_ = sess // PR2 will use sess.WriteStatusLine here for the operator-visible ping
 	case "pause":
 		var a struct {
 			Name   string
@@ -915,79 +899,4 @@ func splitLines(s string) []string {
 		out = append(out, s[start:])
 	}
 	return out
-}
-
-// #447 PR1 — registerPeer adds a live WS conn to the peer registry.
-// Called from handleWS once connAgent is identified (either at upgrade
-// via ?agent= or via $/chepherd/identify). Returns an unregister fn
-// the caller defers.
-func (s *Server) registerPeer(name string, c *websocket.Conn) func() {
-	if name == "" {
-		return func() {}
-	}
-	if s.peers == nil {
-		s.peersMu.Lock()
-		if s.peers == nil {
-			s.peers = make(map[string]peerConn)
-		}
-		s.peersMu.Unlock()
-	}
-	mu := &sync.Mutex{}
-	s.peersMu.Lock()
-	s.peers[name] = peerConn{c: c, mu: mu}
-	s.peersMu.Unlock()
-	fmt.Fprintf(os.Stderr, "[chepherd-mcp] peer registered: %q\n", name)
-	return func() {
-		s.peersMu.Lock()
-		// Only unregister if we're still the same conn (handles rapid
-		// reconnect where new registration arrived before our defer).
-		if pc, ok := s.peers[name]; ok && pc.c == c {
-			delete(s.peers, name)
-			fmt.Fprintf(os.Stderr, "[chepherd-mcp] peer unregistered: %q\n", name)
-		}
-		s.peersMu.Unlock()
-	}
-}
-
-// PushPeerMessage sends an MCP notifications/peer-message frame to the
-// named recipient's live WS conn. Returns nil if delivered, error if
-// the peer isn't currently connected OR the WS write fails. Body
-// travels OUT-OF-BAND of the recipient's stdin — claude-code's MCP
-// client renders it inline without touching the input prompt.
-//
-// Notification envelope:
-//
-//	{"jsonrpc":"2.0","method":"notifications/peer-message",
-//	 "params":{"from":"A","body":"X","taskID":"…","timestamp":"…"}}
-//
-// JSON-RPC 2.0 notifications have NO "id" field per spec; the
-// recipient doesn't reply.
-func (s *Server) PushPeerMessage(toName, fromName, body, taskID string) error {
-	if s.peers == nil {
-		return fmt.Errorf("peer registry empty (recipient %q not connected)", toName)
-	}
-	s.peersMu.Lock()
-	pc, ok := s.peers[toName]
-	s.peersMu.Unlock()
-	if !ok {
-		return fmt.Errorf("peer %q not connected (no live MCP WS conn)", toName)
-	}
-	notification := map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "notifications/peer-message",
-		"params": map[string]any{
-			"from":      fromName,
-			"body":      body,
-			"taskID":    taskID,
-			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		},
-	}
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	if err := pc.c.WriteJSON(notification); err != nil {
-		return fmt.Errorf("WS write to peer %q: %w", toName, err)
-	}
-	fmt.Fprintf(os.Stderr, "[chepherd-mcp] peer-message pushed: from=%q to=%q taskID=%q bytes=%d\n",
-		fromName, toName, taskID, len(body))
-	return nil
 }

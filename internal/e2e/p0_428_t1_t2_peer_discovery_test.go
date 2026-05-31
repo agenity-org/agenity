@@ -227,17 +227,32 @@ func bootE2EHarness(t *testing.T) *e2eHarness {
 	// Anthropic — synthetic token is meaningless to claude — but
 	// the spawn pipeline proceeds because the credentials FILE
 	// exists.
-	credPath := filepath.Join(t.TempDir(), "synthetic-claude-credentials.json")
-	syntheticCreds := `{"claudeAiOauth":{"accessToken":"e2e-test-token-not-real","refreshToken":"e2e-test-refresh","expiresAt":99999999999000,"scopes":["test"]}}`
-	if err := os.WriteFile(credPath, []byte(syntheticCreds), 0o600); err != nil {
-		t.Fatalf("seed synthetic credentials: write: %v", err)
+	//
+	// EXCEPTION: when CHEPHERD_TEST_LIVE_CLAUDE=1 is set, the
+	// operator has explicitly opted into burning real Anthropic
+	// quota AND has a real ~/.claude/.credentials.json (verified
+	// by liveClaudeAvailable). Skip the synthetic override in that
+	// mode so chepherd falls back to the real $HOME path — without
+	// this, live-claude probes (#449) would write synthetic tokens
+	// into containers + claude would reply "Not logged in".
+	var credPath string
+	if os.Getenv("CHEPHERD_TEST_LIVE_CLAUDE") != "1" {
+		credPath = filepath.Join(t.TempDir(), "synthetic-claude-credentials.json")
+		syntheticCreds := `{"claudeAiOauth":{"accessToken":"e2e-test-token-not-real","refreshToken":"e2e-test-refresh","expiresAt":99999999999000,"scopes":["test"]}}`
+		if err := os.WriteFile(credPath, []byte(syntheticCreds), 0o600); err != nil {
+			t.Fatalf("seed synthetic credentials: write: %v", err)
+		}
 	}
 
-	cmd.Env = append(os.Environ(),
-		"CHEPHERD_CLAUDE_CREDS_PATH="+credPath,
+	env := os.Environ()
+	if credPath != "" {
+		env = append(env, "CHEPHERD_CLAUDE_CREDS_PATH="+credPath)
+	}
+	env = append(env,
 		"CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns",
 		fmt.Sprintf("CHEPHERD_MCP_URL=ws://host.containers.internal:%d/mcp/ws", mcpPort),
 	)
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start chepherd: %v", err)

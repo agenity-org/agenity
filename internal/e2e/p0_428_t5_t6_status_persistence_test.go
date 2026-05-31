@@ -440,12 +440,18 @@ func (h *e2eHarness) bounceChepherd() error {
 	cmd.Stderr = newLog
 	// Re-pass the synthetic credentials path the original boot
 	// seeded (#440 CI fix). HOME stays intact so podman keeps using
-	// the operator's real container storage.
-	cmd.Env = append(os.Environ(),
-		"CHEPHERD_CLAUDE_CREDS_PATH="+h.credPath,
+	// the operator's real container storage. In live-claude mode
+	// (#449 probe) credPath is empty + spawn falls back to real
+	// ~/.claude/.credentials.json.
+	env := os.Environ()
+	if h.credPath != "" {
+		env = append(env, "CHEPHERD_CLAUDE_CREDS_PATH="+h.credPath)
+	}
+	env = append(env,
 		"CHEPHERD_CONTAINER_NETWORK=slirp4netns:port_handler=slirp4netns",
 		fmt.Sprintf("CHEPHERD_MCP_URL=ws://host.containers.internal:%s/mcp/ws", mcpPortStr),
 	)
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = newLog.Close()

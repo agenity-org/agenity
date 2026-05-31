@@ -103,13 +103,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	connAgent := r.URL.Query().Get("agent")
 	fmt.Fprintf(os.Stderr, "[chepherd-mcp] WS connected from %s (agent=%q)\n", r.RemoteAddr, connAgent)
 
-	// #447 PR1 — register peer in the conn registry so chepherd.send_to_
-	// session can push notifications/peer-message to this conn. Re-
-	// register inside the identify branch if the name is set via
-	// $/chepherd/identify instead of query param.
-	unreg := s.registerPeer(connAgent, c)
-	defer unreg()
-
 	c.SetReadLimit(4 * 1024 * 1024)
 	for {
 		_, frame, err := c.ReadMessage()
@@ -126,13 +119,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				Agent string `json:"agent"`
 			}
 			_ = json.Unmarshal(req.Params, &p)
-			if p.Agent != "" && p.Agent != connAgent {
-				// Name changed (or set after ?agent= empty). Re-
-				// register under the new name. Old unreg fn becomes
-				// no-op for stale name; new defer runs on conn close.
-				unreg()
+			if p.Agent != "" {
 				connAgent = p.Agent
-				unreg = s.registerPeer(connAgent, c)
 			}
 			_ = c.WriteJSON(rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"ok": true, "agent": connAgent}})
 			continue
