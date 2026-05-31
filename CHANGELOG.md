@@ -2,6 +2,12 @@
 
 All notable changes to chepherd. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); chepherd follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Deprecated
+
+- `chepherd mcp` stdio bridge subcommand (#479 Wave M3). Use MCP HTTP transport via `/run/chepherd/mcp.sock` per V0.9.2-ARCH §22 (M2 #525) instead. The subcommand stays functional in v0.9.4 but emits a deprecation warning to stderr on every invocation; suppress via `CHEPHERD_MCP_DEPRECATION_SILENT=1`. Slated for removal in a future release.
+
 ## [0.5.0] — 2026-05-24
 
 The architectural pivot release. chepherd transforms from "tmux supervisor for Claude Code" into an agent runtime + multi-agent control room.
