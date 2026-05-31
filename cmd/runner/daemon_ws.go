@@ -158,6 +158,17 @@ func (c *daemonClient) EmitAuditEvent(e runtime.AuditEvent) {
 }
 
 // Close shuts down the underlying WS conn. Idempotent.
+//
+// #588 — sends a normal-closure (1000) control frame before tearing
+// down the TCP socket so the daemon side observes a clean WS close
+// instead of 1006 abnormal-closure (which polluted daemon audit
+// logs every time the runner did a planned shutdown). Per RFC 6455
+// §7.4.1: 1000 indicates normal closure ("the purpose for which
+// the connection was established has been fulfilled"); 1006
+// indicates connection lost mid-stream (e.g. process crash).
+//
+// 250ms write deadline keeps Close() bounded so SIGTERM-driven
+// shutdown doesn't hang on a stuck WS write.
 func (c *daemonClient) Close() {
 	if c == nil || c.conn == nil {
 		return
@@ -168,6 +179,10 @@ func (c *daemonClient) Close() {
 	default:
 		close(c.closed)
 	}
+	// Graceful close frame BEFORE TCP teardown.
+	deadline := time.Now().Add(250 * time.Millisecond)
+	closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "runner shutdown")
+	_ = c.conn.WriteControl(websocket.CloseMessage, closeMsg, deadline)
 	_ = c.conn.Close()
 }
 
