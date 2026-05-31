@@ -32,6 +32,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -39,6 +40,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/mcpserver"
@@ -130,12 +132,32 @@ type runnerConfig struct {
 	// the runner exec's it. Empty defaults to the agentcatalog
 	// flavor's DefaultArgs.
 	agentArgs []string
+
+	// Headless (#499 Wave H1) is the per-task ephemeral lifecycle
+	// mode: skip daemon-WS registration + MCP socket; read ONE task
+	// from --task-json / --task-file / stdin; run via claude --print;
+	// write A2A Task envelope to --result-file or stdout; exit.
+	headless headlessConfig
 }
 
 func run() error {
 	cfg, err := parseFlags()
 	if err != nil {
 		return err
+	}
+
+	// #499 Wave H1 — headless / per-task ephemeral lifecycle.
+	// Branch BEFORE the daemon-WS register + MCP socket setup
+	// because headless mode needs neither + the iogrid HTTP API
+	// (Wave H2) spawns one --headless invocation per request.
+	if cfg.headless.enabled {
+		hc := cfg.headless
+		hc.agentSlug = cfg.agentSlug
+		exitCode, herr := runHeadless(context.Background(), &hc)
+		if herr != nil {
+			fmt.Fprintln(os.Stderr, herr.Error())
+		}
+		os.Exit(exitCode)
 	}
 
 	// Touch point 1 scaffold: enough plumbing to start the MCP
@@ -316,6 +338,17 @@ func parseFlags() (*runnerConfig, error) {
 		"per-runner state directory inside the container")
 	fs.StringVar(&cfg.authToken, "auth-token", envOr("CHEPHERD_TOKEN", ""),
 		"bearer token (issued by daemon at spawn time) for outbound WS + local MCP auth")
+	// #499 Wave H1 — headless / per-task ephemeral mode flags.
+	fs.BoolVar(&cfg.headless.enabled, "headless", false,
+		"per-task ephemeral lifecycle (#499 Wave H1). Skips daemon-WS-register + MCP socket; reads ONE task from --task-json / --task-file / stdin; runs via the agent's non-interactive --print mode; writes A2A Task envelope to --result-file or stdout; exits.")
+	fs.StringVar(&cfg.headless.taskJSON, "task-json", "",
+		"#499 Wave H1 — inline A2A SendMessage params JSON for --headless. Precedence: --task-json > --task-file > stdin.")
+	fs.StringVar(&cfg.headless.taskFile, "task-file", "",
+		"#499 Wave H1 — path to file containing A2A SendMessage params JSON for --headless.")
+	fs.StringVar(&cfg.headless.resultFile, "result-file", "",
+		"#499 Wave H1 — output path for the A2A Task envelope. Empty = write to stdout.")
+	fs.DurationVar(&cfg.headless.timeout, "task-timeout", 5*time.Minute,
+		"#499 Wave H1 — wall-clock cap for the agent process under --headless. Zero disables (not recommended for batch consumers).")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, err
