@@ -47,7 +47,7 @@
     return agentTypeOverrides[a.label] || a.agent_type || 'claude-code';
   }
 
-  const API = '/api-v08/v1';
+  const API = '/api/v1';
 
   // agentType → human-readable class label for the dropdown placeholder
   // ("— pick anthropic account —"). The actual eligibility filter uses

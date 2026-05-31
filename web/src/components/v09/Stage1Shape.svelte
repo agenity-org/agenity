@@ -43,7 +43,7 @@
   async function loadTemplates() {
     loading = true;
     try {
-      const r = await fetch('/api-v08/v1/team-templates?visible=true');
+      const r = await fetch('/api/v1/team-templates?visible=true');
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const j = await r.json();
       templates = j.templates || [];

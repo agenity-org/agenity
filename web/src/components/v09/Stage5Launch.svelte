@@ -65,7 +65,7 @@
 
   async function loadSkillNames() {
     try {
-      const r = await fetch('/api-v08/v1/skills');
+      const r = await fetch('/api/v1/skills');
       if (!r.ok) return;
       const j = await r.json();
       const m = {};
@@ -75,7 +75,7 @@
   }
   async function loadRoleNames() {
     try {
-      const r = await fetch('/api-v08/v1/roles');
+      const r = await fetch('/api/v1/roles');
       if (!r.ok) return;
       const j = await r.json();
       const m = {};
@@ -96,7 +96,7 @@
   let liveAgentNames = $state(new Set());
   async function loadLiveAgentNames() {
     try {
-      const r = await fetch('/api-v08/v1/sessions');
+      const r = await fetch('/api/v1/sessions');
       if (!r.ok) return;
       const j = await r.json();
       const list = Array.isArray(j?.sessions) ? j.sessions
@@ -253,7 +253,7 @@
   // POST one agent → resolve to { ok, error }.
   async function spawnOne(m) {
     try {
-      const skResp = await fetch('/api-v08/v1/skills');
+      const skResp = await fetch('/api/v1/skills');
       const skJson = skResp.ok ? await skResp.json() : { skills: [] };
       const skByID = {};
       for (const s of (skJson.skills || [])) skByID[s.id] = s;
@@ -283,7 +283,7 @@
         system_prompt: firstSkill.prompt_override || firstSkill.org_override_body || '',
         stat_sheet: statSheet,
       };
-      const r = await fetch('/api-v08/v1/sessions', {
+      const r = await fetch('/api/v1/sessions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),

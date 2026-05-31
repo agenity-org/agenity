@@ -39,11 +39,11 @@
       const enc = encodeURIComponent(tokenID);
       const url = force
         ? (containsSep
-            ? `/api-v08/v1/discovery/refresh?token-id=${enc}`
-            : `/api-v08/v1/discovery/${enc}/refresh`)
+            ? `/api/v1/discovery/refresh?token-id=${enc}`
+            : `/api/v1/discovery/${enc}/refresh`)
         : (containsSep
-            ? `/api-v08/v1/discovery/?token-id=${enc}`
-            : `/api-v08/v1/discovery/${enc}`);
+            ? `/api/v1/discovery/?token-id=${enc}`
+            : `/api/v1/discovery/${enc}`);
       const r = await fetch(url, { method: force ? 'POST' : 'GET' });
       if (!r.ok) {
         const t = await r.text();

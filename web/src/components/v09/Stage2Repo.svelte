@@ -117,7 +117,7 @@
 
   async function loadProviders() {
     try {
-      const r = await fetch('/api-v08/v1/git-providers');
+      const r = await fetch('/api/v1/git-providers');
       if (!r.ok) return;
       const j = await r.json();
       // Empty-state bug: the API returns {"providers": null} on a
@@ -217,7 +217,7 @@
     };
     connectSaving = true;
     try {
-      const r = await fetch('/api-v08/v1/git-providers', {
+      const r = await fetch('/api/v1/git-providers', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
