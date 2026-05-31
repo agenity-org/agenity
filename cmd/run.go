@@ -315,92 +315,38 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			rs.Federation = fed
 		}
 
-		// v0.9.2 (#208 follow-up): expose A2A on the same HTTP server the
-		// dashboard uses. The Deliverer constructed above is reused — the
-		// MCP-shim path (chepherd.send_to_session) and the A2A JSON-RPC
-		// endpoint both translate onto the SAME PTY-writing Deliverer.
-		// AgentCard URL points at the canonical /jsonrpc surface so A2A
-		// clients can discover-then-call without out-of-band knowledge.
-		a2aRouter := a2a.NewRouter()
-		// v0.9.3 #225 row C2 — wrap the local PTY Deliverer with the
-		// FederatedDeliverer so SendMessage with `@<peer-sid>/<rest>`
-		// ContextID forwards to the peer's /jsonrpc. Local fallback
-		// when no `@` prefix (or @<self-sid>/) preserves v0.9.2
-		// semantics. AgentCard cache (#225 row C1) provides the peer-
-		// URL resolution.
-		var routedDeliverer a2a.Deliverer = a2aDeliverer
-		if store.AgentCards() != nil {
-			routedDeliverer = &federation.FederatedDeliverer{
-				Local:          a2aDeliverer,
-				Cards:          store.AgentCards(),
-				SelfSID:        rt.InstanceUUID(),
-				OutboundBearer: runFlagFederationOutboundBearer,
-				// In production: B3 TrustListValidator on peer side
-				// accepts ES256-signed JWTs minted by this instance's
-				// #225 B2 keypair. The OutboundBearer flag supports a
-				// shared-secret bootstrap mode for the §DoD walk +
-				// pre-trust-list deploys.
-			}
-		}
-		if err := a2aRouter.WireDeliverer(routedDeliverer); err != nil {
-			return fmt.Errorf("a2a: wire deliverer: %w", err)
-		}
-		rs.A2ACard = newAgentCard(runFlagListen)
-		// v0.9.3 #277 — wire the remaining 10 A2A method bodies. The
-		// MethodBodies struct registers concrete handlers that read
-		// and write the TaskRepository + PushNotificationConfigRepository
-		// via the persistence.Store. RunnerSID is the chepherd-instance
-		// UUID so cross-runner ListTasks queries filter correctly when
-		// the same SQLite DB is shared across multi-host setups.
-		// SubscribeFn is nil for now — SSE streaming binding lands in a
-		// follow-up; SendStreamingMessage + ResubscribeTask return -32004
-		// until that wiring is complete.
-		// v0.9.3 #225 row A2 — SSE broker for streaming methods. When
-		// wired, SendStreamingMessage + ResubscribeTask return a
-		// streamID + the SSE GET /a2a/stream/<streamID> path delivers
-		// task state transitions. nil disables streaming (returns
-		// -32004).
-		streamBroker := a2a.NewStreamBroker()
-		// #482 Wave A3 — wire the push-notification repository so
-		// every broker.Publish call also POSTs the event to all
-		// registered webhooks for the task. async + non-blocking.
-		streamBroker.PushConfigStore = store.PushConfigs()
-		rs.StreamBroker = streamBroker
-		// #225 row A3 — wire the broker into the A2ADeliverer so
-		// PTY output for each delivered task flows through SSE
-		// subscribers. When SendStreamingMessage caller subscribes
-		// to the returned streamID, they see incremental artifact
-		// events as the agent's PTY produces output.
-		a2aDeliverer.SetBroker(streamBroker)
-		// #225 row A4 — wire TaskRepository so each Deliver call
-		// persists the issued Task. GetTask/ListTasks then return
-		// real history; before A4 the Tasks table stayed empty
-		// because nobody called Save in the delivery path.
-		a2aDeliverer.SetTaskStore(store.Tasks(), rt.InstanceUUID())
-		methodBodies := &a2a.MethodBodies{
-			Store:       store,
-			AgentCardFn: func() a2a.AgentCard { return *newAgentCard(runFlagListen) },
-			RunnerSID:   rt.InstanceUUID(),
-			SubscribeFn: streamBroker.SubscribeFn(),
-			// #482 Wave A3 — handler-driven state transitions (cancel
-			// is the v0.9.4 example; future input-required, etc.)
-			// publish through the broker so SSE subscribers see them
-			// AND any registered push-notification webhooks fire.
-			PublishFn: func(taskID string, ev a2a.StreamEvent) {
-				streamBroker.Publish(taskID, ev)
-			},
-		}
-		if err := methodBodies.Register(a2aRouter); err != nil {
-			return fmt.Errorf("a2a: register method bodies: %w", err)
-		}
-		// #480 Wave A1 — single-call POST→SSE binding. When the client
-		// POSTs /jsonrpc with method=message/stream + Accept header
-		// text/event-stream, the router branches into this handler
-		// which streams Task events inline. Falls through to the
-		// two-call pattern (returns {task, streamId} JSON) for
-		// non-streaming Accept headers.
-		a2aRouter.StreamingHandler = a2a.MakeStreamingHandler(store, streamBroker, rt.InstanceUUID())
-		rs.A2ARouter = a2aRouter
+		// #466 Wave R5 — DAEMON DE-A2A CUTOVER. The A2A surface
+		// (/jsonrpc + /.well-known/agent-card.json + /a2a/stream/) is
+		// now hosted INSIDE each chepherd-runner process at
+		// /a2a/<sid>/jsonrpc per V0.9.2-ARCHITECTURE §5 #3 + §22.
+		// Peers discover the per-runner endpoint via daemon's Wave D1
+		// directory (GET /api/v1/agents/) — daemon is now pure
+		// registry + auth (D2 JWT mint) + RBAC (D3 grants) + JWKS
+		// (T2) + audit.
+		//
+		// What was here (waves A1-A4 / A6, C1-C2):
+		//   - a2a.NewRouter + WireDeliverer (with FederatedDeliverer)
+		//   - a2a.MethodBodies.Register for the 10 non-SendMessage
+		//     methods (tasks/get, tasks/list, tasks/cancel,
+		//     tasks/resubscribe, message/stream, pushNotif CRUD,
+		//     agent/getAuthenticatedExtendedCard)
+		//   - streamBroker.PushConfigStore + a2aDeliverer.SetBroker +
+		//     SetTaskStore + StreamingHandler
+		//   - rs.A2ACard / A2ARouter / StreamBroker wired
+		//
+		// All moved into cmd/runner via Waves R1-R4 (#504 #463 #464 #465).
+		// internal/runtimehttp/server.go's Handler() now serves /jsonrpc
+		// with the 410-Gone deprecation handler (see daemon_a2a_cutover_
+		// 410.go) so existing clients see a structured error instead of
+		// silent route-loss.
+		//
+		// internal/a2a + internal/runtime stay compiled (used by
+		// cmd/runner via Wave R4 exports). FederatedDeliverer +
+		// A2ADeliverer + pumpPTYToBroker live there for the runner; they
+		// just no longer have a daemon-side caller.
+		_ = a2aDeliverer // daemon-side instance unused after R5; kept for
+		// the MCP-shim path (chepherd.send_to_session) which a future
+		// Wave will route through the runner's A2A endpoint.
 		// #505 Wave T2 — daemon-owned ES256 KeyStore with rotation +
 		// overlap window. Supersedes the single-key LoadOrCreateES256
 		// path. The store migrates the legacy "a2a-es256-priv" row on

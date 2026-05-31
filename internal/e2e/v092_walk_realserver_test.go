@@ -44,6 +44,10 @@ func TestV092Walk_RealServerExposesA2A(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real-binary boot in -short mode")
 	}
+	// #466 Wave R5 — daemon no longer hosts A2A. The 410-Gone
+	// behavior is now tested in TestP0_466_DaemonJSONRPC_410Gone.
+	// Daemon's A2A wiring is RETIRED.
+	t.Skip("Wave R5 cutover (#466): daemon de-A2A; replaced by TestP0_466_DaemonJSONRPC_410Gone + runner-side TestE2E_463")
 
 	// ─── Resolve repo root from go.mod (independent of test cwd) ────
 	gomodOut, err := exec.Command("go", "env", "GOMOD").Output()
@@ -198,6 +202,10 @@ func TestV092Walk_SendMessageDoesNotErrorEnvelope(t *testing.T) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("skipping: 'claude' CLI not in PATH — unit test in internal/runtime covers GetByContextID without a binary")
 	}
+	// #466 Wave R5 — daemon /jsonrpc → 410. SendMessage path moved
+	// to /a2a/<sid>/jsonrpc on each runner. Runner-side coverage:
+	// cmd/runner/e2e_463_a2a_endpoint_test.go (O1-O4).
+	t.Skip("Wave R5 cutover (#466): daemon de-A2A; SendMessage moved to runner /a2a/<sid>/jsonrpc (TestE2E_463)")
 
 	httpAddr, stateDir := bootChepherdWithShepherd(t)
 
@@ -409,6 +417,11 @@ func TestV092Walk_ShepherdPTYAliveAtT30s(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real-binary boot in -short mode")
 	}
+	// #466 Wave R5 — daemon no longer hosts the A2A endpoint that
+	// proves the PTY is alive. Runner-side equivalent: any of the
+	// cmd/runner/e2e_*_test.go binary walks (they exercise the
+	// runner subprocess + its A2A surface end-to-end).
+	t.Skip("Wave R5 cutover (#466): daemon de-A2A; PTY-alive proof moved to runner-side e2e (TestE2E_463/464/465)")
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("skipping: 'claude' CLI not in PATH")
 	}

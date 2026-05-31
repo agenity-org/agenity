@@ -38,6 +38,10 @@ func TestV094Walk_RealServerPushNotificationsFire(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real-binary boot in -short mode")
 	}
+	// #466 Wave R5 — daemon no longer hosts A2A; push-notification
+	// CRUD + webhook fan-out lives on the runner endpoint (Wave R4
+	// #465 broker.PushConfigStore on the runner).
+	t.Skip("Wave R5 cutover (#466): daemon de-A2A; push-notif moved to runner-side broker")
 
 	gomodOut, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {

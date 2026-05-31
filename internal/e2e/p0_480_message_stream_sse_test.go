@@ -34,6 +34,9 @@ func TestV094Walk_RealServerInlineSSEStreaming(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real-binary boot in -short mode")
 	}
+	// #466 Wave R5 — daemon no longer hosts A2A; runner-side covered
+	// by cmd/runner/e2e_465_pty_ownership_test.go + r4_pty_pump_end2end
+	t.Skip("Wave R5 cutover (#466): daemon de-A2A; this walk superseded by cmd/runner/e2e_465_*")
 
 	gomodOut, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {
