@@ -43,11 +43,12 @@ import (
 // "PTY". After the silence window, the completer must flip Task
 // state in the store.
 func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
-	// CI runners can be slow; 300ms silence window was occasionally
-	// tight in parallel runs (#522 cascade observed P0_422-style
-	// timing flake on this test). 800ms gives ~3× safety margin
-	// without changing the contract.
-	t.Setenv("CHEPHERD_A2A_SILENCE_WINDOW_MS", "800")
+	// CI runners flake on wall-clock-tight tests under parallel
+	// load. Original 300ms → 800ms (#522/#524) → still flaked on
+	// #542 K4 CI. 1500ms = 5× original safety margin. Full clock-
+	// injection refactor is a separate Wave (would touch
+	// internal/runtime to thread a clock through pumpPTYToBroker).
+	t.Setenv("CHEPHERD_A2A_SILENCE_WINDOW_MS", "1500")
 
 	src := newR4FakeSubscriberSource(64)
 	pty := &fakePTY{}
@@ -76,7 +77,7 @@ func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
 	// (a) — Wait up to 4s for the broker to capture an artifact
 	// event with the pushed bytes (was 2s; bumped for CI headroom).
 	gotBytes := false
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, ev := range broker.Events() {
 			if ev.Event.Type == "artifact" && ev.Event.Artifact != nil {
@@ -98,7 +99,7 @@ func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
 
 	// (b) — After the 800ms silence window, the completer must fire +
 	// flip the persisted Task to "completed". 5s headroom for CI.
-	deadline = time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	var completedState string
 	var completedBlob []byte
 	for time.Now().Before(deadline) {
