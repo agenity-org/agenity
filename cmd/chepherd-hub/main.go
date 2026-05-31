@@ -141,6 +141,7 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
+	srv.signaling.CloseAll()
 	stunStop()
 	turnStop()
 	return nil
@@ -178,23 +179,31 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// server holds runtime state for the hub binary. F1 keeps it
-// minimal; F5/F6/F7/F8 will add registries (signaling sessions,
-// TURN allocations, cached cards) here.
+// server holds runtime state for the hub binary. F1 kept it
+// minimal; F5 #495 added the signaling queue. F6/F7/F8 will add
+// TURN allocations + cached cards here.
 type server struct {
-	cfg *config
+	cfg       *config
+	signaling *signalingQueue
 }
 
-func newServer(cfg *config) *server { return &server{cfg: cfg} }
+func newServer(cfg *config) *server {
+	return &server{
+		cfg:       cfg,
+		signaling: newSignalingQueue(),
+	}
+}
 
 func (s *server) mux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/v1/cards", s.handleCards)
 	mux.HandleFunc("/v1/cards/", s.handleCards)
-	mux.HandleFunc("/v1/signaling/offer", s.handleSignalingStub(notImplF5))
-	mux.HandleFunc("/v1/signaling/answer", s.handleSignalingStub(notImplF5))
-	mux.HandleFunc("/v1/signaling/ice", s.handleSignalingStub(notImplF5))
+	// #495 Wave F5 — SDP signaling relay. Replaces the F1 stubs.
+	mux.HandleFunc("/v1/signaling/offer", s.makeSignalingHandler(SignalingOffer))
+	mux.HandleFunc("/v1/signaling/answer", s.makeSignalingHandler(SignalingAnswer))
+	mux.HandleFunc("/v1/signaling/ice", s.makeSignalingHandler(SignalingICE))
+	mux.HandleFunc("/v1/signaling/pending", s.handleSignalingPending)
 	mux.HandleFunc("/v1/relay/", s.handleRelay)
 	return mux
 }
@@ -208,20 +217,20 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"binary":  "chepherd-hub",
 		"version": hubVersion,
 		"stubs": map[string]string{
-			"cards":     "F5",
-			"signaling": "F5",
-			"stun":      "F3",
-			"turn":      "F6",
-			"relay":     "F7+F8",
+			"cards": "F5",
+			"stun":  "F3",
+			"turn":  "F6",
+			"relay": "F7+F8",
+		},
+		"implemented": map[string]string{
+			"signaling": "F5 #495",
 		},
 	})
 }
 
 // ─── /v1/cards ────────────────────────────────────────────────────
 
-const notImplF5 = `endpoint stub — Wave F5 #495 will implement WebRTC SDP signaling relay over this binary. See V0.9.2-ARCHITECTURE.md §5 #46 + §10 Pattern 2.`
-
-const notImplCardsF5 = `endpoint stub — Wave F5 #495 will implement the Agent Card directory aggregator (peers POST their card URL → hub indexes for discovery). See V0.9.2-ARCHITECTURE.md §5 #46.`
+const notImplCardsF5 = `endpoint stub — Wave F5 #495 follow-up will implement the Agent Card directory aggregator (peers POST their card URL → hub indexes for discovery). See V0.9.2-ARCHITECTURE.md §5 #46. The signaling relay portion of F5 is wired (offer/answer/ice/pending).`
 
 func (s *server) handleCards(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -235,24 +244,8 @@ func (s *server) handleCards(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ─── /v1/signaling/{offer,answer,ice} ─────────────────────────────
-
-// handleSignalingStub returns a closure that responds 501 with the
-// supplied TODO ref. Same pattern for all 3 signaling sub-routes
-// because F5 will wire identical relay semantics behind all of them.
-func (s *server) handleSignalingStub(detail string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotImplemented)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error":    "not implemented",
-			"todo_ref": "F5 #495",
-			"detail":   detail,
-			"method":   r.Method,
-			"path":     r.URL.Path,
-		})
-	}
-}
+// ─── /v1/signaling/{offer,answer,ice,pending} ─────────────────────
+// Implemented in signaling.go per #495 Wave F5.
 
 // ─── /v1/relay/* ──────────────────────────────────────────────────
 
