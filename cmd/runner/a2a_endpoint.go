@@ -155,6 +155,16 @@ func startA2AEndpoint(listenAddr, sid, name, baseURL, daemonURL, stateDir string
 		_, _ = w.Write([]byte("ok\n"))
 	})
 
+	// #492 Wave F2 — WebRTC DataChannel transport for A2A JSON-RPC.
+	// The runner mounts /webrtc/offer with an answerer factory that
+	// attaches ServeJSONRPC to the new PC's DataChannel; inbound
+	// envelopes route through the same A2A router that backs the
+	// HTTP /jsonrpc endpoint (jsonrpcHandler above, minus the JWT
+	// middleware because the cross-org JWT story rides T-series mTLS).
+	// When the peer's AgentCard advertises x-chepherd-p2p.supported=
+	// true, callers prefer DataChannel via webrtcrtc.JSONRPCClient.
+	mountF2DataChannel(mux, jsonrpcHandler)
+
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		_ = store.Close()
