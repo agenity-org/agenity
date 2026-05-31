@@ -104,7 +104,57 @@ func TestV094Walk_RealServerMintsJWT(t *testing.T) {
 	}
 	bearer := strings.TrimSpace(string(tokenBytes))
 
-	// Mint a JWT for caller=alpha, target=bravo.
+	// #469 Wave D3 wired Server.GrantCheck = PersistenceGrantCheck in
+	// the production cmd/run.go path. The mint endpoint now enforces
+	// grants. Assert BOTH the deny path (no grant pre-seeded) AND the
+	// allow path (agent-scoped grant covers the target) before claiming
+	// the mint pipeline is healthy end-to-end.
+
+	// 1. Pre-grant — mint MUST return 403. Proves the production
+	//    wiring is live and observable.
+	preReq, _ := http.NewRequest(
+		http.MethodPost,
+		"http://"+httpAddr+"/api/v1/jwt/mint",
+		strings.NewReader(`{"sub":"alpha","aud":"bravo"}`),
+	)
+	preReq.Header.Set("Authorization", "Bearer "+bearer)
+	preReq.Header.Set("Content-Type", "application/json")
+	preResp, err := http.DefaultClient.Do(preReq)
+	if err != nil {
+		t.Fatalf("pre-grant POST /api/v1/jwt/mint: %v", err)
+	}
+	preResp.Body.Close()
+	if preResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("pre-grant mint status = %d, want 403 (PersistenceGrantCheck must reject)", preResp.StatusCode)
+	}
+
+	// 2. Seed an agent-scoped grant covering caller=alpha → target=bravo
+	//    via POST /api/v1/grants (the #469 D3 CRUD surface).
+	grantBody := `{
+		"granter_org": "org-X",
+		"grantee_org": "org-Y",
+		"scope": {"type":"agent","agent_sid":"bravo"},
+		"permissions": ["call_agent"],
+		"accepted": true,
+		"created_by": "e2e-test"
+	}`
+	grantReq, _ := http.NewRequest(
+		http.MethodPost,
+		"http://"+httpAddr+"/api/v1/grants",
+		strings.NewReader(grantBody),
+	)
+	grantReq.Header.Set("Authorization", "Bearer "+bearer)
+	grantReq.Header.Set("Content-Type", "application/json")
+	grantResp, err := http.DefaultClient.Do(grantReq)
+	if err != nil {
+		t.Fatalf("POST /api/v1/grants: %v", err)
+	}
+	grantResp.Body.Close()
+	if grantResp.StatusCode != http.StatusCreated {
+		t.Fatalf("grant POST status = %d, want 201", grantResp.StatusCode)
+	}
+
+	// 3. Post-grant — mint MUST now return 200.
 	mintReq, _ := http.NewRequest(
 		http.MethodPost,
 		"http://"+httpAddr+"/api/v1/jwt/mint",
@@ -118,7 +168,7 @@ func TestV094Walk_RealServerMintsJWT(t *testing.T) {
 	}
 	defer mintResp.Body.Close()
 	if mintResp.StatusCode != http.StatusOK {
-		t.Fatalf("mint status = %d, want 200", mintResp.StatusCode)
+		t.Fatalf("post-grant mint status = %d, want 200", mintResp.StatusCode)
 	}
 	var mintBody struct {
 		Token        string `json:"token"`
