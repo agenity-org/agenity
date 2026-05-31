@@ -72,13 +72,16 @@ func LoadGitProviders(stateDir string) ([]*GitProvider, error) {
 	stableKey, stableErr := deriveProviderKeyStable(stateDir)
 	legacyKey, legacyErr := deriveProviderKey()
 	var migrationNeeded bool
+	kept := providers[:0]
 	for _, p := range providers {
 		if p.TokenCipher == "" {
+			kept = append(kept, p)
 			continue
 		}
 		if stableErr == nil {
 			if plain, err := aesDecrypt(stableKey, p.TokenCipher); err == nil {
 				p.Token = plain
+				kept = append(kept, p)
 				continue
 			}
 		}
@@ -88,17 +91,33 @@ func LoadGitProviders(stateDir string) ([]*GitProvider, error) {
 			if plain, err := aesDecrypt(legacyKey, p.TokenCipher); err == nil {
 				p.Token = plain
 				migrationNeeded = true
+				kept = append(kept, p)
 				continue
 			}
 		}
-		// Neither key worked. Surface as missing token rather than
-		// failing the whole load — same behavior as pre-#420 so
-		// operators with truly-corrupted entries still see the rest
-		// of their providers + can re-paste.
-		p.Token = ""
+		// #420 follow-up — AUTO-DELETE unrecoverable legacy entries
+		// instead of leaving them as "NO TOKEN" zombies. These entries
+		// were encrypted under a hostname that no longer exists (every
+		// chepherd container rebuild generates a new container ID
+		// which is the hostname pre-#425). Operator-facing accounts
+		// pane was showing "NO TOKEN — re-paste on the wizard" forever
+		// even after re-paste — the new entry would have the same
+		// composite ID + the stale entry's NO TOKEN state would leak
+		// through if not dropped.
+		//
+		// Dropping the entry has zero functional cost: operator's
+		// re-paste flow recreates it cleanly under the stable seed
+		// key with has_token=true. Logged loudly to stderr so the
+		// operator knows what happened.
+		fmt.Fprintf(os.Stderr,
+			"[chepherd-gitprovider] dropping unrecoverable legacy entry id=%q: encrypted under a hostname that no longer exists (pre-#425 chepherd container) — operator must re-paste the token in the wizard to recreate (#420)\n",
+			p.ID)
+		migrationNeeded = true // force re-save so dropped entry disappears from disk
 	}
+	providers = kept
 	// One-shot migration: re-encrypt under the stable key so the
-	// next load + every subsequent container bounce is robust.
+	// next load + every subsequent container bounce is robust. Also
+	// flushes any dropped unrecoverable entries to disk.
 	if migrationNeeded && stableErr == nil {
 		_ = SaveGitProviders(stateDir, providers)
 	}
