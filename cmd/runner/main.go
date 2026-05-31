@@ -77,6 +77,18 @@ type runnerConfig struct {
 	// points at this path.
 	mcpSocket string
 
+	// MCPTCPListen is the localhost-only TCP bind address for the
+	// agent-facing MCP HTTP transport (#478 Wave M2). Empty disables
+	// the TCP listener (Unix-socket only — back-compat with R1+M1
+	// scaffold). Set to "127.0.0.1:0" to bind a random free port +
+	// have the runner discover it for .mcp.json templating.
+	//
+	// Why both Unix + TCP: claude-code's HTTP MCP transport requires
+	// a TCP URL (verified empirically; http+unix URLs fail in
+	// `claude mcp list`). The Unix socket stays as the canonical
+	// non-agent transport (audit / monitoring / legacy consumers).
+	mcpTCPListen string
+
 	// Name is the operator-visible @-handle (e.g. "iogrid-1"). Empty
 	// at register-time is allowed — daemon may echo back from spawn
 	// intent in a later Wave. Set via --name or CHEPHERD_RUNNER_NAME.
@@ -163,6 +175,21 @@ func run() error {
 		return fmt.Errorf("mcp StartHTTP: %w", err)
 	}
 	log.Printf("[chepherd-runner] MCP listening on unix://%s", cfg.mcpSocket)
+	// #478 Wave M2 — add the localhost TCP listener for the agent
+	// container's claude-code MCP HTTP transport. claude-code can't
+	// dial http+unix:// URLs (verified empirically); a localhost
+	// TCP bind inside the container's network namespace gives the
+	// agent a dialable URL with the same security profile as a
+	// container-internal Unix socket. Empty mcpTCPListen disables
+	// the second listener (Unix socket only — back-compat with R1).
+	if cfg.mcpTCPListen != "" {
+		if err := mcp.AddHTTPListener(cfg.mcpTCPListen); err != nil {
+			return fmt.Errorf("mcp AddHTTPListener %q: %w", cfg.mcpTCPListen, err)
+		}
+		if addrs := mcp.ExtraListenerAddrs(); len(addrs) > 0 {
+			log.Printf("[chepherd-runner] MCP also listening on http://%s/mcp for agent-facing transport", addrs[len(addrs)-1])
+		}
+	}
 
 	// #504 — outbound WS registration with chepherd-daemon. Empty
 	// daemon-url skips registration entirely (dev mode + the
@@ -256,6 +283,8 @@ func parseFlags() (*runnerConfig, error) {
 		"agent flavor to launch (claude-code, sovereign-shell, ...)")
 	fs.StringVar(&cfg.mcpSocket, "mcp-socket", envOr("CHEPHERD_MCP_SOCKET", "/run/chepherd/mcp.sock"),
 		"MCP HTTP-over-Unix-socket path inside the container")
+	fs.StringVar(&cfg.mcpTCPListen, "mcp-tcp-listen", envOr("CHEPHERD_MCP_TCP_LISTEN", "127.0.0.1:0"),
+		"localhost-only TCP bind for the agent-facing MCP HTTP transport (#478 Wave M2). Empty = Unix socket only. 127.0.0.1:0 picks a free port + the runner discovers it for .mcp.json templating.")
 	fs.StringVar(&cfg.name, "name", envOr("CHEPHERD_RUNNER_NAME", ""),
 		"operator-visible @-handle for this runner (e.g. \"iogrid-1\"). Empty fine; daemon may echo back from spawn intent.")
 	fs.StringVar(&cfg.a2aBaseURL, "a2a-base-url", envOr("CHEPHERD_A2A_BASE_URL", ""),

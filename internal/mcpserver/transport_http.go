@@ -83,9 +83,60 @@ func (s *Server) StartHTTP(addr string) error {
 	if err != nil {
 		return err
 	}
+	s.httpListener = ln
+	s.httpServer = &http.Server{Handler: s.buildMux(), ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = s.httpServer.Serve(ln) }()
+	return nil
+}
+
+// ExtraListenerAddrs returns the local address every additional
+// listener bound by AddHTTPListener is serving on. Used by
+// chepherd-runner (#478 Wave M2) to discover the actual TCP port
+// when it asked for 127.0.0.1:0 so it can template the URL into
+// the agent's .mcp.json.
+func (s *Server) ExtraListenerAddrs() []string {
+	out := make([]string, 0, len(s.extraListeners))
+	for _, ln := range s.extraListeners {
+		out = append(out, ln.Addr().String())
+	}
+	return out
+}
+
+// AddHTTPListener binds an ADDITIONAL listener on addr serving the
+// same MCP handler the primary StartHTTP listener serves. Used by
+// chepherd-runner (#478 Wave M2) to expose BOTH a Unix socket
+// (/run/chepherd/mcp.sock — canonical R1+M1 transport, audit/
+// security/legacy consumers) AND a localhost-only TCP listener
+// (the agent-facing transport, since claude-code's HTTP transport
+// requires a TCP URL — verified empirically; http+unix URLs fail
+// in claude mcp list). Same `addr` syntax as StartHTTP: TCP
+// host:port or unix://path.
+//
+// Multiple Add* calls accumulate listeners; stopHTTP closes all.
+func (s *Server) AddHTTPListener(addr string) error {
+	ln, err := mcpListen(addr)
+	if err != nil {
+		return err
+	}
+	handler := s.buildMux()
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	s.extraListeners = append(s.extraListeners, ln)
+	s.extraServers = append(s.extraServers, srv)
+	go func() { _ = srv.Serve(ln) }()
+	return nil
+}
+
+func (s *Server) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp/ws", s.handleWS)
 	mux.HandleFunc("/mcp/rpc", s.handleRPC)
+	// #478 Wave M2 — Anthropic MCP Streamable HTTP transport. POST
+	// JSON-RPC body / GET SSE keep-alive. claude-code's HTTP
+	// transport dials this path. Replaces the M1 /mcp alias of
+	// /mcp/rpc with the spec-compliant handler (Mcp-Session-Id,
+	// notification-202, GET-SSE upgrade). /mcp/rpc stays for the
+	// runner-side upstream-proxy + curl-style ad-hoc clients.
+	mux.HandleFunc("/mcp", s.handleStreamableHTTP)
 	mux.HandleFunc("/mcp/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
@@ -96,16 +147,14 @@ func (s *Server) StartHTTP(addr string) error {
 			"name":            "chepherd",
 			"version":         "0.8.0",
 			"protocolVersion": "2024-11-05",
-			"transport":       "http+ws",
+			"transport":       "http+streamable+ws",
 		})
 	})
-	s.httpListener = ln
-	s.httpServer = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = s.httpServer.Serve(ln) }()
-	return nil
+	return mux
 }
 
-// stopHTTP closes the HTTP listener. Idempotent.
+// stopHTTP closes every HTTP listener bound by StartHTTP +
+// AddHTTPListener. Idempotent.
 func (s *Server) stopHTTP() {
 	if s.httpServer != nil {
 		_ = s.httpServer.Close()
@@ -115,6 +164,14 @@ func (s *Server) stopHTTP() {
 		_ = s.httpListener.Close()
 		s.httpListener = nil
 	}
+	for _, srv := range s.extraServers {
+		_ = srv.Close()
+	}
+	for _, ln := range s.extraListeners {
+		_ = ln.Close()
+	}
+	s.extraServers = nil
+	s.extraListeners = nil
 }
 
 // handleWS upgrades the connection to a WebSocket and runs the same
