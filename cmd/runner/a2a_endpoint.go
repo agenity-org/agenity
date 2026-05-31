@@ -56,6 +56,12 @@ type a2aEndpoint struct {
 	store    *sqlite.Store
 }
 
+// Handler returns the underlying http.Handler so callers (e.g. the
+// F7.1 reverse-proxy tunnel client #585) can route inbound proxied
+// requests through the same mux as the direct /a2a/<sid>/jsonrpc
+// listener — single source of truth for A2A routing.
+func (e *a2aEndpoint) Handler() http.Handler { return e.server.Handler }
+
 // startA2AEndpoint spins up the runner's per-session A2A endpoint.
 // Returns the bound listener address (useful when --a2a-listen is
 // "host:0" — OS picks the port).
