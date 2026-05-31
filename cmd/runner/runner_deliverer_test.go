@@ -114,10 +114,24 @@ func TestR4_RunnerDeliverer_S2_PTYWritesPassThrough(t *testing.T) {
 	if len(pty.writes) == 0 {
 		t.Fatalf("S2 FAIL: no PTY writes captured")
 	}
+	// K1 #472 — PTY now receives the knock marker (NOT user text).
+	// Per §10 step 12 the agent's pattern detector sees the marker +
+	// calls chepherd.get_task to fetch the message body. Format:
+	//   [chepherd-knock taskID=<uuid> from=<sub>]\n
+	// No JWT in this test → from="anonymous".
 	got := string(pty.writes[0])
-	const want = "Hello, world!\n"
-	if got != want {
-		t.Errorf("S2 FAIL: PTY write = %q, want %q", got, want)
+	const prefix = "[chepherd-knock taskID="
+	const suffix = " from=anonymous]\n"
+	if !strings.HasPrefix(got, prefix) {
+		t.Errorf("S2 FAIL: PTY write = %q, want prefix %q (K1 knock format)", got, prefix)
+	}
+	if !strings.HasSuffix(got, suffix) {
+		t.Errorf("S2 FAIL: PTY write = %q, want suffix %q (K1 knock format)", got, suffix)
+	}
+	// Verify embedded taskID matches the returned task.
+	gotTaskID := strings.TrimSuffix(strings.TrimPrefix(got, prefix), suffix)
+	if gotTaskID != task.ID {
+		t.Errorf("S2 FAIL: knock taskID = %q, want %q", gotTaskID, task.ID)
 	}
 }
 
