@@ -39,13 +39,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// crossOrgJWTTTL is the issued JWT's lifetime. 5 minutes balances
-// "callers need fresh tokens for sliding window" against "if Y's
-// grant for X is revoked, the cached token shouldn't outlive the
-// revocation by more than 5min". Conservative; production may tune.
-const crossOrgJWTTTL = 5 * time.Minute
+// crossOrgJWTTTL is the issued JWT's lifetime. Per V0.9.2-ARCH §15.2
+// the spec default is 60 seconds (configurable per grant). Pre-#582
+// shipped 5min which diverged from spec by 5x; operators expecting
+// spec-default behavior got over-permissive caching. The
+// CrossOrgJWTMinter.TTL field overrides this at runtime when the
+// grant configures a custom value.
+const crossOrgJWTTTL = 60 * time.Second
 
 // jwtSafetyMargin is subtracted from jwt.exp when computing the
 // client-side cache expiry, so cached entries are dropped before
@@ -148,14 +152,22 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	nbf := now.Unix()
 	exp := now.Add(ttl).Unix()
+	// V0.9.2-ARCH §15.2 mandates the full claim set. Pre-#579/#580/#581
+	// shipped only iss/sub/aud/scope/nbf/exp/iat; the additional spec
+	// claims (jti for replay prevention, chepherd_grant_id for grant
+	// reference, chepherd_rate_window for accounting bucket) were
+	// missing — see QA Category B.2 evidence (#560).
 	claims := map[string]any{
-		"iss":   m.Issuer,
-		"sub":   callerOrg,
-		"aud":   nonEmpty(req.Audience, m.Issuer),
-		"scope": req.Scope,
-		"nbf":   nbf,
-		"exp":   exp,
-		"iat":   nbf,
+		"iss":                   m.Issuer,
+		"sub":                   callerOrg,
+		"aud":                   nonEmpty(req.Audience, m.Issuer),
+		"scope":                 req.Scope,
+		"nbf":                   nbf,
+		"exp":                   exp,
+		"iat":                   nbf,
+		"jti":                   uuid.NewString(),
+		"chepherd_grant_id":     synthesizeGrantID(callerOrg, m.Issuer, req.Scope),
+		"chepherd_rate_window":  now.Truncate(time.Minute).Unix(),
 	}
 	jws, err := m.Signer.Sign(claims)
 	if err != nil {
@@ -169,6 +181,21 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		NotBefore: nbf,
 		Expires:   exp,
 	})
+}
+
+// synthesizeGrantID computes a stable, human-readable identifier for
+// the RBAC grant the mint operation is exercising. Format:
+// "<callerOrg>@<targetOrg>:<scope>" — uniquely identifies the
+// (caller, target, scope) tuple that authorizes a cross-org call
+// per V0.9.2-ARCH §13 (grant uniqueness is on this tuple).
+//
+// Future: when CrossOrgGrantChecker.Check returns the persisted
+// grant row ID directly, swap to that ID. For now, the synthesized
+// ID is fully deterministic + auditable across daemon restarts.
+//
+// #580.
+func synthesizeGrantID(callerOrg, targetOrg, scope string) string {
+	return callerOrg + "@" + targetOrg + ":" + scope
 }
 
 func (m *CrossOrgJWTMinter) now() time.Time {
