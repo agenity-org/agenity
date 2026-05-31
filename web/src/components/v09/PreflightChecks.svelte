@@ -28,7 +28,7 @@
     // 2. repo reachable — only relevant for remote
     if (selection?.repo?.kind === 'remote') {
       try {
-        const r = await fetch('/api-v08/v1/discovery/?token-id=' + encodeURIComponent(selection.repo.token_id || ''));
+        const r = await fetch('/api/v1/discovery/?token-id=' + encodeURIComponent(selection.repo.token_id || ''));
         out.push({
           kind: 'repo',
           label: 'Repo accessible',

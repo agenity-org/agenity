@@ -38,7 +38,7 @@
   let oauthStatus = $state('');
   let oauthPollHandle = null;
 
-  const API = '/api-v08/v1';
+  const API = '/api/v1';
 
   $effect(() => {
     if (autostart) beginOAuthLogin();

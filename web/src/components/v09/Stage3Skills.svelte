@@ -31,7 +31,7 @@
     skillOverrides = $bindable({}),
   } = $props();
 
-  const API = '/api-v08/v1';
+  const API = '/api/v1';
 
   let allSkills = $state([]);
   let allRoles = $state([]);

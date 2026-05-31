@@ -47,7 +47,7 @@
     const _origFetch = window.fetch.bind(window);
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : (input?.url || '');
-      if (url.startsWith('/api/') || url.startsWith('/api-v08/')) {
+      if (url.startsWith('/api/')) {
         let tok = '';
         try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
         init = init || {};
@@ -93,7 +93,7 @@
   async function probeAuth(tok) {
     if (!tok) return false;
     try {
-      const r = await fetch('/api-v08/v1/sessions');
+      const r = await fetch('/api/v1/sessions');
       return r.status === 200;
     } catch {
       return false;
