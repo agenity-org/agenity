@@ -298,6 +298,15 @@ func run() error {
 			return fmt.Errorf("a2a endpoint: %w", err)
 		}
 		a2aSrv = srv
+		// #473 Wave K2 — wire the runner's task store into the MCP
+		// server so the chepherd.get_task tool can read tasks
+		// persisted by the A2A SendMessage path. nil store means
+		// agents see -32000 "task store not wired" when they call
+		// chepherd.get_task — honest degradation, no silent
+		// blackhole.
+		if store := srv.Store(); store != nil {
+			mcp.SetTaskStore(store.Tasks())
+		}
 	}
 
 	// Wait for SIGINT / SIGTERM.

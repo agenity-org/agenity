@@ -193,6 +193,17 @@ func (e *a2aEndpoint) Addr() string {
 	return e.listener.Addr().String()
 }
 
+// Store returns the runner's task store so other surfaces
+// (chepherd.get_task MCP tool — #473 Wave K2) can read tasks
+// persisted by the A2A SendMessage path. nil when the endpoint
+// wasn't started.
+func (e *a2aEndpoint) Store() *sqlite.Store {
+	if e == nil {
+		return nil
+	}
+	return e.store
+}
+
 // buildRunnerAgentCard constructs the canonical per-session Agent Card
 // per V0.9.2-ARCHITECTURE §5 #9 + §7 + §12.1. Replaces R2's
 // minimalRunnerCard stub.

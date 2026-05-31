@@ -33,8 +33,16 @@ import (
 	"time"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/runtime"
 )
+
+// SetTaskStore wires the runner's R2-owned TaskRepository so the
+// chepherd.get_task MCP tool (#473 Wave K2) can fetch persisted
+// tasks recipient-scoped. nil disables the tool.
+func (s *Server) SetTaskStore(store persistence.TaskRepository) {
+	s.taskStore = store
+}
 
 // Server hosts the chepherd MCP JSON-RPC surface. Constructed once per
 // chepherd-run process. The HTTP/WebSocket listener is started via
@@ -70,6 +78,12 @@ type Server struct {
 	// absolute §12.1 agent_card_urls. Empty leaves URLs relative.
 	// Set via SetA2ABaseURL — wired from cmd/run.go. #474 Wave K3.
 	a2aBaseURL string
+
+	// taskStore backs the chepherd.get_task MCP tool (#473 Wave K2).
+	// Runner's MCP server gets this set to its R2-owned sqlite store
+	// so agents can fetch tasks emitted via knock markers. nil
+	// disables the tool (returns -32000 "task store not wired").
+	taskStore persistence.TaskRepository
 }
 
 // SetAuthToken configures the bearer token required on every WS upgrade
@@ -282,6 +296,18 @@ func (s *Server) toolList() []map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"team": map[string]any{"type": "string"},
+			},
+		}},
+		// #473 Wave K2 — V0.9.2-ARCH §10 Pattern 1 step 14-15.
+		// Recipient-scoped: caller's name MUST match task.contextID
+		// or the call returns isError=true (-32004 forbidden). This
+		// prevents cross-task task-data leakage between agents
+		// hosted by the same daemon / sharing the runner's MCP.
+		{"name": "chepherd.get_task", "description": "Fetch an A2A task envelope by taskID. Recipient-scoped: caller's @-handle MUST match the task's contextID (the recipient runner). Call this when you see a knock marker `[chepherd-knock taskID=<uuid> from=<name>]` in your PTY — the marker tells you a task arrived; this tool returns the body. Args: taskID (string, required).", "inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"taskID"},
+			"properties": map[string]any{
+				"taskID": map[string]any{"type": "string"},
 			},
 		}},
 		{"name": "chepherd.set_scorecard", "description": "ScrumMaster-only: record a 0..10 score for each axis of a worker. Args: name, G, V, F, E, D, note (optional). G=Goal clarity, V=Velocity, F=Focus, E=End-state proximity, D=Discipline (CLAUDE.md compliance).", "inputSchema": map[string]any{
@@ -562,6 +588,51 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		}
 		peers := buildListPeersEntries(s.rt, caller, teamFilter, s.a2aBaseURL)
 		resp.Result = map[string]any{"peers": peers, "team": teamFilter}
+	case "get_task":
+		// #473 Wave K2 — V0.9.2-ARCH §10 Pattern 1 steps 14-15.
+		// Recipient-scoped: caller's @-handle must match the task's
+		// ContextID (the recipient runner). Errors:
+		//   -32000 task store not wired (runner config gap)
+		//   -32004 forbidden (caller != recipient)
+		//   -32602 invalid params (missing taskID)
+		//   -32603 internal (store error other than not-found)
+		// Standard tools/call -32603 path for not-found taskID
+		// surfaces as isError=true with a "task not found" message.
+		var a struct {
+			TaskID string `json:"taskID"`
+		}
+		_ = json.Unmarshal(args, &a)
+		if a.TaskID == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "chepherd.get_task: taskID required"}
+			break
+		}
+		if s.taskStore == nil {
+			resp.Error = &rpcErr{Code: -32000, Message: "chepherd.get_task: task store not wired (runner SetTaskStore missing)"}
+			break
+		}
+		callerName := s.CurrentCaller()
+		rec, err := s.taskStore.Get(context.Background(), a.TaskID)
+		if err != nil || rec == nil {
+			resp.Error = &rpcErr{Code: -32603, Message: fmt.Sprintf("chepherd.get_task: task %q not found", a.TaskID)}
+			break
+		}
+		// Decode InputBlob to recover the original Message (which
+		// carries ContextID = recipient runner's sid). RecipientCheck:
+		// callerName must equal that ContextID.
+		var inputMsg a2a.Message
+		_ = json.Unmarshal(rec.InputBlob, &inputMsg)
+		if callerName != "" && inputMsg.ContextID != "" && callerName != inputMsg.ContextID {
+			resp.Error = &rpcErr{Code: -32004, Message: fmt.Sprintf("chepherd.get_task: forbidden (caller %q is not task recipient %q)", callerName, inputMsg.ContextID)}
+			break
+		}
+		// Return the canonical A2A task envelope. OutputBlob already
+		// carries it (runnerDeliverer marshals task there on Save).
+		var taskEnv map[string]any
+		_ = json.Unmarshal(rec.OutputBlob, &taskEnv)
+		resp.Result = map[string]any{
+			"task":  taskEnv,
+			"input": inputMsg,
+		}
 	case "set_scorecard":
 		var a struct {
 			Name           string
