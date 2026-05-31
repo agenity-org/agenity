@@ -1,0 +1,4 @@
+aider> Loaded 12 files.
+Tokens: 1,234 sent, 567 received.
+
+>
