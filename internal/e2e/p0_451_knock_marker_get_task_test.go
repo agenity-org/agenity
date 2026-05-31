@@ -48,7 +48,7 @@ import (
 )
 
 // TestP0_451_KnockMarkerPattern_CheapPath pins L1-L4 without live
-// claude. Sovereign-shell agents stand in for claude-code; the
+// claude. sovereign-shell agents stand in for claude-code; the
 // chepherd-side shape (PTY writes only knock, persisted task body
 // flows via MCP) is the contract the test verifies.
 func TestP0_451_KnockMarkerPattern_CheapPath(t *testing.T) {
@@ -81,7 +81,7 @@ func TestP0_451_KnockMarkerPattern_CheapPath(t *testing.T) {
 
 	// Capture the receiver's current ring buffer baseline so the
 	// post-send assertion can isolate the new bytes.
-	preRing, _ := h.readSovereignPane(receiver)
+	preRing, _ := h.readAgentPane(receiver)
 	_ = preRing
 
 	// ─── Send the message via send_to_session ─────────────────
@@ -123,7 +123,7 @@ func TestP0_451_KnockMarkerPattern_CheapPath(t *testing.T) {
 	var paneSeen string
 	var sawKnock, leakedBody bool
 	for time.Now().Before(deadline) {
-		pane, _ := h.readSovereignPane(receiver)
+		pane, _ := h.readAgentPane(receiver)
 		paneSeen = pane
 		if strings.Contains(pane, "[chepherd-knock taskID="+sendInner.TaskID+" from="+sender+"]") {
 			sawKnock = true
@@ -237,12 +237,12 @@ func TestP0_451_KnockMarkerPattern_CheapPath(t *testing.T) {
 	}
 }
 
-// readSovereignPane is a small helper that wraps the chepherd-side
+// readAgentPane is a small helper that wraps the chepherd-side
 // PTY ring-buffer read for non-claude agents (sovereign-shell). The
 // MCP read_pane handler returns the same shape regardless of agent
 // flavor; reusing readPaneViaMCP would couple test files. Inlined
 // for clarity since this test owns the cheap-path assertions.
-func (h *e2eHarness) readSovereignPane(name string) (string, error) {
+func (h *e2eHarness) readAgentPane(name string) (string, error) {
 	return h.readPaneViaMCP(name)
 }
 
