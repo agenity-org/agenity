@@ -432,6 +432,24 @@ func (d *runnerDeliverer) withPTY(pty runtime.SubscriberSource, ptyW ptyWriter, 
 //   - Returns the Task in state="working"; silence-finalize will
 //     flip it to "completed" via the completer
 func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task, error) {
+	// #586 — per V0.9.2-ARCH §10 Pattern 1, the runner endpoint at
+	// /a2a/<sid>/jsonrpc serves EXACTLY one session. SendMessage with
+	// a ContextID that doesn't match the runner's sid is either:
+	//   - a routing bug (caller hit the wrong runner)
+	//   - a cross-session bleed (two clients confused which sid to
+	//     address)
+	// Pre-#586 the runner silently auto-created a task with the
+	// mismatched ContextID — more permissive than the daemon's
+	// equivalent surface (daemon returns -32603 on unknown contextId).
+	// Strict-match brings runner + daemon behaviour into alignment
+	// AND surfaces the routing error to the caller.
+	//
+	// Empty ContextID is allowed for compatibility (some clients
+	// don't supply one; the path /a2a/<sid> already disambiguates).
+	if msg.ContextID != "" && msg.ContextID != d.runnerSID {
+		return nil, fmt.Errorf("runnerDeliverer: contextId %q does not match this runner's sid %q (each runner serves exactly one session per /a2a/<sid>)", msg.ContextID, d.runnerSID)
+	}
+
 	taskID := msg.TaskID
 	if taskID == "" {
 		id, err := uuid.NewV7()
