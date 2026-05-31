@@ -39,6 +39,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -133,6 +134,19 @@ type runnerConfig struct {
 	// the runner exec's it. Empty defaults to the agentcatalog
 	// flavor's DefaultArgs.
 	agentArgs []string
+
+	// STUNServers + TURNServers are the operator-configured ICE
+	// candidate-gathering endpoints (#493 Wave F3). Repeated values
+	// accumulate (comma-separated via env or --stun-server / --turn-
+	// server flags). Empty falls through to F1's DefaultICEServers
+	// (public Google STUN) — fine for LAN dev; production deployments
+	// MUST populate via the F5 chepherd.org-relay templating.
+	//
+	// Wire formats:
+	//   STUN: addr:port           (scheme auto-prefixed)
+	//   TURN: addr:port:user:pass (TURN requires credentials)
+	stunServers []string
+	turnServers []string
 
 	// Headless (#499 Wave H1) is the per-task ephemeral lifecycle
 	// mode: skip daemon-WS registration + MCP socket; read ONE task
@@ -371,9 +385,30 @@ func parseFlags() (*runnerConfig, error) {
 		"#499 Wave H1 — wall-clock cap for the agent process under --headless. Zero disables (not recommended for batch consumers).")
 	fs.StringVar(&cfg.headless.credentialsFile, "credentials-file", "",
 		"#501 Wave H3 — path to 0600 JSON file with BYO credentials [{\"provider\":\"anthropic\",\"key\":\"sk-...\"}]. Read once + deleted; values injected into CHILD agent process env only (never on the runner's command line, never exported to the runner's own env).")
+	// #493 Wave F3 — ICE candidate-gathering servers. Repeated flags
+	// accumulate; env vars carry comma-separated lists.
+	var stunCSV, turnCSV string
+	fs.StringVar(&stunCSV, "stun-server", envOr("CHEPHERD_STUN_SERVERS", ""),
+		"#493 Wave F3 — STUN servers for ICE srflx candidate gathering. Repeat or comma-separate (addr:port). Empty falls through to F1 DefaultICEServers (public Google STUN). Production deploys MUST populate via F5 chepherd.org-relay.")
+	fs.StringVar(&turnCSV, "turn-server", envOr("CHEPHERD_TURN_SERVERS", ""),
+		"#493 Wave F3 — TURN servers for ICE relay candidate gathering. Repeat or comma-separate (addr:port:user:pass). Credentials required — TURN without auth is a security hole.")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, err
+	}
+	if stunCSV != "" {
+		for _, s := range strings.Split(stunCSV, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				cfg.stunServers = append(cfg.stunServers, s)
+			}
+		}
+	}
+	if turnCSV != "" {
+		for _, s := range strings.Split(turnCSV, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				cfg.turnServers = append(cfg.turnServers, s)
+			}
+		}
 	}
 	if cfg.sid == "" {
 		// Touch point 1 scaffold allows empty sid for local-only
