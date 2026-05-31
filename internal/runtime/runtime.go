@@ -2195,14 +2195,43 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		}
 	}
 	r.extraEnvMu.RUnlock()
-	cfg := map[string]any{
-		"mcpServers": map[string]any{
-			"chepherd": map[string]any{
-				"command": chepBin,
-				"args":    []string{"mcp", "--url", mcpURL},
-				"env":     mcpEnv,
+	// #478 Wave M2 — Anthropic MCP Streamable HTTP transport. When
+	// CHEPHERD_AGENT_MCP_URL is set (the runner injects this after
+	// it binds the TCP loopback listener via AddHTTPListener with
+	// the actual bound port), the agent's .mcp.json points the HTTP
+	// transport at the local MCP server directly — no stdio bridge
+	// subprocess, no WS dial to a remote daemon. claude-code's HTTP
+	// transport handles the rest.
+	//
+	// Back-compat: when CHEPHERD_AGENT_MCP_URL is empty (legacy /
+	// chepherd-v05 path / unit-test mode), emit the stdio bridge
+	// stanza as before so existing deployments keep working until
+	// M3 #479 finishes the cutover. Bearer auth flows via the
+	// `Authorization` header on the HTTP transport's request
+	// headers, which claude-code's HTTP transport supports natively.
+	var cfg map[string]any
+	if httpURL := os.Getenv("CHEPHERD_AGENT_MCP_URL"); httpURL != "" {
+		entry := map[string]any{
+			"type": "http",
+			"url":  httpURL,
+		}
+		if tok := mcpEnv["CHEPHERD_TOKEN"]; tok != "" {
+			entry["headers"] = map[string]any{
+				"Authorization":    "Bearer " + tok,
+				"X-Chepherd-Agent": sessionName,
+			}
+		}
+		cfg = map[string]any{"mcpServers": map[string]any{"chepherd": entry}}
+	} else {
+		cfg = map[string]any{
+			"mcpServers": map[string]any{
+				"chepherd": map[string]any{
+					"command": chepBin,
+					"args":    []string{"mcp", "--url", mcpURL},
+					"env":     mcpEnv,
+				},
 			},
-		},
+		}
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

@@ -44,6 +44,13 @@ type Server struct {
 	deliverer    a2a.Deliverer // v0.9.2: backs the chepherd.send_to_session shim onto A2A SendMessage. Removed in v1.0.
 	httpListener net.Listener
 	httpServer   *http.Server
+	// extraListeners + extraServers hold additional listeners bound
+	// by AddHTTPListener (#478 Wave M2). chepherd-runner uses this
+	// to expose the same MCP handler on BOTH the canonical Unix
+	// socket AND a localhost TCP port (the agent-facing transport,
+	// since claude-code's HTTP transport requires a TCP URL).
+	extraListeners []net.Listener
+	extraServers   []*http.Server
 	// AuthToken (#139/#153) is the shared-secret bearer token clients
 	// must present. Set via SetAuthToken before StartHTTP. Empty string
 	// disables auth (CHEPHERD_AUTH_REQUIRE=false) — only safe on
