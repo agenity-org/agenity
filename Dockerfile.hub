@@ -1,0 +1,54 @@
+# Dockerfile.hub — chepherd-hub binary scaffold (#491 Wave F1).
+#
+# Deploy unit for the public-internet chepherd-org services per
+# V0.9.2-ARCHITECTURE.md §5 #46 + §10 Pattern 2. The hub binary is
+# distinct from chepherd-daemon (the operator-side control plane);
+# this image holds ONLY the hub binary so its dependency closure +
+# blast radius stay independent from the daemon.
+#
+# F1 scope: scaffold + 5 endpoint stubs. F5+ followups wire the real
+# signaling / TURN / relay handlers behind the stub slots; this
+# Dockerfile stays valid through those changes (just rebuild).
+
+# ─── stage 1: build chepherd-hub ──────────────────────────────────────────
+FROM golang:1.25-alpine AS builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' \
+    -o /chepherd-hub ./cmd/chepherd-hub
+
+# ─── stage 2: runtime ─────────────────────────────────────────────────────
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# Application defaults — overridable at deploy time.
+ENV CHEPHERD_HUB_LISTEN=":8443" \
+    CHEPHERD_HUB_STUN_LISTEN=":3478" \
+    CHEPHERD_HUB_TURN_LISTEN=":3478"
+
+# F1 ports:
+#   8443/tcp  — HTTPS (operator-facing; production typically front-
+#               ended by a TLS-terminating proxy or run with
+#               --tls-cert + --tls-key)
+#   3478/udp  — STUN  (F3 will fill behind the stub)
+#   3478/udp  — TURN  (F6 will fill — coexists with STUN per RFC 8656)
+#   3478/tcp  — TURN-over-TCP fallback (F6)
+EXPOSE 8443/tcp 3478/udp 3478/tcp
+
+COPY --from=builder /chepherd-hub /chepherd-hub
+
+# distroless/static:nonroot runs as UID 65532; matches the
+# k8s securityContext.runAsNonRoot=true default.
+USER nonroot:nonroot
+
+ENTRYPOINT ["/chepherd-hub"]
+
+# Liveness probe at /healthz (k8s + Swarm both honor HEALTHCHECK).
+# Returns 200 with {"ok":true,"binary":"chepherd-hub","version":...}.
+# distroless/static lacks curl/wget; deploy-side probes (kubelet,
+# nomad, docker) supply their own HTTP-GET probe — this is purely
+# informational metadata.
+LABEL org.opencontainers.image.title="chepherd-hub" \
+      org.opencontainers.image.description="Public-internet chepherd-org services scaffold (F1)" \
+      org.opencontainers.image.source="https://github.com/chepherd/chepherd"
