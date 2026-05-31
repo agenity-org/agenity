@@ -183,13 +183,19 @@ func (m *MethodBodies) handleCancelTask(req JSONRPCRequest) JSONRPCResponse {
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "TaskRepository.Get: "+err.Error())
 	}
-	// Terminal states can't be canceled — return current state without modification.
-	if rec.State == string(TaskStateCompleted) || rec.State == string(TaskStateFailed) || rec.State == string(TaskStateCanceled) {
+	// Terminal states can't be canceled — return current state without
+	// modification. #484 Wave A5 routes through IsTerminal so all four
+	// terminal states (COMPLETED / FAILED / CANCELED / REJECTED) get
+	// the same no-op treatment.
+	if IsTerminal(TaskState(rec.State)) {
 		t, _ := decodeTask(rec)
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: cancelTaskResult{Task: t}}
 	}
-	rec.State = string(TaskStateCanceled)
-	rec.UpdatedAt = time.Now().UTC()
+	// #484 Wave A5 — route the cancel transition through the §16
+	// state-machine seam so invariants are enforced uniformly.
+	if err := TransitionTask(rec, TaskStateCanceled, "tasks/cancel"); err != nil {
+		return errorResp(req.ID, ErrCodeInternalError, "TransitionTask: "+err.Error())
+	}
 	if err := m.Store.Tasks().Save(ctx, rec); err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "TaskRepository.Save: "+err.Error())
 	}
