@@ -63,6 +63,12 @@ func TestP0_403_StartShFallbackBranches(t *testing.T) {
 		t.Fatalf("read scripts/start.sh: %v", err)
 	}
 	src := string(data)
+	// Post-#414: agent containers SHARE chepherd netns
+	// (--network=container:chepherd). The chepherd-container's own
+	// network (chepherd-net vs slirp4netns fallback) is still gated
+	// by the #403/#406 detection, but agents bypass that entirely.
+	// Test asserts both the chepherd-side fallback machinery + the
+	// new agent-side shared-netns env propagation.
 	required := []string{
 		`NETWORK_BACKEND="$(podman info`, // backend detection
 		`USE_CHEPHERD_NET=0`,              // explicit fallback flag
@@ -70,10 +76,9 @@ func TestP0_403_StartShFallbackBranches(t *testing.T) {
 		`$cni_dir/bridge`,                            // loop body checks bridge
 		`$cni_dir/firewall`,                          // loop body checks firewall
 		`#403 P0`,                         // citation
-		`CHEPHERD_CONTAINER_NETWORK=slirp4netns`, // fallback agent network
-		`CHEPHERD_MCP_URL=ws://host.containers.internal`, // fallback MCP URL
-		`containernetworking-plugins`,     // operator install hint
-		`Bounce chepherd after install.`,  // operator next-step
+		`CHEPHERD_CONTAINER_NETWORK=container:chepherd`, // #414 shared-netns default
+		`CHEPHERD_MCP_URL=ws://127.0.0.1:9090/mcp/ws`,   // #414 loopback default
+		`#414 architectural fix`,                        // citation for the shared-netns architecture
 	}
 	for _, sub := range required {
 		if !contains(src, sub) {
