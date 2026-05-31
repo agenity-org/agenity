@@ -34,6 +34,15 @@ type PumpSendMark = pumpSendMark
 // NewPumpSendMark exports the constructor.
 func NewPumpSendMark() *PumpSendMark { return newPumpSendMark() }
 
+// NewPumpSendMarkWithSilenceFire — #549 test-only constructor that
+// returns a mark with the SilenceFire deterministic-clock seam
+// wired. cmd/runner R4/K5 tests call this to trigger silence-
+// finalize deterministically instead of waiting on wall-clock.
+// Production code uses NewPumpSendMark (SilenceFire stays nil).
+func NewPumpSendMarkWithSilenceFire() *PumpSendMark {
+	return newPumpSendMarkWithSilenceFire()
+}
+
 // PumpPTYToBroker is the exported entry to the existing
 // pumpPTYToBroker function. Refer to that function's comment for
 // the full contract (#379 #385 #387). Wave R4 #465 wires this

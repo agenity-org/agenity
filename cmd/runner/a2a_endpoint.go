@@ -347,6 +347,20 @@ type runnerDeliverer struct {
 	pty    runtime.SubscriberSource // *session.Session in production
 	ptyW   ptyWriter                // *session.Session also satisfies this
 	broker runtime.BrokerPublisher  // *a2a.StreamBroker in production
+
+	// #549 — test seams. markFactory + markObserver are nil in
+	// production (Deliver uses runtime.NewPumpSendMark + leaves the
+	// mark anonymous). Tests inject:
+	//   markFactory  = runtime.NewPumpSendMarkWithSilenceFire so the
+	//                  spawned mark has the deterministic SilenceFire
+	//                  channel
+	//   markObserver = a callback receiving the created mark so the
+	//                  test can call mark.MarkSilenceFire() at the
+	//                  precise moment it wants silence-finalize to
+	//                  fire (no wall-clock dependency)
+	// Both nil in production = pre-#549 behavior.
+	markFactory  func() *runtime.PumpSendMark
+	markObserver func(*runtime.PumpSendMark)
 }
 
 // ptyWriter is the minimal write seam — *session.Session satisfies
@@ -418,7 +432,17 @@ func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Ta
 	// R4 PTY-driving path. pty + ptyW + broker must all be set;
 	// otherwise fall back to R2's persist-only behavior.
 	if d.pty != nil && d.ptyW != nil && d.broker != nil {
-		mark := runtime.NewPumpSendMark()
+		// #549 — markFactory + markObserver test seams. Production
+		// leaves them nil → standard NewPumpSendMark + no observer.
+		var mark *runtime.PumpSendMark
+		if d.markFactory != nil {
+			mark = d.markFactory()
+		} else {
+			mark = runtime.NewPumpSendMark()
+		}
+		if d.markObserver != nil {
+			d.markObserver(mark)
+		}
 		completer := d.completer()
 		go runtime.PumpPTYToBroker(d.broker, d.pty, task, completer, mark)
 		// Wait for the pump to subscribe so the byte stream from the
