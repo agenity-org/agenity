@@ -50,10 +50,23 @@ func DefaultICEServers() []webrtc.ICEServer {
 
 // Config carries the chepherd-side knobs for constructing a
 // PeerConnection. All fields optional — zero-value Config uses
-// DefaultICEServers() + 'a2a' DataChannel label.
+// DefaultICEServers() + 'a2a' DataChannel label + no fingerprint
+// pinning (pion's default RFC 8829 verification still applies).
 type Config struct {
-	ICEServers     []webrtc.ICEServer
-	ChannelLabel   string // default 'a2a' per chepherd-p2p extension
+	ICEServers   []webrtc.ICEServer
+	ChannelLabel string // default 'a2a' per chepherd-p2p extension
+
+	// PinnedFingerprints is the optional out-of-band fingerprint
+	// pin set (#494 Wave F4). When non-empty, SetRemoteOffer +
+	// SetRemoteAnswer reject SDPs whose a=fingerprint doesn't
+	// match at least one entry — fast-fails before the DTLS
+	// handshake. Defends against SDP-signaling-compromise MITM
+	// where both cert + advertised fingerprint are attacker-swapped
+	// (pion's default verification only checks cert↔SDP match,
+	// not that the SDP fingerprint is the operator-trusted one).
+	// Empty disables pinning (pion's RFC 8829 default still
+	// rejects cert/fingerprint mismatches).
+	PinnedFingerprints []webrtc.DTLSFingerprint
 }
 
 // PeerConnection is the chepherd-wrapped pion v4 PeerConnection plus
@@ -65,6 +78,10 @@ type PeerConnection struct {
 
 	pc *webrtc.PeerConnection
 	ch *webrtc.DataChannel
+
+	// pinned is the operator-supplied out-of-band fingerprint pin
+	// set (#494 Wave F4). nil/empty disables pinning.
+	pinned []webrtc.DTLSFingerprint
 
 	// onMessage fires for every inbound DataChannel message.
 	// Caller sets via OnMessage.
@@ -97,7 +114,7 @@ func NewPeerConnection(cfg Config) (*PeerConnection, error) {
 		_ = pc.Close()
 		return nil, fmt.Errorf("webrtc: CreateDataChannel: %w", err)
 	}
-	p := &PeerConnection{pc: pc, ch: ch}
+	p := &PeerConnection{pc: pc, ch: ch, pinned: cfg.PinnedFingerprints}
 	p.wireChannel()
 	return p, nil
 }
@@ -112,7 +129,7 @@ func NewPeerConnectionForAnswerer(cfg Config) (*PeerConnection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("webrtc: NewPeerConnection (answerer): %w", err)
 	}
-	p := &PeerConnection{pc: pc}
+	p := &PeerConnection{pc: pc, pinned: cfg.PinnedFingerprints}
 	pc.OnDataChannel(func(ch *webrtc.DataChannel) {
 		p.mu.Lock()
 		p.ch = ch
@@ -204,7 +221,19 @@ func (p *PeerConnection) CreateOffer() (webrtc.SessionDescription, error) {
 
 // SetRemoteOffer accepts an inbound SDP offer + generates an answer.
 // Answerer-side flow.
+//
+// #494 Wave F4 — when PinnedFingerprints is configured, the inbound
+// offer's a=fingerprint MUST match at least one pinned entry. On
+// mismatch, the function returns ErrFingerprintMismatch + the
+// underlying PeerConnection is closed so no DTLS handshake attempt
+// can leak state. Pinning fast-fails BEFORE pion's own RFC 8829
+// verification (which would catch a same-tampered cert+SDP from
+// matching, but not catch a different-cert-and-SDP swap by a MITM).
 func (p *PeerConnection) SetRemoteOffer(offer webrtc.SessionDescription) (webrtc.SessionDescription, error) {
+	if err := p.verifyRemoteFingerprint(offer); err != nil {
+		_ = p.pc.Close()
+		return webrtc.SessionDescription{}, err
+	}
 	if err := p.pc.SetRemoteDescription(offer); err != nil {
 		return webrtc.SessionDescription{}, fmt.Errorf("SetRemoteDescription: %w", err)
 	}
@@ -220,11 +249,30 @@ func (p *PeerConnection) SetRemoteOffer(offer webrtc.SessionDescription) (webrtc
 
 // SetRemoteAnswer accepts the answer to a previously-created offer.
 // Caller-side flow.
+//
+// #494 Wave F4 — same pinning gate as SetRemoteOffer.
 func (p *PeerConnection) SetRemoteAnswer(answer webrtc.SessionDescription) error {
+	if err := p.verifyRemoteFingerprint(answer); err != nil {
+		_ = p.pc.Close()
+		return err
+	}
 	if err := p.pc.SetRemoteDescription(answer); err != nil {
 		return fmt.Errorf("SetRemoteDescription: %w", err)
 	}
 	return nil
+}
+
+// verifyRemoteFingerprint is the F4 pinning gate. No-op when
+// PinnedFingerprints is empty (pion's RFC 8829 cert↔SDP verification
+// still applies separately).
+func (p *PeerConnection) verifyRemoteFingerprint(sdp webrtc.SessionDescription) error {
+	p.mu.Lock()
+	pinned := p.pinned
+	p.mu.Unlock()
+	if len(pinned) == 0 {
+		return nil
+	}
+	return VerifyPinnedSDP(sdp, pinned)
 }
 
 // AddICECandidate trickles a remote ICE candidate into the PeerConnection.
