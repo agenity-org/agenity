@@ -65,7 +65,7 @@ import (
 //	        scheduleBriefingRegen → materializeAgentBriefing(B))
 //	        actually fired
 //	T7.G5 — DEFERRED: post-stop file-content check on B's CLAUDE.md.
-//	        Sovereign-shell containers run as a non-root user; the
+//	        Stub-shell containers run as a non-root user; the
 //	        :U bind-mount chowns the home dir at container start →
 //	        host's materializeAgentBriefing hits "permission denied"
 //	        on the post-stop regen write. The CHAIN runs (G4 proves
