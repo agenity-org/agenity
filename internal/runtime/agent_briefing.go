@@ -124,6 +124,22 @@ func renderAgentClaudeMD(spec SpawnSpec, peers []PeerBrief) string {
 	fmt.Fprintf(&b, "Inbound peer messages arrive in your pane prefixed with `[@<sender>]`. Read those as you would a user message.\n\n")
 	fmt.Fprintf(&b, "DO NOT write `@<peer>: <message>` in your own output thinking it'll be routed — outbound MCP messages must use the `chepherd.send_to_session` tool call. Only INBOUND `@<me>` lines from peers surface in your pane.\n\n")
 
+	// #475 Wave K4 — V0.9.2-ARCH §10 Pattern 1 step 12-17.
+	// Teach the agent the knock pattern: PTY-injected marker →
+	// chepherd.get_task → process → reply via stdout. Without this
+	// briefing section, agents treat knock lines as noise or user
+	// input.
+	fmt.Fprintf(&b, "## Inbound peer messages — the knock pattern\n\n")
+	fmt.Fprintf(&b, "When another agent sends YOU an A2A task (via their `chepherd.send_to_session` or a federation peer's `message/send`), chepherd writes ONE marker line into your PTY:\n\n")
+	fmt.Fprintf(&b, "```\n[chepherd-knock taskID=<uuid> from=<name>]\n```\n\n")
+	fmt.Fprintf(&b, "That's the WHOLE notification — no submit sequence, no Enter, no extra newlines. **You** decide when to handle it.\n\n")
+	fmt.Fprintf(&b, "**Action when you see a knock**:\n\n")
+	fmt.Fprintf(&b, "1. Call the MCP tool `chepherd.get_task(taskID)` with the taskID from the marker — returns the full A2A task envelope `{task, input}` where `input` is the sender's `a2a.Message` with their actual message body in `parts[].text`.\n")
+	fmt.Fprintf(&b, "2. Do the task. Read their request, compose your response.\n")
+	fmt.Fprintf(&b, "3. Reply via stdout — write your response naturally in your output. chepherd-runner's silence-finalize completer captures everything you write AFTER the knock line and persists it as the agent reply on the task; state transitions WORKING → COMPLETED on idle.\n\n")
+	fmt.Fprintf(&b, "**Recipient-scoping**: `chepherd.get_task` returns `-32004 forbidden` if you call it for a task whose contextID isn't your @-handle. Only call get_task for taskIDs from knock markers YOU received.\n\n")
+	fmt.Fprintf(&b, "**Don't reply by calling `chepherd.send_to_session` back** — the response routing is automatic through the runner's PTY pump. send_to_session is for INITIATING a peer call (which generates a knock on THEIR side), not for replying to one you received.\n\n")
+
 	fmt.Fprintf(&b, "## How to talk to the operator\n\n")
 	fmt.Fprintf(&b, "Use `chepherd.alert_human` MCP tool when you need human attention — they see it in the dashboard's inbox. Use sparingly: the human is the ultimate authority but you're expected to drive work autonomously between escalations.\n\n")
 
