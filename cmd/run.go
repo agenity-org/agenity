@@ -630,8 +630,9 @@ func newAgentCard(listenAddr string) *a2a.AgentCard {
 			"oauth2":   {Type: "oauth2"},
 			"oidc":     {Type: "openIdConnect"},
 		},
-		XChepherdP2P: a2a.DefaultExtension(),
-		XIOgrid:      iogridExtension(),
+		XChepherdP2P:           a2a.DefaultExtension(),
+		XIOgrid:                iogridExtension(),
+		XChepherdMethodAliases: a2a.MethodAliases(),
 	}
 }
 

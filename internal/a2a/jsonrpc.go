@@ -8,17 +8,22 @@ import (
 	"net/http"
 )
 
-// JSON-RPC 2.0 envelope per the A2A v1.0 spec. v0.9.2 scaffold
-// registers all 11 methods; bodies arrive in S5-S7.
+// JSON-RPC 2.0 envelope per the A2A v1.0 spec.
 //
-// Method names follow the A2A v1.0 wire shape (slash + camelCase):
-// "message/send", "tasks/get", "tasks/pushNotificationConfig/set",
-// "agent/getAuthenticatedExtendedCard", etc. The pre-#291 PascalCase
-// names ("SendMessage", "GetTask", ...) were a scaffold convention
-// from #208 that diverged from the spec and broke real-world interop
-// with Google's A2A SDK + spec-compliant peers.
+// Method names use A2A v1.0 spec §9.1 PascalCase wire shape
+// ("SendMessage", "GetTask", "CreateTaskPushNotificationConfig",
+// "GetExtendedAgentCard", ...) matching the canonical a2a-python SDK
+// (a2aproject/a2a-python, src/a2a/client/transports/jsonrpc.py).
 //
-// Refs #208 #291.
+// A backward-compatibility alias map (see MethodAliases) also accepts
+// the slash + camelCase form ("message/send", "tasks/get", ...) used
+// by the stale a2a-js reference SDK (last touched 2026-02-11) and by
+// the chepherd builds that shipped between #291 (2026-05-30) and #568.
+// Inbound requests using either form route to the same handlers; the
+// Agent Card publishes the dual acceptance via the
+// x-chepherd-method-aliases extension.
+//
+// Refs #208 #291 #561 #568.
 type JSONRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"` // always "2.0"
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -89,10 +94,10 @@ type Router struct {
 // stub handlers that return JSON-RPC error code -32603 with body
 // "scaffold: implementation pending in S5-S7 sub-branches".
 //
-// Method names use A2A v1.0 wire shape (slash + camelCase); see
-// the package-level JSONRPCRequest doc for the migration history.
+// Method names use A2A v1.0 §9.1 PascalCase; inbound slash-camelCase
+// is accepted via MethodAliases (see the package-level doc).
 //
-// Refs #208 #291.
+// Refs #208 #291 #568.
 func NewRouter() *Router {
 	r := &Router{handlers: map[string]methodHandler{}}
 	for _, name := range A2AMethodNames() {
@@ -112,26 +117,31 @@ func NewRouter() *Router {
 }
 
 // Register replaces the stub handler for `method` with a real
-// implementation. Returns an error if the method name isn't one of
-// the canonical 11.
+// implementation. The canonical wire form per A2A v1.0 §9.1 is
+// PascalCase ("SendMessage", "GetTask", ...); slash-camelCase aliases
+// ("message/send", "tasks/get", ...) are accepted here for source
+// compatibility and resolve to the same handler slot.
+// Returns an error if the method name isn't one of the canonical 11
+// (or one of their aliases).
 func (r *Router) Register(method string, h methodHandler) error {
-	if _, ok := r.handlers[method]; !ok {
+	canonical := canonicalizeMethod(method)
+	if _, ok := r.handlers[canonical]; !ok {
 		return errors.New("a2a: unknown method " + method)
 	}
-	r.handlers[method] = h
+	r.handlers[canonical] = h
 	return nil
 }
 
-// WireDeliverer binds the "message/send" method to a Deliverer.
+// WireDeliverer binds the SendMessage method to a Deliverer.
 // Decodes A2A SendMessageParams + invokes Deliverer.Deliver +
 // returns the resulting Task wrapped in a SendMessageResult.
 //
-// After this call the "message/send" handler is no longer a stub.
+// After this call the SendMessage handler is no longer a stub.
 // Other 10 methods stay scaffold until their own wire-up.
 //
-// Refs #208 #291.
+// Refs #208 #291 #568.
 func (r *Router) WireDeliverer(deliverer Deliverer) error {
-	return r.Register("message/send", makeSendMessageHandler(deliverer))
+	return r.Register("SendMessage", makeSendMessageHandler(deliverer))
 }
 
 func makeSendMessageHandler(deliverer Deliverer) methodHandler {
@@ -190,6 +200,13 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// AuthMiddleware ran on this request (dev mode / TokenValidator
 	// nil at registration).
 	rpcReq.AuthSubject = SubjectFromContext(req.Context())
+	// #568 — Canonicalize the wire method to the spec PascalCase form
+	// before dispatch. Accepts both PascalCase (per spec §9.1) and the
+	// slash-camelCase legacy form (a2a-js stale SDK; pre-#568 chepherd
+	// clients). The canonical name is what the streaming branch + the
+	// handler-lookup branch see.
+	canonicalMethod := canonicalizeMethod(rpcReq.Method)
+	rpcReq.Method = canonicalMethod
 	// #480 Wave A1 + #481 Wave A2 — inline POST→SSE binding for
 	// streaming methods. When the StreamingHandler is wired AND the
 	// client advertised text/event-stream, branch into the SSE
@@ -197,12 +214,12 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// the JSON two-call path for non-streaming Accept or when
 	// StreamingHandler is nil.
 	if r.StreamingHandler != nil &&
-		(rpcReq.Method == "message/stream" || rpcReq.Method == "tasks/resubscribe") &&
+		(canonicalMethod == "SendStreamingMessage" || canonicalMethod == "SubscribeToTask") &&
 		acceptsEventStream(req) {
 		r.StreamingHandler(w, req, rpcReq)
 		return
 	}
-	h, ok := r.handlers[rpcReq.Method]
+	h, ok := r.handlers[canonicalMethod]
 	if !ok {
 		writeError(w, rpcReq.ID, ErrCodeMethodNotFound, "unknown method: "+rpcReq.Method)
 		return
@@ -222,21 +239,65 @@ func writeError(w http.ResponseWriter, id json.RawMessage, code int, message str
 }
 
 // A2AMethodNames returns the canonical 11 A2A method names in their
-// v1.0 spec wire shape (slash + camelCase). Pre-#291 these were
-// PascalCase, which broke real-world interop with Google's A2A SDK +
-// spec-compliant peers — see #291 for the migration history.
+// A2A v1.0 spec §9.1 + §5.3 wire shape (PascalCase, matching the
+// gRPC RPC names per the proto in a2aproject/A2A@main).
+//
+// The corresponding canonical spec-compliant SDK is
+// a2aproject/a2a-python (client.transports.jsonrpc emits these
+// exact strings). The stale a2a-js reference SDK (last touched
+// 2026-02-11) still emits slash-camelCase; chepherd accepts both
+// forms via MethodAliases() to preserve interop with both ecosystem
+// sides. See #561 for the ecosystem-split RCA.
+//
+// Refs #208 #291 #561 #568.
 func A2AMethodNames() []string {
 	return []string{
-		"message/send",
-		"message/stream",
-		"tasks/get",
-		"tasks/list",
-		"tasks/cancel",
-		"tasks/resubscribe",
-		"tasks/pushNotificationConfig/set",
-		"tasks/pushNotificationConfig/get",
-		"tasks/pushNotificationConfig/list",
-		"tasks/pushNotificationConfig/delete",
-		"agent/getAuthenticatedExtendedCard",
+		"SendMessage",
+		"SendStreamingMessage",
+		"GetTask",
+		"ListTasks",
+		"CancelTask",
+		"SubscribeToTask",
+		"CreateTaskPushNotificationConfig",
+		"GetTaskPushNotificationConfig",
+		"ListTaskPushNotificationConfigs",
+		"DeleteTaskPushNotificationConfig",
+		"GetExtendedAgentCard",
 	}
+}
+
+// MethodAliases returns the slash-camelCase → PascalCase translation
+// table for backward compatibility with the a2a-js SDK + pre-#568
+// chepherd clients. Inbound method names matching a key here are
+// rewritten to the value before handler dispatch.
+//
+// The Agent Card publishes this map verbatim via the
+// x-chepherd-method-aliases extension so peers can discover the dual
+// acceptance.
+//
+// Refs #568.
+func MethodAliases() map[string]string {
+	return map[string]string{
+		"message/send":                            "SendMessage",
+		"message/stream":                          "SendStreamingMessage",
+		"tasks/get":                               "GetTask",
+		"tasks/list":                              "ListTasks",
+		"tasks/cancel":                            "CancelTask",
+		"tasks/resubscribe":                       "SubscribeToTask",
+		"tasks/pushNotificationConfig/set":        "CreateTaskPushNotificationConfig",
+		"tasks/pushNotificationConfig/get":        "GetTaskPushNotificationConfig",
+		"tasks/pushNotificationConfig/list":       "ListTaskPushNotificationConfigs",
+		"tasks/pushNotificationConfig/delete":     "DeleteTaskPushNotificationConfig",
+		"agent/getAuthenticatedExtendedCard":      "GetExtendedAgentCard",
+	}
+}
+
+// canonicalizeMethod returns the spec PascalCase form of `m`.
+// If `m` is already a canonical name (or unknown), returns `m` as-is.
+// If `m` is a slash-camelCase alias, returns its PascalCase target.
+func canonicalizeMethod(m string) string {
+	if canonical, ok := MethodAliases()[m]; ok {
+		return canonical
+	}
+	return m
 }

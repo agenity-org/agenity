@@ -50,7 +50,7 @@ func callExtended(t *testing.T, r *Router, subject string) JSONRPCResponse {
 		Params:      body,
 		AuthSubject: subject,
 	}
-	return r.handlers["agent/getAuthenticatedExtendedCard"](req)
+	return r.handlers[canonicalizeMethod("agent/getAuthenticatedExtendedCard")](req)
 }
 
 func TestWaveA4_ExtendedCard_UnauthenticatedReturns32001(t *testing.T) {

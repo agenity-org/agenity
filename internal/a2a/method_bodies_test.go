@@ -39,8 +39,13 @@ func newTestRouter(t *testing.T) (*Router, *MethodBodies) {
 func call(t *testing.T, r *Router, method string, params any) JSONRPCResponse {
 	t.Helper()
 	body, _ := json.Marshal(params)
-	req := JSONRPCRequest{JSONRPC: "2.0", ID: json.RawMessage(`"1"`), Method: method, Params: body}
-	return r.handlers[method](req)
+	canonical := canonicalizeMethod(method)
+	req := JSONRPCRequest{JSONRPC: "2.0", ID: json.RawMessage(`"1"`), Method: canonical, Params: body}
+	h, ok := r.handlers[canonical]
+	if !ok {
+		t.Fatalf("call: no handler for %q (canonicalized from %q)", canonical, method)
+	}
+	return h(req)
 }
 
 // TestGetTask_NotFound pins the not-found error code.
@@ -184,7 +189,7 @@ func TestGetAuthenticatedExtendedCard(t *testing.T) {
 		Method: "agent/getAuthenticatedExtendedCard", Params: body,
 		AuthSubject: "operator",
 	}
-	resp := r.handlers["agent/getAuthenticatedExtendedCard"](req)
+	resp := r.handlers[canonicalizeMethod("agent/getAuthenticatedExtendedCard")](req)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
