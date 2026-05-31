@@ -86,6 +86,13 @@ type Server struct {
 	JWKSBody  []byte
 	ES256Priv *ecdsa.PrivateKey
 
+	// GrantCheck is the RBAC dispatch seam for POST /api/v1/jwt/mint
+	// (#468 Wave D2). nil = default allow-all so the JWT pipeline is
+	// exercisable end-to-end before the grant store lands. Wave D3
+	// (#469) wires the persistence-backed check here without touching
+	// the mint endpoint's wire shape.
+	GrantCheck GrantCheckFn
+
 	// v0.9.3 #225 row C1 — federation orchestrator + cached agent-card
 	// store. Federation is nil when --federation-registry-url is empty;
 	// AgentCardStore is always set when persistence is wired (used by
@@ -206,6 +213,10 @@ func (s *Server) Handler() http.Handler {
 	// #172 — first-class Agent entity CRUD.
 	mux.HandleFunc("/api/v1/agents", s.agentsEntity)
 	mux.HandleFunc("/api/v1/agents/", s.agentEntityByID)
+	// #468 Wave D2 — per-call JWT mint endpoint (§15.2). ES256-signed,
+	// 60s expiry, RBAC-gated. The grant check is a no-op stub until
+	// Wave D3 wires the real persistence-backed check.
+	mux.HandleFunc("/api/v1/jwt/mint", s.jwtMint)
 	mux.HandleFunc("/api/v1/agent-types", s.agentsCatalog)
 	// #194 — Skill Library
 	mux.HandleFunc("/api/v1/skills", s.skillsRoot)
