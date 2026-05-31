@@ -66,7 +66,9 @@ func TestP0_403_StartShFallbackBranches(t *testing.T) {
 	required := []string{
 		`NETWORK_BACKEND="$(podman info`, // backend detection
 		`USE_CHEPHERD_NET=0`,              // explicit fallback flag
-		`/opt/cni/bin/bridge`,             // CNI plugin probe
+		`/opt/cni/bin /usr/lib/cni /usr/libexec/cni`, // CNI multi-path probe (#406 follow-up)
+		`$cni_dir/bridge`,                            // loop body checks bridge
+		`$cni_dir/firewall`,                          // loop body checks firewall
 		`#403 P0`,                         // citation
 		`CHEPHERD_CONTAINER_NETWORK=slirp4netns`, // fallback agent network
 		`CHEPHERD_MCP_URL=ws://host.containers.internal`, // fallback MCP URL
