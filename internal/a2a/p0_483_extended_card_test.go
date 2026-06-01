@@ -77,7 +77,7 @@ func TestWaveA4_ExtendedCard_AuthenticatedNoGrants_EmitsBaseExtension(t *testing
 	}
 	result, ok := resp.Result.(ExtendedAgentCard)
 	if !ok {
-		t.Fatalf("Result type = %T, want getExtendedAgentCardResult", resp.Result)
+		t.Fatalf("Result type = %T, want ExtendedAgentCard", resp.Result)
 	}
 	if result.Name != "test-runner" {
 		t.Errorf("embedded AgentCard.Name = %q, want test-runner", result.Name)

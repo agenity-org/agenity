@@ -142,12 +142,6 @@ func (m *MethodBodies) handleGetAuthenticatedExtendedCard(req JSONRPCRequest) JS
 	}
 }
 
-// getExtendedAgentCardResult is kept for tests that still reference it;
-// production handler returns ExtendedAgentCard directly per A2A v1.0 §7.11.
-type getExtendedAgentCardResult struct {
-	Card ExtendedAgentCard `json:"card"`
-}
-
 // auditEndpoint returns the daemon-side audit URL the caller's grants
 // authorize them to query. v0.9.4 emits a stable path placeholder;
 // the actual audit-API ships in a future Wave. AgentCardFn returns
