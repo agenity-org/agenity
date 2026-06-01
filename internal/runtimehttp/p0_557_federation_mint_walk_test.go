@@ -41,15 +41,30 @@ func TestV094Walk_F81_CrossOrgMint_RealKeyStore(t *testing.T) {
 		t.Fatalf("LoadOrCreateKeyStore: %v", err)
 	}
 
-	// 2) Mount the cross-org JWT minter onto a real mux.
+	// 2) Build the federation handler using the production path (FederationHandler,
+	// not raw mux) with AuthToken set so authMiddleware would block if it were wired.
+	// Guards against regression of #562/#583: a raw-mux test would pass even when
+	// the federation listener incorrectly uses the auth-gated Handler().
 	srv := &Server{
-		OrgID:    "bob.example",
-		KeyStore: ks,
+		OrgID:     "bob.example",
+		KeyStore:  ks,
+		AuthToken: "sentinel-bearer-token-that-hub-does-not-send",
 	}
-	mux := http.NewServeMux()
-	srv.mountCrossOrgFederationMint(mux)
-	hs := httptest.NewServer(mux)
+	hs := httptest.NewServer(srv.FederationHandler())
 	defer hs.Close()
+
+	// Auth-chain guard: same path on dashboard Handler() must return 401 (no Bearer).
+	hsAuth := httptest.NewServer(srv.Handler())
+	defer hsAuth.Close()
+	authCheck, _ := http.NewRequest("POST", hsAuth.URL+"/api/v1/federation/jwt",
+		strings.NewReader(`{}`))
+	authCheck.Header.Set("Content-Type", "application/json")
+	if ar, err2 := http.DefaultClient.Do(authCheck); err2 == nil {
+		defer ar.Body.Close()
+		if ar.StatusCode != http.StatusUnauthorized {
+			t.Errorf("dashboard Handler returned %d for unauthenticated request; want 401 (#583 guard)", ar.StatusCode)
+		}
+	}
 
 	// 3) Simulate the F8 hub forwarding a daemon-X request:
 	//    POST /api/v1/federation/jwt with the attesting headers.
