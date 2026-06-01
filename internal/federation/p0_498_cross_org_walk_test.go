@@ -132,11 +132,12 @@ func TestV094Walk_F8_CrossOrgJWT_ThroughRealHubBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyJWS: %v", err)
 	}
-	if claims["iss"] != "bob.example" {
-		t.Errorf("iss = %v, want bob.example", claims["iss"])
+	// #584 — iss/sub are URL-normalised by the minter.
+	if claims["iss"] != "https://bob.example" {
+		t.Errorf("iss = %v, want https://bob.example", claims["iss"])
 	}
-	if claims["sub"] != "alice.example" {
-		t.Errorf("sub = %v, want alice.example", claims["sub"])
+	if claims["sub"] != "https://alice.example" {
+		t.Errorf("sub = %v, want https://alice.example", claims["sub"])
 	}
 	if claims["scope"] != "a2a.send" {
 		t.Errorf("scope = %v, want a2a.send", claims["scope"])

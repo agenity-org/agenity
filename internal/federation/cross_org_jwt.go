@@ -157,10 +157,13 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// claims (jti for replay prevention, chepherd_grant_id for grant
 	// reference, chepherd_rate_window for accounting bucket) were
 	// missing — see QA Category B.2 evidence (#560).
+	// #584 — iss/sub must be URLs per §15.2; bare org IDs are invalid.
+	issURL := orgToURL(m.Issuer)
+	subURL := orgToURL(callerOrg)
 	claims := map[string]any{
-		"iss":                   m.Issuer,
-		"sub":                   callerOrg,
-		"aud":                   nonEmpty(req.Audience, m.Issuer),
+		"iss":                   issURL,
+		"sub":                   subURL,
+		"aud":                   nonEmpty(req.Audience, issURL),
 		"scope":                 req.Scope,
 		"nbf":                   nbf,
 		"exp":                   exp,
@@ -177,7 +180,7 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, &CrossOrgJWTResponse{
 		JWT:       jws,
-		Issuer:    m.Issuer,
+		Issuer:    issURL,
 		NotBefore: nbf,
 		Expires:   exp,
 	})
@@ -196,6 +199,15 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // #580.
 func synthesizeGrantID(callerOrg, targetOrg, scope string) string {
 	return callerOrg + "@" + targetOrg + ":" + scope
+}
+
+// orgToURL normalises a bare org ID (e.g. "alice.example") to a URL
+// (e.g. "https://alice.example") per §15.2. Pass-through if already a URL.
+func orgToURL(id string) string {
+	if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") {
+		return id
+	}
+	return "https://" + id
 }
 
 func (m *CrossOrgJWTMinter) now() time.Time {

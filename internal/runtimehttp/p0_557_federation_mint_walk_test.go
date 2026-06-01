@@ -107,8 +107,9 @@ func TestV094Walk_F81_CrossOrgMint_RealKeyStore(t *testing.T) {
 	if mintResp.JWT == "" {
 		t.Fatal("empty JWT in mint response")
 	}
-	if mintResp.Issuer != "bob.example" {
-		t.Errorf("iss = %q, want bob.example", mintResp.Issuer)
+	// #584 — iss must be a URL, not a bare org ID.
+	if mintResp.Issuer != "https://bob.example" {
+		t.Errorf("iss = %q, want https://bob.example", mintResp.Issuer)
 	}
 	if mintResp.Expires <= time.Now().Unix() {
 		t.Errorf("exp = %d, want future", mintResp.Expires)
@@ -121,8 +122,9 @@ func TestV094Walk_F81_CrossOrgMint_RealKeyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("KeyStore.Verify: %v", err)
 	}
-	if claims["sub"] != "alice.example" {
-		t.Errorf("sub = %v, want alice.example", claims["sub"])
+	// #584 — sub must be a URL form of the caller org ID.
+	if claims["sub"] != "https://alice.example" {
+		t.Errorf("sub = %v, want https://alice.example", claims["sub"])
 	}
 	if claims["scope"] != "a2a.send" {
 		t.Errorf("scope = %v, want a2a.send", claims["scope"])
