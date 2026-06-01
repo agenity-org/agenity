@@ -51,6 +51,13 @@ type Message struct {
 	// Kind discriminates Message from other Result types in JSON-RPC
 	// envelopes. Always "message" for spec compliance.
 	Kind string `json:"kind,omitempty"`
+
+	// From is the sender's chepherd @-name (short session name). Set by
+	// the MCP shim (send_to_session) from CurrentCaller() so the
+	// Deliverer can stamp the knock marker with the correct "from=<name>"
+	// field. Not part of the A2A v1.0 wire spec — chepherd-internal only.
+	// (#615 knock pattern)
+	From string `json:"-"`
 }
 
 // Part is one entry in Message.Parts. Discriminated by Kind.
