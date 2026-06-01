@@ -250,6 +250,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	daemonDeliverer := runtime.NewA2ADeliverer(rt)
 	daemonDeliverer.SetTaskStore(store.Tasks(), "daemon")
 	mcpSrv := mcpserver.NewWithDeliverer(rt, daemonDeliverer)
+	mcpSrv.SetTaskStore(store.Tasks())
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
