@@ -479,6 +479,19 @@
   }
 
   onMount(() => {
+    // #566 P1 — if the page URL includes ?token=<bearer>, store it in
+    // localStorage so the fetch patch above includes it in every /api/
+    // call. Strip the param from the URL to avoid leaking via Referer.
+    try {
+      const urlTok = new URL(location.href).searchParams.get('token');
+      if (urlTok) {
+        localStorage.setItem('chepherd-token', urlTok);
+        const clean = new URL(location.href);
+        clean.searchParams.delete('token');
+        history.replaceState(null, '', clean.toString());
+      }
+    } catch {}
+
     // Restore persisted theme.
     try {
       const stored = localStorage.getItem('chepherd-theme');

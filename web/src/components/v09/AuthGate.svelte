@@ -122,6 +122,17 @@
   }
 
   onMount(async () => {
+    // #566 P1 — ingest ?token= from URL into localStorage so every
+    // /api/ fetch (patched in module scope) includes the bearer.
+    try {
+      const urlTok = new URL(location.href).searchParams.get('token');
+      if (urlTok) {
+        storeToken(urlTok);
+        const clean = new URL(location.href);
+        clean.searchParams.delete('token');
+        history.replaceState(null, '', clean.toString());
+      }
+    } catch {}
     const tok = readStoredToken();
     if (!tok) { authStatus = 'login'; return; }
     const ok = await probeAuth(tok);
