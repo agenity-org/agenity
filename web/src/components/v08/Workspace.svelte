@@ -572,14 +572,14 @@
     try { localStorage.setItem('chepherd-theme', theme); } catch {}
   }
 
-  // #239 — logout dispatch. AuthGate (../v09/AuthGate.svelte) listens
-  // for this event + clears the stored token + re-renders the login
-  // screen. Keeping the dispatch here so legacy callers (v0.8 / v0.9.0
-  // / v0.9.1 routes wired directly to Workspace pre-AuthGate) still
-  // get a sane fallback: if AuthGate isn't mounted, the event is
-  // harmless + Workspace's needLogin in-place modal still fires on
-  // the next 401.
+  // #239 — logout: clear stored token immediately + show login modal.
+  // Also dispatch chepherd-logout for AuthGate (v09 route) to handle.
+  // Previously only dispatched the event — when AuthGate isn't mounted
+  // (v07/v08 routes) the event was silently dropped, localStorage was
+  // never cleared, and needLogin never flipped. Fixed: do both inline.
   function dispatchLogout() {
+    try { localStorage.removeItem('chepherd-token'); } catch {}
+    needLogin = true;
     try { window.dispatchEvent(new CustomEvent('chepherd-logout')); } catch {}
   }
 </script>

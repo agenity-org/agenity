@@ -319,6 +319,14 @@ func (s *Server) Handler() http.Handler {
 	// #174 — discovery layer (auto-enumerate orgs + repos from saved tokens)
 	mux.HandleFunc("/api/v1/discovery/", s.discoveryRouter)
 
+	// #650 — per-runner /a2a/<sid>/ agent card endpoint. The D1 directory
+	// (/api/v1/agents/) advertises agent card URLs of this form. Runners
+	// in sibling-container mode don't expose their own HTTP listener, so
+	// the daemon serves the card directly from its runtime session index.
+	// Only /.well-known/agent-card.json is supported; other sub-paths
+	// under /a2a/<sid>/ return 404 JSON (not SPA HTML).
+	mux.HandleFunc("/a2a/", s.a2aSessionCardHandler)
+
 	// #466 Wave R5 — DAEMON DE-A2A CUTOVER. Per V0.9.2-ARCH §5 #3 +
 	// §22, A2A goes through per-runner endpoints at /a2a/<sid>/jsonrpc
 	// (Wave R2 #463). The daemon's legacy /jsonrpc + agent-card paths

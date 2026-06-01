@@ -23,6 +23,7 @@ import (
 
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/agent"
+	"github.com/chepherd/chepherd/internal/runtime"
 )
 
 // agentsEntity handles the collection — list + create.
@@ -216,4 +217,39 @@ func (s *Server) agentsDirectory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": entries})
+}
+
+// a2aSessionCardHandler serves GET /a2a/<sid>/.well-known/agent-card.json.
+// The D1 directory advertises these URLs; the daemon serves the card from
+// its runtime session index since sibling-container runners don't expose
+// their own HTTP listener. Fixes #650.
+func (s *Server) a2aSessionCardHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	// Path: /a2a/<sid>/<subpath>
+	// Strip leading "/a2a/" prefix and split on first "/"
+	rest := strings.TrimPrefix(r.URL.Path, "/a2a/")
+	slash := strings.Index(rest, "/")
+	if slash < 0 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	sid := rest[:slash]
+	sub := rest[slash:]
+	if sub != a2a.AgentCardPath && sub != a2a.AgentCardAliasPath {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found", "path": r.URL.Path})
+		return
+	}
+	if s.rt == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "runtime not available"})
+		return
+	}
+	_, info := s.rt.GetByContextID(sid)
+	if info == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such session", "sid": sid})
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime.BuildPeerAgentCard(info))
 }
