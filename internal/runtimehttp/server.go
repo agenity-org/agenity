@@ -3137,9 +3137,17 @@ func sanitizeOAuthCallbackURL(raw string) string {
 	if err != nil {
 		return raw
 	}
+	// Only sanitize base64url PKCE params (state, code_challenge).
+	// Never touch scope, client_id, redirect_uri etc. — they are
+	// human-readable strings that legitimately exceed 64 chars and
+	// contain no TUI helper-text suffix. (#613)
+	pkceParams := map[string]bool{"state": true, "code_challenge": true}
 	q := u.Query()
 	changed := false
 	for k, vs := range q {
+		if !pkceParams[k] {
+			continue
+		}
 		for i, v := range vs {
 			cleaned := trimTUIHelperSuffix(v)
 			if cleaned != v {

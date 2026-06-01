@@ -20,7 +20,7 @@
 //   - End-to-end via scanForClaudeOAuthURL: feed bytes with the exact
 //     reported corruption shape, assert clean URL emerges
 //
-// Refs #600 #560.
+// Refs #600 #560 #613.
 package runtimehttp
 
 import (
@@ -81,6 +81,22 @@ func TestP0_600_SanitizeOAuthCallbackURL_RemovesHelperFromState(t *testing.T) {
 	}
 	if !strings.Contains(got, "client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e") {
 		t.Errorf("other query params should be preserved: %q", got)
+	}
+}
+
+// TestP0_613_SanitizeOAuthCallbackURL_ScopeNotTruncated pins #613:
+// trimTUIHelperSuffix's 64-char length cap was applied to ALL query
+// params. The OAuth scope string is 67 chars; it got capped to 64,
+// stripping the last 3 chars ("ude" from "claude") → invalid scope
+// "user:sessions:cla" → "Unknown scope" error from Claude OAuth server.
+func TestP0_613_SanitizeOAuthCallbackURL_ScopeNotTruncated(t *testing.T) {
+	scope := "org:create_api_key user:profile user:inference user:sessions:claude"
+	raw := "https://claude.com/cai/oauth/authorize?client_id=9d1c250a&scope=" +
+		strings.ReplaceAll(scope, " ", "+") +
+		"&state=rMcQR_fqAT1Kc9ufwCcoNzzhuUIy3B50KLBBBad2a5k"
+	got := sanitizeOAuthCallbackURL(raw)
+	if !strings.Contains(got, "user:sessions:claude") {
+		t.Errorf("scope was truncated: %q (full scope %q must survive)", got, scope)
 	}
 }
 

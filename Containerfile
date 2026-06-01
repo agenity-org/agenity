@@ -9,7 +9,7 @@
 #   docker build -t chepherd:latest .
 
 # ─── Stage 1: Astro / Svelte web build ────────────────────────────────────────
-FROM node:20-alpine AS web-builder
+FROM node:22-alpine AS web-builder
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --prefer-offline
