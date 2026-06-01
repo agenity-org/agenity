@@ -123,15 +123,19 @@ func TestCancelTask_WorkingTransitionsToCanceled(t *testing.T) {
 	}
 }
 
-// TestPushNotificationConfigCRUD round-trips Set → Get → List → Delete.
+// TestPushNotificationConfigCRUD round-trips Set → Get → List → Delete using
+// A2A v1.0 nested params (#572): Set wraps config under pushNotificationConfig,
+// Get/Delete use {taskId, id}, List uses {taskId}.
 func TestPushNotificationConfigCRUD(t *testing.T) {
 	r, _ := newTestRouter(t)
-	// Set
-	setResp := call(t, r, "tasks/pushNotificationConfig/set", pushConfig{
-		TaskID:     "task-x",
-		URL:        "https://example.com/hook",
-		SigningKey: "secret",
-		Filters:    []string{"state-change"},
+	// Set — nested params: {taskId, pushNotificationConfig: {...}}
+	setResp := call(t, r, "tasks/pushNotificationConfig/set", setTaskPushNotificationConfigParams{
+		TaskID: "task-x",
+		PushNotificationConfig: pushConfig{
+			URL:       "https://example.com/hook",
+			SigningKey: "secret",
+			Filters:   []string{"state-change"},
+		},
 	})
 	if setResp.Error != nil {
 		t.Fatalf("Set: %+v", setResp.Error)
@@ -144,15 +148,15 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 	if setResp.Result.(setPushConfigResult).Config.SigningKey != "" {
 		t.Errorf("server echoed signing key")
 	}
-	// Get
-	getResp := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{ID: cfgID})
+	// Get — {taskId, id}
+	getResp := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{TaskID: "task-x", ID: cfgID})
 	if getResp.Error != nil {
 		t.Fatalf("Get: %+v", getResp.Error)
 	}
 	if getResp.Result.(setPushConfigResult).Config.URL != "https://example.com/hook" {
 		t.Errorf("Get URL mismatch: %+v", getResp.Result)
 	}
-	// List
+	// List — {taskId}
 	listResp := call(t, r, "tasks/pushNotificationConfig/list", listPushConfigsParams{TaskID: "task-x"})
 	if listResp.Error != nil {
 		t.Fatalf("List: %+v", listResp.Error)
@@ -160,16 +164,16 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 	if got := len(listResp.Result.(listPushConfigsResult).Configs); got != 1 {
 		t.Errorf("List expected 1 config, got %d", got)
 	}
-	// Delete
-	delResp := call(t, r, "tasks/pushNotificationConfig/delete", deletePushConfigParams{ID: cfgID})
+	// Delete — {taskId, id}
+	delResp := call(t, r, "tasks/pushNotificationConfig/delete", deletePushConfigParams{TaskID: "task-x", ID: cfgID})
 	if delResp.Error != nil {
 		t.Fatalf("Delete: %+v", delResp.Error)
 	}
 	if !delResp.Result.(deletePushConfigResult).OK {
 		t.Errorf("Delete returned ok=false")
 	}
-	// Get-after-delete is not found.
-	gone := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{ID: cfgID})
+	// Get-after-delete is not found — A2A §5.4 -32001.
+	gone := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{TaskID: "task-x", ID: cfgID})
 	if gone.Error == nil || gone.Error.Code != ErrCodeTaskNotFound {
 		t.Errorf("expected -32001 TaskNotFound after delete, got %+v", gone.Error)
 	}

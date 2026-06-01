@@ -318,20 +318,26 @@ type setPushConfigResult struct {
 	Config pushConfig `json:"config"`
 }
 
+// A2A v1.0 nested params: Set wraps the config under "pushNotificationConfig".
+type setTaskPushNotificationConfigParams struct {
+	TaskID             string     `json:"taskId"`
+	PushNotificationConfig pushConfig `json:"pushNotificationConfig"`
+}
+
 func (m *MethodBodies) handleSetTaskPushNotificationConfig(req JSONRPCRequest) JSONRPCResponse {
-	var p pushConfig
+	var p setTaskPushNotificationConfigParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errorResp(req.ID, ErrCodeInvalidParams, "decode SetTaskPushNotificationConfigParams: "+err.Error())
 	}
-	if p.TaskID == "" || p.URL == "" {
-		return errorResp(req.ID, ErrCodeInvalidParams, "taskId and url are required")
+	if p.TaskID == "" || p.PushNotificationConfig.URL == "" {
+		return errorResp(req.ID, ErrCodeInvalidParams, "taskId and pushNotificationConfig.url are required")
 	}
 	cfg := &persistence.PushNotificationConfig{
 		ID:         uuid.NewString(),
 		TaskID:     p.TaskID,
-		URL:        p.URL,
-		SigningKey: []byte(p.SigningKey),
-		Filters:    p.Filters,
+		URL:        p.PushNotificationConfig.URL,
+		SigningKey: []byte(p.PushNotificationConfig.SigningKey),
+		Filters:    p.PushNotificationConfig.Filters,
 		CreatedAt:  time.Now().UTC(),
 	}
 	if err := m.Store.PushConfigs().Save(context.Background(), cfg); err != nil {
@@ -342,8 +348,10 @@ func (m *MethodBodies) handleSetTaskPushNotificationConfig(req JSONRPCRequest) J
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: setPushConfigResult{Config: resp}}
 }
 
+// A2A v1.0: method_signature="task_id,id" — both taskId and config id required.
 type getPushConfigParams struct {
-	ID string `json:"id"`
+	TaskID string `json:"taskId"`
+	ID     string `json:"id"`
 }
 
 func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) JSONRPCResponse {
@@ -366,7 +374,7 @@ func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) J
 }
 
 type listPushConfigsParams struct {
-	TaskID string `json:"id"`
+	TaskID string `json:"taskId"`
 }
 
 type listPushConfigsResult struct {
@@ -392,8 +400,10 @@ func (m *MethodBodies) handleListTaskPushNotificationConfigs(req JSONRPCRequest)
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: listPushConfigsResult{Configs: out}}
 }
 
+// A2A v1.0: method_signature="task_id,id" — both taskId and config id required.
 type deletePushConfigParams struct {
-	ID string `json:"id"`
+	TaskID string `json:"taskId"`
+	ID     string `json:"id"`
 }
 
 type deletePushConfigResult struct {
