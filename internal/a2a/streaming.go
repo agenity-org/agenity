@@ -184,7 +184,7 @@ func (sp *streamingParams) serveResubscribe(w http.ResponseWriter, r *http.Reque
 	rec, err := sp.Store.Tasks().Get(r.Context(), params.TaskID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			writeRPCError(w, req.ID, -32004, "task not found: "+params.TaskID)
+			writeRPCError(w, req.ID, ErrCodeTaskNotFound, "task not found: "+params.TaskID)
 			return
 		}
 		writeRPCError(w, req.ID, ErrCodeInternalError,

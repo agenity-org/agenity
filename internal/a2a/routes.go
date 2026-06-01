@@ -130,7 +130,12 @@ func writeAuthError(w http.ResponseWriter, msg string) {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
 		Error: &JSONRPCError{
-			Code:    -32001,
+			// #576 — chepherd transport-auth code lives in the
+			// chepherd-extension range (-32011..-32099) outside the
+			// A2A §5.4-claimed -32001..-32009 region. Pre-#576
+			// chepherd used -32001 here which collided with the
+			// spec's TaskNotFoundError code.
+			Code:    ErrCodeAuthRequired,
 			Message: msg,
 		},
 	}

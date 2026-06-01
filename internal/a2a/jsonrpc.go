@@ -58,7 +58,7 @@ type JSONRPCError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-// Standard JSON-RPC 2.0 error codes used by the A2A scaffold.
+// Standard JSON-RPC 2.0 error codes.
 const (
 	ErrCodeParseError     = -32700
 	ErrCodeInvalidRequest = -32600
@@ -67,14 +67,25 @@ const (
 	ErrCodeInternalError  = -32603
 )
 
-// A2A v1.0 §5.4 application-level error codes.
+// A2A-specific JSON-RPC error codes per A2A v1.0 spec §5.4 mapping
+// table. Use these named constants — magic numbers in handler bodies
+// were a #576 audit finding. Refs #561 #576.
 const (
-	ErrCodeTaskNotFound              = -32001 // TaskNotFoundError
-	ErrCodeTaskNotCancelable         = -32002 // TaskNotCancelableError
-	ErrCodePushNotifNotSupported     = -32003 // PushNotificationNotSupportedError
-	ErrCodeUnsupportedOperation      = -32004 // UnsupportedOperationError
-	ErrCodeContentTypeNotSupported   = -32005 // ContentTypeNotSupportedError
-	ErrCodeInvalidAgentResponse      = -32006 // InvalidAgentResponseError
+	ErrCodeTaskNotFound                 = -32001 // §5.4 TaskNotFoundError
+	ErrCodeTaskNotCancelable            = -32002 // §5.4 TaskNotCancelableError
+	ErrCodePushNotificationNotSupported = -32003 // §5.4 PushNotificationNotSupportedError
+	ErrCodeUnsupportedOperation         = -32004 // §5.4 UnsupportedOperationError
+	ErrCodeContentTypeNotSupported      = -32005 // §5.4 ContentTypeNotSupportedError
+	ErrCodeInvalidAgentResponse         = -32006 // §5.4 InvalidAgentResponseError
+	ErrCodeExtendedCardNotConfigured    = -32007 // §5.4 ExtendedAgentCardNotConfiguredError
+	ErrCodeExtensionSupportRequired     = -32008 // §5.4 ExtensionSupportRequiredError
+	ErrCodeVersionNotSupported          = -32009 // §5.4 VersionNotSupportedError
+
+	// chepherd-extension codes in the JSON-RPC server-reserved range
+	// outside the A2A-claimed §5.4 region (-32001..-32009). Used for
+	// chepherd-specific transport-layer errors that don't have a
+	// direct A2A spec mapping. Reserved range: -32011..-32099.
+	ErrCodeAuthRequired = -32011 // chepherd transport: missing/invalid Bearer JWT
 )
 
 // methodHandler is a single A2A method's handler. v0.9.2 scaffold
