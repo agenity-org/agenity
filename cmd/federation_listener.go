@@ -25,9 +25,9 @@ import (
 )
 
 // startFederationListener binds the federation-facing TLS listener
-// on addr + serves the same handler as the dashboard. Returns the
-// actual bound address (so callers using addr ":0" can discover
-// the kernel-assigned port) + the *http.Server for shutdown.
+// on addr + serves FederationHandler() (scoped mux, no authMiddleware).
+// Returns the actual bound address (so callers using addr ":0" can
+// discover the kernel-assigned port) + the *http.Server for shutdown.
 func startFederationListener(addr string, rs *runtimehttp.Server) (string, *http.Server, error) {
 	if rs.FederationMTLS == nil {
 		return "", nil, fmt.Errorf("startFederationListener: no MTLSConfig (set --federation-mtls=true first)")
