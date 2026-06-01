@@ -287,6 +287,7 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// --replace covers reuse-after-prior-leak. Both are needed.
 	podArgs := append(podmanArgs(),
 		"run", "--replace", "--interactive", "--tty",  // #363: --rm removed; corpses persist for podman inspect; --replace handles name reuse
+		"--publish-all=false", // #648: suppress auto-publishing of EXPOSE ports from the agent image — those ports (8080/9090) belong to the daemon only
 		// #270 — instance-scoped container name. The prefix carries
 		// this chepherd binary's UUID so a parallel chepherd binary
 		// on the same host can't clobber or reap these containers.

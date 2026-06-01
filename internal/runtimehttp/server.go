@@ -2361,9 +2361,15 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 				agentArgs = append(agentArgs, "--resume", resumeUUID)
 			}
 		}
-		// Auto-clear exited session with the same name so re-applying a
-		// template after a prior run doesn't fail with "already in use".
-		if _, existingInfo := s.rt.Get(m.Name); existingInfo != nil && existingInfo.Exited {
+		// Guard against duplicate spawns: if a session with this name is
+		// already live and healthy, skip re-spawning it — the operator hit
+		// Launch twice or refreshed the page. If it exited, clear the record
+		// so the spawn below doesn't fail with "already in use". (#647)
+		if _, existingInfo := s.rt.Get(m.Name); existingInfo != nil {
+			if !existingInfo.Exited {
+				results = append(results, spawned{Name: m.Name, Role: string(m.Role)})
+				continue
+			}
 			_ = s.rt.Stop(m.Name)
 		}
 		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{

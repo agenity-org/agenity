@@ -800,12 +800,39 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		return nil, nil, errors.New("runtime.Spawn: AgentSlug required")
 	}
 
+	// Reserve the name atomically: hold the lock and insert a sentinel so
+	// concurrent Spawn calls for the same name are rejected before they do
+	// any container-start work. (#647 TOCTOU fix — the old code released
+	// the lock between check and registration, allowing concurrent callers
+	// to both pass the "taken" test and then race to overwrite byName.)
+	const spawnPendingSentinel = "__pending__"
 	r.mu.Lock()
-	if _, taken := r.byName[spec.Name]; taken {
+	if existing, taken := r.byName[spec.Name]; taken && existing != spawnPendingSentinel {
 		r.mu.Unlock()
 		return nil, nil, fmt.Errorf("runtime.Spawn: name %q already in use", spec.Name)
+	} else if taken {
+		r.mu.Unlock()
+		return nil, nil, fmt.Errorf("runtime.Spawn: name %q spawn already in progress", spec.Name)
 	}
+	r.byName[spec.Name] = spawnPendingSentinel
 	r.mu.Unlock()
+	// If we return early before the real ID is registered, remove sentinel.
+	reservationCleared := false
+	clearReservation := func() {
+		if !reservationCleared {
+			r.mu.Lock()
+			if r.byName[spec.Name] == spawnPendingSentinel {
+				delete(r.byName, spec.Name)
+			}
+			r.mu.Unlock()
+			reservationCleared = true
+		}
+	}
+	defer func() {
+		// Only fires on error paths (success path sets reservationCleared=true
+		// after writing the real ID).
+		clearReservation()
+	}()
 
 	// Resolve the agent via agentcatalog
 	agent, err := agentcatalog.Lookup(spec.AgentSlug)
@@ -1007,12 +1034,13 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 
 	r.mu.Lock()
 	r.sessions[id] = s
-	r.byName[spec.Name] = id
+	r.byName[spec.Name] = id // replaces sentinel with real ID
 	r.info[id] = info
 	r.activity[id] = act
 	r.sessionToAgent[id] = ag.ID
 	hooks := append([]func(*session.Session, string){}, r.spawnHooks...)
 	r.mu.Unlock()
+	reservationCleared = true // sentinel replaced; defer no-op from here
 
 	if err := r.persistInfo(info); err != nil {
 		// Non-fatal: session is live, just won't survive restart.
