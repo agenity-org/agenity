@@ -131,19 +131,18 @@ func (m *MethodBodies) handleGetAuthenticatedExtendedCard(req JSONRPCRequest) JS
 		ext.Grants = grants
 		ext.RateUsage = summarizeRateUsage(grants)
 	}
+	// #570 — Per A2A v1.0 §9.4.8 + a2a.proto:122 the result IS the
+	// AgentCard (here, ExtendedAgentCard which embeds it). Pre-#570
+	// chepherd wrapped it in a {card: ...} envelope — that violates
+	// the spec; the canonical a2a-python SDK decodes the result
+	// directly into AgentCard.
 	return JSONRPCResponse{
 		JSONRPC: "2.0", ID: req.ID,
-		Result: getExtendedAgentCardResult{Card: ExtendedAgentCard{
+		Result: ExtendedAgentCard{
 			AgentCard:     card,
 			XChepherdAuth: ext,
-		}},
+		},
 	}
-}
-
-// getExtendedAgentCardResult is the spec wrapper. Same shape as
-// getAgentCardResult but the Card type is ExtendedAgentCard.
-type getExtendedAgentCardResult struct {
-	Card ExtendedAgentCard `json:"card"`
 }
 
 // auditEndpoint returns the daemon-side audit URL the caller's grants
