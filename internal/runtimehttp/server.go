@@ -116,6 +116,14 @@ type Server struct {
 	// in stub-allow-all mode in that case.
 	GrantStore persistence.RBACGrantRepository
 
+	// CrossOrgGrantCheck is the override seam for the cross-org federation
+	// mint (#557 F8.1). When non-nil it is threaded into crossOrgGrantAdapter
+	// as the explicit check function, taking precedence over GrantStore.
+	// Use in tests or cmd/run.go to inject a store-backed allow/deny function
+	// without touching the GrantStore field. nil + GrantStore nil → deny-all
+	// (fail-closed, #639).
+	CrossOrgGrantCheck func(callerOrg, scope string) error
+
 	// AuditEventStore backs the §10-step-24 audit persistence +
 	// GET /api/v1/audit/events query endpoint (#489 Wave AU2). nil
 	// disables persistence — the AU1 stub-log path stays active so

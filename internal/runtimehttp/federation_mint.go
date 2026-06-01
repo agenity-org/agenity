@@ -77,6 +77,7 @@ func (s *Server) mountCrossOrgFederationMint(mux *http.ServeMux) {
 	}
 	grants := &crossOrgGrantAdapter{
 		store: s.GrantStore,
+		check: s.CrossOrgGrantCheck,
 	}
 	minter := &federation.CrossOrgJWTMinter{
 		Issuer: s.OrgID,

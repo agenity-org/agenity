@@ -2,11 +2,15 @@
 // v0.9.4 §10 Pattern 2 Phase 2 LIVE WALK gate for #557 Wave F8.1 —
 // wires a REAL auth.KeyStore via the sqlite-backed AuthSecret
 // repository, mounts the cross-org JWT mint endpoint on a real
-// httptest server, simulates the hub-attesting headers F8 #498
-// supplies, and verifies the minted JWT against the daemon's REAL
-// JWKS — closing the trust loop empirically.
+// httptest server WITH production authMiddleware (#583), simulates
+// the hub-attesting headers F8 #498 supplies, and verifies the
+// minted JWT against the daemon's REAL JWKS — closing the trust
+// loop empirically.
 //
-// Refs #557 #498 V0.9.2-ARCHITECTURE.md §10 Pattern 2 Phase 2.
+// #583 — added authMiddleware wrapper + auth probes (no-token → 401,
+// valid Bearer → 200) so CI catches auth chain regressions.
+//
+// Refs #557 #498 #583 V0.9.2-ARCHITECTURE.md §10 Pattern 2 Phase 2.
 package runtimehttp
 
 import (
@@ -41,22 +45,47 @@ func TestV094Walk_F81_CrossOrgMint_RealKeyStore(t *testing.T) {
 		t.Fatalf("LoadOrCreateKeyStore: %v", err)
 	}
 
-	// 2) Mount the cross-org JWT minter onto a real mux.
+	// 2) Mount the cross-org JWT minter on a real mux WRAPPED IN
+	//    authMiddleware (#583). The production Handler() always wraps
+	//    the mux this way; tests that skip the wrapper miss auth
+	//    chain regressions.
+	const testAuthToken = "test-auth-token-f81-walk"
 	srv := &Server{
-		OrgID:    "bob.example",
-		KeyStore: ks,
+		OrgID:     "bob.example",
+		KeyStore:  ks,
+		AuthToken: testAuthToken,
+		// #639/#583 — wire an explicit allow-all check so the walk
+		// test exercises the happy path without a real grant store.
+		// Production cmd/run.go wires a store-backed check instead.
+		CrossOrgGrantCheck: func(_, _ string) error { return nil },
 	}
 	mux := http.NewServeMux()
 	srv.mountCrossOrgFederationMint(mux)
-	hs := httptest.NewServer(mux)
+	// Wrap with production authMiddleware so /api/v1/* requires Bearer.
+	hs := httptest.NewServer(srv.authMiddleware(mux))
 	defer hs.Close()
 
-	// 3) Simulate the F8 hub forwarding a daemon-X request:
-	//    POST /api/v1/federation/jwt with the attesting headers.
+	// 3a) #583 — probe auth chain: no Bearer → 401.
+	reqNoAuth, _ := http.NewRequest("POST", hs.URL+"/api/v1/federation/jwt",
+		strings.NewReader(`{"scope":"a2a.send","audience":"runner-7"}`))
+	reqNoAuth.Header.Set("Content-Type", "application/json")
+	reqNoAuth.Header.Set("X-Chepherd-Caller-Org", "alice.example")
+	reqNoAuth.Header.Set("X-Chepherd-Hub-Attest", "true")
+	respNoAuth, err := http.DefaultClient.Do(reqNoAuth)
+	if err != nil {
+		t.Fatalf("no-auth probe: %v", err)
+	}
+	respNoAuth.Body.Close()
+	if respNoAuth.StatusCode != http.StatusUnauthorized {
+		t.Errorf("#583 no-auth probe: status = %d, want 401 (authMiddleware not firing)", respNoAuth.StatusCode)
+	}
+
+	// 3b) Simulate the F8 hub forwarding a daemon-X request with auth.
 	body := `{"scope":"a2a.send","audience":"runner-7"}`
 	req, _ := http.NewRequest("POST", hs.URL+"/api/v1/federation/jwt",
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testAuthToken)
 	req.Header.Set("X-Chepherd-Caller-Org", "alice.example")
 	req.Header.Set("X-Chepherd-Hub-Attest", "true")
 	resp, err := http.DefaultClient.Do(req)
