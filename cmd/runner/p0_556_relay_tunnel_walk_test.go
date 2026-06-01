@@ -80,6 +80,11 @@ func TestV094Walk_F71_RunnerTunnel_ThroughRealHubBinary(t *testing.T) {
 		t.Fatalf("bob Dial: %v", err)
 	}
 	defer bobTunnel.Close()
+	// Brief grace period: readPump goroutine must be scheduled + hub must
+	// have registered the tunnel before Alice's POST arrives. Without this,
+	// the hub routes before readPump is running → 504 on a loaded CI
+	// runner. (#F7.1 race gate — same root as F7's healthz retry)
+	time.Sleep(200 * time.Millisecond)
 
 	// Alice POSTs an opaque blob through the hub to bob.
 	aliceReq, _ := http.NewRequest("POST", hubURL+"/v1/relay/bob.example/a2a/55/jsonrpc",
