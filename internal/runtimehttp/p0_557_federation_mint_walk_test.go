@@ -54,15 +54,16 @@ func TestV094Walk_F81_CrossOrgMint_RealKeyStore(t *testing.T) {
 	defer hs.Close()
 
 	// Auth-chain guard: same path on dashboard Handler() must return 401 (no Bearer).
-	hsAuth := httptest.NewServer(srv.Handler())
-	defer hsAuth.Close()
-	authCheck, _ := http.NewRequest("POST", hsAuth.URL+"/api/v1/federation/jwt",
-		strings.NewReader(`{}`))
-	authCheck.Header.Set("Content-Type", "application/json")
-	if ar, err2 := http.DefaultClient.Do(authCheck); err2 == nil {
-		defer ar.Body.Close()
-		if ar.StatusCode != http.StatusUnauthorized {
-			t.Errorf("dashboard Handler returned %d for unauthenticated request; want 401 (#583 guard)", ar.StatusCode)
+	// Use httptest.ResponseRecorder + ServeHTTP directly to avoid a TCP server backed
+	// by nil-rt handler closures (reviewer concern: rt=nil panics on non-auth paths).
+	{
+		authReq, _ := http.NewRequest("POST", "/api/v1/federation/jwt",
+			strings.NewReader(`{}`))
+		authReq.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, authReq)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("dashboard Handler returned %d for unauthenticated request; want 401 (#583 guard)", rec.Code)
 		}
 	}
 
