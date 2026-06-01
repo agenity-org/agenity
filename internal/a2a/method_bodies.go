@@ -183,13 +183,11 @@ func (m *MethodBodies) handleCancelTask(req JSONRPCRequest) JSONRPCResponse {
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "TaskRepository.Get: "+err.Error())
 	}
-	// Terminal states can't be canceled — return current state without
-	// modification. #484 Wave A5 routes through IsTerminal so all four
-	// terminal states (COMPLETED / FAILED / CANCELED / REJECTED) get
-	// the same no-op treatment.
+	// A2A v1.0 §5.4: CancelTask on a terminal-state task returns -32002
+	// TaskNotCancelableError. Four terminal states: COMPLETED / FAILED /
+	// CANCELED / REJECTED.
 	if IsTerminal(TaskState(rec.State)) {
-		t, _ := decodeTask(rec)
-		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: cancelTaskResult{Task: t}}
+		return errorResp(req.ID, ErrCodeTaskNotCancelable, "TaskNotCancelableError: task is already in terminal state "+rec.State)
 	}
 	// #484 Wave A5 — route the cancel transition through the §16
 	// state-machine seam so invariants are enforced uniformly.
@@ -246,6 +244,12 @@ func (m *MethodBodies) handleResubscribeTask(req JSONRPCRequest) JSONRPCResponse
 	}
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "TaskRepository.Get: "+err.Error())
+	}
+	// A2A v1.0 §9.4.6: subscribing to a terminal-state task has no
+	// semantic — return -32004 UnsupportedOperationError regardless of
+	// whether streaming is configured.
+	if IsTerminal(TaskState(rec.State)) {
+		return errorResp(req.ID, ErrCodeUnsupportedOperation, "UnsupportedOperationError: task is already in terminal state "+rec.State)
 	}
 	streamID, err := m.SubscribeFn(p.TaskID)
 	if err != nil {

@@ -90,21 +90,19 @@ func TestSendStreamingMessage_PersistsAndStreams(t *testing.T) {
 	}
 }
 
-// TestCancelTask_TerminalStateIsNoOp pins the spec invariant: terminal
-// states (completed / failed / canceled) are not transitioned again.
-func TestCancelTask_TerminalStateIsNoOp(t *testing.T) {
+// TestCancelTask_TerminalState_Returns32002 pins A2A v1.0 §5.4: CancelTask on
+// a terminal-state task returns -32002 TaskNotCancelableError (not silent no-op).
+func TestCancelTask_TerminalState_Returns32002(t *testing.T) {
 	r, mb := newTestRouter(t)
-	// Seed a completed task directly.
 	if err := mb.Store.Tasks().Save(context.Background(), seedTask("t-completed", string(TaskStateCompleted))); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	resp := call(t, r, "tasks/cancel", cancelTaskParams{TaskID: "t-completed"})
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %+v", resp.Error)
+	if resp.Error == nil {
+		t.Fatalf("expected -32002 error, got result: %+v", resp.Result)
 	}
-	result := resp.Result.(cancelTaskResult)
-	if result.Task.Status.State != TaskStateCompleted {
-		t.Errorf("expected COMPLETED preserved, got %q", result.Task.Status.State)
+	if resp.Error.Code != ErrCodeTaskNotCancelable {
+		t.Errorf("error code = %d, want %d (TaskNotCancelableError)", resp.Error.Code, ErrCodeTaskNotCancelable)
 	}
 }
 
@@ -122,6 +120,22 @@ func TestCancelTask_WorkingTransitionsToCanceled(t *testing.T) {
 	rec, _ := mb.Store.Tasks().Get(context.Background(), "t-working")
 	if rec.State != string(TaskStateCanceled) {
 		t.Errorf("persisted state should be CANCELED, got %q", rec.State)
+	}
+}
+
+// TestResubscribeTask_TerminalState_Returns32004 pins A2A v1.0 §9.4.6:
+// SubscribeToTask on a terminal-state task returns -32004 UnsupportedOperationError.
+func TestResubscribeTask_TerminalState_Returns32004(t *testing.T) {
+	r, mb := newTestRouter(t)
+	if err := mb.Store.Tasks().Save(context.Background(), seedTask("t-failed", string(TaskStateFailed))); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	resp := call(t, r, "tasks/resubscribe", resubscribeParams{TaskID: "t-failed"})
+	if resp.Error == nil {
+		t.Fatalf("expected -32004 error, got result: %+v", resp.Result)
+	}
+	if resp.Error.Code != ErrCodeUnsupportedOperation {
+		t.Errorf("error code = %d, want %d (UnsupportedOperationError)", resp.Error.Code, ErrCodeUnsupportedOperation)
 	}
 }
 
