@@ -170,8 +170,69 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 	}
 	// Get-after-delete is not found.
 	gone := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{ID: cfgID})
-	if gone.Error == nil || gone.Error.Code != ErrCodeTaskNotFound {
-		t.Errorf("expected -32001 TaskNotFound after delete, got %+v", gone.Error)
+	// #630 — not-found uses -32602 InvalidParams, not -32001 TaskNotFound.
+	if gone.Error == nil || gone.Error.Code != ErrCodeInvalidParams {
+		t.Errorf("expected -32602 InvalidParams after delete, got %+v", gone.Error)
+	}
+}
+
+// TestPushNotificationConfig_SpecNestedSet verifies #572: set accepts the
+// A2A v1.0 spec-nested shape {"taskId":"...","pushNotificationConfig":{...}}.
+func TestPushNotificationConfig_SpecNestedSet(t *testing.T) {
+	t.Parallel()
+	r, _ := newTestRouter(t)
+	// Spec-nested shape per a2a.proto.
+	type nestedParams struct {
+		TaskID                string `json:"taskId"`
+		PushNotificationConfig struct {
+			URL     string   `json:"url"`
+			Filters []string `json:"filters,omitempty"`
+		} `json:"pushNotificationConfig"`
+	}
+	p := nestedParams{TaskID: "task-nested"}
+	p.PushNotificationConfig.URL = "https://hook.example/spec"
+	p.PushNotificationConfig.Filters = []string{"state-change"}
+	resp := call(t, r, "tasks/pushNotificationConfig/set", p)
+	if resp.Error != nil {
+		t.Fatalf("spec-nested set failed: %+v", resp.Error)
+	}
+	cfg := resp.Result.(setPushConfigResult).Config
+	if cfg.ID == "" {
+		t.Fatal("spec-nested set: empty id")
+	}
+	if cfg.URL != "https://hook.example/spec" {
+		t.Errorf("spec-nested set: URL=%q, want https://hook.example/spec", cfg.URL)
+	}
+	if cfg.TaskID != "task-nested" {
+		t.Errorf("spec-nested set: TaskID=%q, want task-nested", cfg.TaskID)
+	}
+}
+
+// TestPushNotificationConfig_ListByTaskID verifies #572: list accepts
+// {"taskId":"..."} — was broken (json tag was "id" not "taskId").
+func TestPushNotificationConfig_ListByTaskID(t *testing.T) {
+	t.Parallel()
+	r, _ := newTestRouter(t)
+	// Insert two configs for the same taskId.
+	for i := range 2 {
+		_ = i
+		resp := call(t, r, "tasks/pushNotificationConfig/set", setPushConfigParams{
+			TaskID: "list-task",
+			URL:    "https://hook.example/list",
+		})
+		if resp.Error != nil {
+			t.Fatalf("set for list: %+v", resp.Error)
+		}
+	}
+	// List by taskId — previously the json tag was "id", so {"taskId":"..."} was ignored.
+	listResp := call(t, r, "tasks/pushNotificationConfig/list",
+		listPushConfigsParams{TaskID: "list-task"})
+	if listResp.Error != nil {
+		t.Fatalf("list: %+v", listResp.Error)
+	}
+	got := len(listResp.Result.(listPushConfigsResult).Configs)
+	if got != 2 {
+		t.Errorf("list by taskId: got %d configs, want 2", got)
 	}
 }
 

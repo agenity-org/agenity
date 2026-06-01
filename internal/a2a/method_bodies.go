@@ -314,14 +314,37 @@ type pushConfig struct {
 	Filters    []string `json:"filters,omitempty"`
 }
 
+// setPushConfigParams accepts both the flat legacy shape and the A2A v1.0
+// spec-nested shape (#572). When PushNotificationConfig is non-nil, its
+// fields win over the flat URL/SigningKey/Filters fields.
+type setPushConfigParams struct {
+	TaskID               string              `json:"taskId"`
+	URL                  string              `json:"url,omitempty"`
+	SigningKey            string              `json:"signingKey,omitempty"`
+	Filters              []string            `json:"filters,omitempty"`
+	PushNotificationConfig *pushConfigNested `json:"pushNotificationConfig,omitempty"`
+}
+
+type pushConfigNested struct {
+	URL       string   `json:"url"`
+	SigningKey string   `json:"signingKey,omitempty"`
+	Filters   []string `json:"filters,omitempty"`
+}
+
 type setPushConfigResult struct {
 	Config pushConfig `json:"config"`
 }
 
 func (m *MethodBodies) handleSetTaskPushNotificationConfig(req JSONRPCRequest) JSONRPCResponse {
-	var p pushConfig
+	var p setPushConfigParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errorResp(req.ID, ErrCodeInvalidParams, "decode SetTaskPushNotificationConfigParams: "+err.Error())
+	}
+	// Merge nested spec shape into flat fields.
+	if p.PushNotificationConfig != nil {
+		p.URL = p.PushNotificationConfig.URL
+		p.SigningKey = p.PushNotificationConfig.SigningKey
+		p.Filters = p.PushNotificationConfig.Filters
 	}
 	if p.TaskID == "" || p.URL == "" {
 		return errorResp(req.ID, ErrCodeInvalidParams, "taskId and url are required")
@@ -330,7 +353,7 @@ func (m *MethodBodies) handleSetTaskPushNotificationConfig(req JSONRPCRequest) J
 		ID:         uuid.NewString(),
 		TaskID:     p.TaskID,
 		URL:        p.URL,
-		SigningKey: []byte(p.SigningKey),
+		SigningKey:  []byte(p.SigningKey),
 		Filters:    p.Filters,
 		CreatedAt:  time.Now().UTC(),
 	}
@@ -356,7 +379,9 @@ func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) J
 	}
 	cfg, err := m.Store.PushConfigs().Get(context.Background(), p.ID)
 	if isNotFound(err) {
-		return errorResp(req.ID, ErrCodeTaskNotFound, "push-notification-config not found: "+p.ID)
+		// #630 — use InvalidParams (-32602) not TaskNotFound (-32001); the
+		// config ID is unknown, not the task.
+		return errorResp(req.ID, ErrCodeInvalidParams, "push-notification-config not found: "+p.ID)
 	}
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "PushConfigs.Get: "+err.Error())
@@ -366,7 +391,7 @@ func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) J
 }
 
 type listPushConfigsParams struct {
-	TaskID string `json:"id"`
+	TaskID string `json:"taskId"`
 }
 
 type listPushConfigsResult struct {
