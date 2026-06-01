@@ -47,7 +47,7 @@
     const _origFetch = window.fetch.bind(window);
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : (input?.url || '');
-      if (url.startsWith('/api/')) {
+      if (url.startsWith('/api/') || url.startsWith('/api-v')) {
         let tok = '';
         try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
         init = init || {};

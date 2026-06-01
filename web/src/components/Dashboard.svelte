@@ -25,7 +25,10 @@
     const _origFetch = window.fetch.bind(window);
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : (input?.url || '');
-      if (url.startsWith('/api/')) {
+      // Match /api/ AND /api-v06/, /api-v07/, /api-v08/, /api-v0.9/ etc.
+      // — legacy v0.6/v0.7/v0.8 widgets prefix the path for proxy routing
+      // but still need the same Authorization: Bearer auth attached.
+      if (url.startsWith('/api/') || url.startsWith('/api-v')) {
         let tok = '';
         try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
         init = init || {};
