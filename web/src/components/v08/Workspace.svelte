@@ -37,7 +37,7 @@
     const _origFetch = window.fetch.bind(window);
     window.fetch = (input, init) => {
       const url = typeof input === 'string' ? input : (input?.url || '');
-      if (url.startsWith('/api/') || url.startsWith('/api-v08/')) {
+      if (url.startsWith('/api/')) {
         let tok = '';
         try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
         init = init || {};
@@ -121,9 +121,7 @@
   }
 
   // --- API ---
-  // v0.8 uses its own /api-v08 namespace so it always hits the v0.8 runtime
-  // (:8081) regardless of which Astro dev server / port served the page.
-  const API = '/api-v08/v1';
+  const API = '/api/v1';
   async function refresh() {
     try {
       const [s, t, m, ib, ev] = await Promise.all([
@@ -534,7 +532,7 @@
     try { localStorage.setItem('chepherd-token', loginTokenInput.trim()); } catch {}
     // Test the token via /healthz (public) + then /api/v1/sessions (gated).
     try {
-      const r = await fetch('/api-v08/v1/sessions');
+      const r = await fetch('/api/v1/sessions');
       if (r.status === 401) { loginError = 'token rejected'; return; }
     } catch (e) { loginError = String(e); return; }
     needLogin = false; loginError = ''; loginTokenInput = '';
