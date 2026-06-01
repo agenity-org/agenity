@@ -113,8 +113,8 @@ func TestWaveH5_AuthRequiredRunnerState_AndResult(t *testing.T) {
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		t.Fatalf("decode result body: %v\n%s", err, body)
 	}
-	if envelope.Status.State != "auth-required" {
-		t.Errorf("Status.State = %q, want auth-required\n%s", envelope.Status.State, body)
+	if envelope.Status.State != "TASK_STATE_AUTH_REQUIRED" {
+		t.Errorf("Status.State = %q, want TASK_STATE_AUTH_REQUIRED\n%s", envelope.Status.State, body)
 	}
 	if envelope.Status.Details == nil {
 		t.Fatalf("Status.Details = nil, want populated AuthChallenge\n%s", body)
@@ -273,8 +273,8 @@ func TestWaveH5_AuthTimeoutSweep_TransitionsToFailed(t *testing.T) {
 		t.Fatalf("result = %d, want 200", r.StatusCode)
 	}
 	body, _ := io.ReadAll(r.Body)
-	if !strings.Contains(string(body), `"state": "auth-required"`) &&
-		!strings.Contains(string(body), `"state":"auth-required"`) {
+	if !strings.Contains(string(body), `"state": "TASK_STATE_AUTH_REQUIRED"`) &&
+		!strings.Contains(string(body), `"state":"TASK_STATE_AUTH_REQUIRED"`) {
 		t.Errorf("result didn't carry auth-required state:\n%s", body)
 	}
 }
@@ -288,7 +288,7 @@ func TestWaveH5_AuthTimeoutSweep_UnitOnAgedRunner(t *testing.T) {
 	// Result file with an auth-required envelope.
 	envelope := []byte(`{
   "id": "test-aged",
-  "status": {"state": "auth-required",
+  "status": {"state": "TASK_STATE_AUTH_REQUIRED",
     "details": {"authProvider": "x", "authMessage": "y"}}
 }`)
 	resultFile := filepath.Join(dir, "result.json")
@@ -307,10 +307,10 @@ func TestWaveH5_AuthTimeoutSweep_UnitOnAgedRunner(t *testing.T) {
 	if s.runners["aged"].State != stateFailed {
 		t.Errorf("state = %q, want failed after timeout sweep", s.runners["aged"].State)
 	}
-	// Result file's Status.State must be rewritten to "failed".
+	// Result file's Status.State must be rewritten to "TASK_STATE_FAILED".
 	body, _ := os.ReadFile(resultFile)
-	if !strings.Contains(string(body), `"state": "failed"`) {
-		t.Errorf("on-disk result state not rewritten to failed:\n%s", body)
+	if !strings.Contains(string(body), `"state": "TASK_STATE_FAILED"`) {
+		t.Errorf("on-disk result state not rewritten to TASK_STATE_FAILED:\n%s", body)
 	}
 	if !strings.Contains(string(body), "oauth-timeout") {
 		t.Errorf("on-disk result missing oauth-timeout reason:\n%s", body)

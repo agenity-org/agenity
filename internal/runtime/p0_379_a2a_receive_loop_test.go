@@ -137,8 +137,8 @@ func TestP0_379_TaskCompleter_FlipsStateAndAppendsHistory(t *testing.T) {
 	if len(repo.saved) != 1 {
 		t.Fatalf("seed: repo.saved len = %d, want 1", len(repo.saved))
 	}
-	if repo.saved[0].State != "working" {
-		t.Fatalf("seed: State = %q, want working", repo.saved[0].State)
+	if repo.saved[0].State != "TASK_STATE_WORKING" {
+		t.Fatalf("seed: State = %q, want TASK_STATE_WORKING", repo.saved[0].State)
 	}
 
 	// Run the completer — this is what the pump fires after silence.
@@ -154,8 +154,8 @@ func TestP0_379_TaskCompleter_FlipsStateAndAppendsHistory(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("repo.Get after completer: %v / nil=%v", err, got == nil)
 	}
-	if got.State != "completed" {
-		t.Errorf("after completer: State = %q, want completed", got.State)
+	if got.State != "TASK_STATE_COMPLETED" {
+		t.Errorf("after completer: State = %q, want TASK_STATE_COMPLETED", got.State)
 	}
 
 	// OutputBlob shape: {artifacts, history}. Decode + assert agent msg.
@@ -208,8 +208,8 @@ func TestP0_379_TaskCompleter_IdempotentOnCompletedRow(t *testing.T) {
 	completer(working.ID, "second response — should be ignored")
 
 	got, _ := repo.Get(context.Background(), working.ID)
-	if got.State != "completed" {
-		t.Errorf("State = %q, want completed", got.State)
+	if got.State != "TASK_STATE_COMPLETED" {
+		t.Errorf("State = %q, want TASK_STATE_COMPLETED", got.State)
 	}
 	var out struct {
 		History []a2a.Message `json:"history,omitempty"`

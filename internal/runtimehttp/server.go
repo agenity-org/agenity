@@ -3505,7 +3505,7 @@ func (s *Server) claudeLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	// readable. Fallback: try the host path in case the runtime mode is
 	// bare-exec or :U remapping didn't kick in.
 	credPathHost := filepath.Join(s.rt.StateDir(), "agents", name, "home", ".claude", ".credentials.json")
-	containerName := "chepherd-agent-" + name
+	containerName := agentContainerName(s.rt.InstanceUUID(), name)
 	deadline := time.Now().Add(40 * time.Second)
 	var data []byte
 	var lastErr string
@@ -3558,6 +3558,18 @@ func (s *Server) claudeLoginCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.rt.Stop(name)
 	writeJSON(w, http.StatusOK, map[string]string{"cancelled": name})
+}
+
+// agentContainerName returns the podman/docker container name for an agent
+// session. When uuid is non-empty (#270 instance-UUID scoping) the name
+// is "chepherd-agent-<uuid>-<sessionName>"; otherwise "chepherd-agent-<sessionName>".
+// Extracted from claudeLoginSubmit so it can be unit-tested independently.
+func agentContainerName(uuid, sessionName string) string {
+	prefix := "chepherd-agent-"
+	if uuid != "" {
+		prefix += uuid + "-"
+	}
+	return prefix + sessionName
 }
 
 // stripEnvKey returns env with all KEY=... entries matching key removed.

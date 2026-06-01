@@ -131,6 +131,11 @@ type runnerInfo struct {
 	taskBody   []byte         `json:"-"`
 }
 
+// iogrid runner state constants — PRIVATE API, NOT A2A wire format.
+// These are the iogrid server's own lifecycle states returned from
+// GET /v1/runners/{id}. They are intentionally separate from the A2A
+// TaskState enum (a2a.TaskState*), which uses SCREAMING_SNAKE_CASE and
+// is only present in the Task envelope returned from /v1/runners/{id}/result.
 const (
 	stateRunning      = "running"
 	stateCompleted    = "completed"
@@ -561,7 +566,7 @@ func rewriteResultStateToFailed(path, reason string) error {
 	if status == nil {
 		status = map[string]any{}
 	}
-	status["state"] = "failed"
+	status["state"] = "TASK_STATE_FAILED"
 	status["message"] = map[string]any{
 		"role": "agent",
 		"kind": "message",
