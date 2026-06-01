@@ -1050,6 +1050,18 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, err
 				}
 			}
 		}
+		// #649 — when running containerised and cwd defaulted to the
+		// bare container home (/home/chepherd), toHostPath cannot
+		// translate it (the prefix table only covers sub-paths). The
+		// resulting mount -v /home/chepherd:/home/chepherd:rw hits a
+		// root-owned dir on the host → OCI permission denied → agent
+		// container stuck in Created. Fall back to /home/chepherd/repos
+		// which IS in the prefix table and maps to CHEPHERD_HOST_REPOS_DIR.
+		if fallbackCwd == "/home/chepherd" && os.Getenv("CHEPHERD_HOST_REPOS_DIR") != "" {
+			if reposCwd := "/home/chepherd/repos"; func() bool { _, e := os.Stat(reposCwd); return e == nil }() {
+				fallbackCwd = reposCwd
+			}
+		}
 		// #594 Fix 2 — pre-validate cwd exists so we surface
 		// actionable errors instead of the kernel-level ENOENT from
 		// os/exec.
