@@ -4,12 +4,11 @@
 // the dashboard listener stays plain TLS (browsers can't present
 // client certs).
 //
-// The handler is the SAME runtimehttp.Server mux the dashboard
-// uses — every D3 / D1 / T2 / A4 endpoint is reachable to mTLS-
-// verified peers + the existing application-layer auth (D3 grants,
-// A4 extended-card auth gate) still applies orthogonally. mTLS at
-// the listener is the FIRST gate; AuthMiddleware + GrantCheck are
-// the SECOND.
+// The handler is Server.FederationHandler() — a scoped mux that
+// exposes ONLY /api/v1/federation/jwt, /api/v1/jwks.json, and
+// /healthz without authMiddleware. mTLS cert pinning at the TLS
+// handshake is the auth layer; the dashboard Handler() (with
+// authMiddleware) is NOT used here.
 //
 // Refs #527 #487 V0.9.2-ARCHITECTURE.md §15.1 §22.
 package cmd
