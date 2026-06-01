@@ -2323,6 +2323,10 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 		Team            string
 		Cwd             string
 		ProviderID      string `json:"provider_id"`
+		// CloneURL is the specific repo URL from Stage 2 (#651) — must be
+		// threaded into resolveProviderCwd so the team apply path clones
+		// the right repo instead of the provider's generic base URL.
+		CloneURL        string `json:"clone_url"`
 		Topology        string
 		ResumeStrategy  string                       `json:"resume_strategy"` // "" | "fresh" | "latest-in-cwd"
 		MemberOverrides map[string]MemberOverrideReq `json:"member_overrides"`
@@ -2350,7 +2354,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	if team == "" {
 		team = p.Name
 	}
-	cwd, _ := s.resolveProviderCwd(req.ProviderID, req.Cwd, "")
+	cwd, _ := s.resolveProviderCwd(req.ProviderID, req.Cwd, req.CloneURL)
 	if cwd == "" {
 		cwd = os.Getenv("HOME")
 	}
