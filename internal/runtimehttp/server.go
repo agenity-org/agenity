@@ -310,6 +310,7 @@ func (s *Server) Handler() http.Handler {
 	// v0.9.3 #225 row C1 — federated peer registry view.
 	mux.HandleFunc("/api/v1/peers", s.peersList)
 	mux.HandleFunc("/api/v1/tasks", s.tasksList)
+	mux.HandleFunc("/api/v1/tasks/", s.taskByID)
 	// #311 C5.1 — WebRTC signaling relay endpoints. /webrtc/offer
 	// answers inbound SDP offers by spawning a chepherd-side
 	// PeerConnection. /webrtc/ice trickles ICE candidates into the
@@ -3873,4 +3874,49 @@ func (s *Server) tasksList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": out})
+}
+
+// taskByID implements GET /api/v1/tasks/{id} — returns the FULL task
+// envelope including the decoded input Message + output result blobs.
+// Drives the dashboard's A2A Inbox detail panel so operators can see
+// WHO talked to WHOM and WHAT was said. Bearer auth required.
+func (s *Server) taskByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	if s.TaskStore == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "task store not configured"})
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "task id required"})
+		return
+	}
+	t, err := s.TaskStore.Get(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such task: " + id})
+		return
+	}
+	// Decode input/output blobs as raw JSON for the UI to pretty-print.
+	// Surface decode errors as nil so the rest of the envelope still renders.
+	var input any
+	if len(t.InputBlob) > 0 {
+		_ = json.Unmarshal(t.InputBlob, &input)
+	}
+	var output any
+	if len(t.OutputBlob) > 0 {
+		_ = json.Unmarshal(t.OutputBlob, &output)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":         t.ID,
+		"runnerSID":  t.RunnerSID,
+		"state":      t.State,
+		"method":     t.Method,
+		"createdAt":  t.CreatedAt,
+		"updatedAt":  t.UpdatedAt,
+		"input":      input,
+		"output":     output,
+	})
 }

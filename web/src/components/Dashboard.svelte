@@ -66,6 +66,33 @@
   let peers = $state([]);
   // #225 row G2 — recent A2A tasks from /api/v1/tasks (the A2A Inbox tab)
   let a2aTasks = $state([]);
+  // A2A Inbox detail panel — clicked task envelope (id, input message, output)
+  let a2aSelected = $state(null);
+  let a2aSelectedID = $state('');
+  let a2aSelectedLoading = $state(false);
+  let a2aSelectedError = $state('');
+  async function openA2ATask(id) {
+    a2aSelectedID = id;
+    a2aSelectedLoading = true;
+    a2aSelectedError = '';
+    a2aSelected = null;
+    try {
+      const r = await fetch(`${API}/tasks/${encodeURIComponent(id)}`);
+      const text = await r.text();
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try { msg = JSON.parse(text).error || msg; } catch { msg = text.slice(0, 80) || msg; }
+        a2aSelectedError = msg;
+        return;
+      }
+      a2aSelected = JSON.parse(text);
+    } catch (e) {
+      a2aSelectedError = e?.message || 'fetch failed';
+    } finally {
+      a2aSelectedLoading = false;
+    }
+  }
+  function closeA2ATask() { a2aSelected = null; a2aSelectedID = ''; a2aSelectedError = ''; }
   let showSpawn = $state(false);
   let theme = $state('dark'); // 'dark' | 'light' — persisted in localStorage
 
@@ -623,7 +650,7 @@
         <h2>A2A Inbox <span class="count">({a2aTasks.length})</span></h2>
         <ul class="session-list">
           {#each a2aTasks.slice(0, 10) as task (task.id)}
-            <li>
+            <li class="a2a-row" class:selected={a2aSelectedID === task.id} on:click={() => openA2ATask(task.id)}>
               <div class="row1">
                 <span class="dot worker" title={task.state}>◈</span>
                 <span class="name">{task.method}</span>
@@ -638,6 +665,54 @@
         </ul>
       </section>
     </aside>
+
+    {#if a2aSelectedID || a2aSelectedLoading || a2aSelected}
+      <div class="a2a-modal-backdrop" on:click={closeA2ATask}>
+        <div class="a2a-modal" on:click|stopPropagation>
+          <header class="a2a-modal-header">
+            <h3>A2A Task <code>{a2aSelectedID.slice(0, 12)}…</code></h3>
+            <button class="icon-btn" title="Close" on:click={closeA2ATask}>×</button>
+          </header>
+          {#if a2aSelectedLoading}
+            <p class="a2a-modal-status">loading…</p>
+          {:else if a2aSelectedError}
+            <p class="a2a-modal-error">⚠ {a2aSelectedError}</p>
+          {:else if a2aSelected}
+            <div class="a2a-modal-body">
+              <dl class="meta">
+                <dt>Method</dt><dd><code>{a2aSelected.method}</code></dd>
+                <dt>State</dt><dd><span class="badge">{a2aSelected.state}</span></dd>
+                <dt>To (runner)</dt><dd><code>{a2aSelected.runnerSID}</code></dd>
+                {#if a2aSelected.input?.message?.contextId}
+                  <dt>ContextID</dt><dd><code>{a2aSelected.input.message.contextId}</code></dd>
+                {/if}
+                {#if a2aSelected.input?.message?.role}
+                  <dt>From role</dt><dd>{a2aSelected.input.message.role}</dd>
+                {/if}
+                <dt>Created</dt><dd>{new Date(a2aSelected.createdAt).toLocaleString()}</dd>
+                <dt>Updated</dt><dd>{new Date(a2aSelected.updatedAt).toLocaleString()}</dd>
+              </dl>
+              {#if a2aSelected.input?.message?.parts?.length}
+                <h4>Message parts ({a2aSelected.input.message.parts.length})</h4>
+                {#each a2aSelected.input.message.parts as p, i}
+                  <div class="part">
+                    <span class="part-kind">{p.kind || 'text'}</span>
+                    <pre class="part-text">{p.text || JSON.stringify(p, null, 2)}</pre>
+                  </div>
+                {/each}
+              {:else}
+                <h4>Input (raw)</h4>
+                <pre class="raw">{JSON.stringify(a2aSelected.input, null, 2)}</pre>
+              {/if}
+              {#if a2aSelected.output}
+                <h4>Output</h4>
+                <pre class="raw">{JSON.stringify(a2aSelected.output, null, 2)}</pre>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      </div>
+    {/if}
 
     <!-- Center: xterm fills available height -->
     <section class="center">
@@ -989,6 +1064,31 @@
   .session-list li { padding: 0.55rem 0.65rem; border-radius: 6px; cursor: pointer; margin-bottom: 0.25rem; border: 1px solid transparent; }
   .session-list li:hover { background: var(--bg-elev); border-color: var(--border); }
   .session-list li.selected { background: var(--select-bg); border-color: var(--select-border); }
+
+  /* A2A task detail modal — opens when an inbox item is clicked */
+  .a2a-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center; z-index: 1000;
+  }
+  .a2a-modal {
+    background: var(--bg, #1a1a1a); border: 1px solid var(--border, #333);
+    border-radius: 8px; padding: 0; width: min(720px, 92vw); max-height: 86vh;
+    display: flex; flex-direction: column; color: var(--fg, #f5f5f5);
+  }
+  .a2a-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 0.7rem 1rem; border-bottom: 1px solid var(--border, #333); }
+  .a2a-modal-header h3 { margin: 0; font-size: 1rem; }
+  .a2a-modal-status, .a2a-modal-error { padding: 1rem; margin: 0; }
+  .a2a-modal-error { color: #e74c3c; }
+  .a2a-modal-body { overflow: auto; padding: 0.8rem 1rem; }
+  .a2a-modal-body dl.meta { display: grid; grid-template-columns: 7rem 1fr; gap: 0.3rem 0.8rem; margin: 0 0 0.8rem 0; font-size: 0.86rem; }
+  .a2a-modal-body dt { color: var(--fg-muted, #888); }
+  .a2a-modal-body dd { margin: 0; word-break: break-all; }
+  .a2a-modal-body h4 { margin: 1rem 0 0.4rem 0; font-size: 0.88rem; color: var(--fg, #fff); }
+  .a2a-modal-body .part { background: var(--bg-elevated, #111); border: 1px solid var(--border, #2a2a2a); border-radius: 4px; padding: 0.45rem 0.6rem; margin-bottom: 0.4rem; }
+  .a2a-modal-body .part-kind { font-size: 0.72rem; color: var(--accent-2, #87ceeb); font-weight: 600; text-transform: uppercase; }
+  .a2a-modal-body .part-text, .a2a-modal-body .raw { margin: 0.3rem 0 0 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 0.82rem; color: var(--fg, #f5f5f5); background: transparent; }
+  .a2a-modal-body .raw { background: var(--bg-elevated, #0e0e0e); padding: 0.45rem 0.6rem; border-radius: 4px; border: 1px solid var(--border, #222); max-height: 24rem; overflow: auto; }
+  .a2a-row { transition: background 80ms; }
   .session-list li.paused { opacity: 0.6; }
   .session-list li.empty { color: var(--fg-faint); font-size: 0.85rem; cursor: default; padding: 0.6rem 0.4rem; }
   .session-list li.empty:hover { background: transparent; border-color: transparent; }
