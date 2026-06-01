@@ -1721,10 +1721,7 @@ func (r *Runtime) ReapOrphanContainers() int {
 		fmt.Fprintf(os.Stderr, "runtime.ReapOrphanContainers: list: %v\n", err)
 		return 0
 	}
-	prefix := "chepherd-agent-"
-	if r.instanceUUID != "" {
-		prefix = "chepherd-agent-" + r.instanceUUID + "-"
-	}
+	prefix := containerNamePrefix(r.instanceUUID)
 	live := map[string]struct{}{}
 	r.mu.Lock()
 	for name := range r.byName {
