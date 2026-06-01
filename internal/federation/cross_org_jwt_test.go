@@ -138,6 +138,38 @@ func TestWaveF8_Minter_HappyPath_SignsWithExpectedClaims(t *testing.T) {
 	}
 }
 
+// TestP0_563_Minter_EmbedsJTI pins §15.2 requirement that each minted
+// JWT carries a unique jti claim. Two mints must produce different jti
+// values so server-side replay detection is structurally possible.
+func TestP0_563_Minter_EmbedsJTI(t *testing.T) {
+	t.Parallel()
+	signer := &stubSigner{}
+	m := &CrossOrgJWTMinter{Issuer: "bob.example", Signer: signer}
+	mint := func() string {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/v1/federation/jwt",
+			strings.NewReader(`{"scope":"a2a.send"}`))
+		r.Header.Set("X-Chepherd-Caller-Org", "alice.example")
+		r.Header.Set("X-Chepherd-Hub-Attest", "true")
+		m.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200", w.Code)
+		}
+		var resp CrossOrgJWTResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return resp.JWT
+	}
+	jwt1 := mint()
+	jwt2 := mint()
+	if !strings.Contains(jwt1, `"jti"`) {
+		t.Errorf("jti claim missing from JWT: %s", jwt1)
+	}
+	// Two mints must produce different jti values.
+	if jwt1 == jwt2 {
+		t.Errorf("two consecutive mints produced identical JWTs — jti not unique")
+	}
+}
+
 // ─── Client ───────────────────────────────────────────────────────
 
 func TestWaveF8_Client_CacheHitOnRepeatCall(t *testing.T) {

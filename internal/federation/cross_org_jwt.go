@@ -39,6 +39,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // crossOrgJWTTTL is the issued JWT's lifetime. 5 minutes balances
@@ -156,6 +158,7 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"nbf":   nbf,
 		"exp":   exp,
 		"iat":   nbf,
+		"jti":   uuid.NewString(), // §15.2: unique JWT ID for replay protection
 	}
 	jws, err := m.Signer.Sign(claims)
 	if err != nil {
