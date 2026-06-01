@@ -186,9 +186,9 @@ Screenshot: `c6-11-spawn-wizard-stage5-accounts.png`, `c6-12-claude-account-conn
 
 ### Stage 6: Launch
 
-Not reached — Launch is gated on all agents having connected accounts. This is correct per design.
+Not reached — Launch is gated on all agents having connected accounts (Stage 5 warns "⚠ 1 of 1 agents still need an account before Launch unlocks" and the "Next →" button remains disabled). Stage 6 was not walked because completing the OAuth connect flow would require a real Anthropic account.
 
-**Verdict:** PASS (gate is correct behavior)
+**Verdict:** ⚠️ NOT REACHED — gate behaves correctly (Next disabled, warning shown), but Stage 6 UI itself was not exercised in this walk.
 
 ---
 
@@ -200,7 +200,35 @@ Not reached — Launch is gated on all agents having connected accounts. This is
 
 This means the backend spawned an `oauth-capture-*` session when the wizard called the account connect API — BEFORE the user completed the OAuth flow. Cancelling the frontend wizard didn't clean up the backend session.
 
-**FINDING P2 — #590.F1:** OAuth-capture session not cleaned up on wizard cancel. Session "oauth-capture-..." persists in backend after user cancels the ClaudeAccountConnect flow mid-wizard. Operator sees orphan session in topbar. Low severity (session is inert and can be manually killed) but leaks state.
+**FINDING P2 — #590.F1:** OAuth-capture session not cleaned up on wizard cancel.
+
+**Repro:**
+1. Open SpawnWizardV9 → advance to Stage 5 (Accounts).
+2. Click "+ Connect Claude account" → wizard POSTs `POST /api/v1/claude-tokens/login-begin`, backend spawns `oauth-capture-<timestamp>` session.
+3. Click the "Cancel" button inside the ClaudeAccountConnect panel → wizard POSTs `POST /api/v1/claude-tokens/login-cancel/<name>`.
+4. Backend handler (`claudeLoginCancel` in `internal/runtimehttp/server.go:3567`) calls `s.rt.Stop(name)` — stops the process — but does NOT call `Delete()` to remove the session record.
+5. `GET /api/v1/sessions` still returns the session with `"live": false`. Operator sees `oauth-capture-*` in the topbar session picker permanently.
+
+**Root cause:** `claudeLoginCancel` omits a `Delete()` call after `Stop()`. v08 `SpawnWizard.svelte:213` had the same cancel endpoint but the backend handler never cleaned up the record.
+
+---
+
+## Probe 11 — Active agent selected (agent-details + runtime with live session)
+
+After the ClaudeAccountConnect cancel, the `oauth-capture-*` session was selected in the terminal's "Pick an agent" list.
+
+**Observed agent-details pane:**
+- Identity: `oauth-capture-1780329468128100964-1780329468392048638`
+- Fields: agent, role, team all show "—" because the process exited (`live: false`) after cancel — heartbeat stopped, so stats are stale/empty.
+- Runtime section: "● live" indicator shown (UI polls regularly), all metric fields "—" (no live process reporting them).
+
+**Scorecard pane:** Shows "Chepherd assessing — first scorecard arrives within 60s." — correct state for a session that started but didn't complete initialization.
+
+**Finding:** The agent-details and runtime widgets render correctly in the active-agent state. The "—" fields are expected when the session's process is not live — not a widget rendering bug.
+
+**Verdict:** PASS — widgets correctly reflect stopped-process state.
+
+Screenshot: `c6-16-agent-selected-details.png`
 
 ---
 
@@ -236,9 +264,9 @@ Total console errors at walk end: ~180-195 errors, 14-21 warnings.
 | SpawnWizardV9 Stage 3 (Skills) | Skill matrix | 10 skills, 8 default-on | ✅ PASS |
 | SpawnWizardV9 Stage 4 (Agents) | Type + model picker | claude-code + 6 models | ✅ PASS |
 | SpawnWizardV9 Stage 5 (Accounts) | Account gate + OAuth | ClaudeAccountConnect initiates correctly | ✅ PASS |
-| SpawnWizardV9 Stage 6 (Launch) | Gated until accounts connected | Launch disabled (correct) | ✅ PASS |
+| SpawnWizardV9 Stage 6 (Launch) | Gated until accounts connected | Launch disabled + warning shown (correct gate) | ⚠️ NOT REACHED |
 | OAuth-cancel cleanup | Orphan session cleaned | Session persists after cancel | ❌ P2 #590.F1 |
 
 **New P2 filing:** oauth-capture session not cleaned up on wizard cancel (#590.F1).
 
-Screenshots: `c6-01` through `c6-15` (gitignored, local only per .gitignore *.png).
+Screenshots: `c6-01` through `c6-16` (gitignored, local only per .gitignore *.png).
