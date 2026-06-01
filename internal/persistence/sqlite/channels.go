@@ -92,8 +92,10 @@ func (r *ChannelRepository) Save(ctx context.Context, ch *persistence.Channel) e
 }
 
 func (r *ChannelRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM channels WHERE id = $1`, id)
-	return err
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM channels WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("sqlite channels Delete %q: %w", id, err)
+	}
+	return nil
 }
 
 func (r *ChannelRepository) Members(ctx context.Context, channelID string) ([]*persistence.ChannelMember, error) {
@@ -128,14 +130,19 @@ func (r *ChannelRepository) AddMember(ctx context.Context, m *persistence.Channe
 }
 
 func (r *ChannelRepository) RemoveMember(ctx context.Context, channelID, member string) error {
-	_, err := r.db.ExecContext(ctx,
-		`DELETE FROM channel_members WHERE channel_id = $1 AND member = $2`, channelID, member)
-	return err
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM channel_members WHERE channel_id = $1 AND member = $2`, channelID, member); err != nil {
+		return fmt.Errorf("sqlite channel_members RemoveMember: %w", err)
+	}
+	return nil
 }
 
 func (r *ChannelRepository) Messages(ctx context.Context, channelID string, limit int) ([]*persistence.ChannelMessage, error) {
 	if limit <= 0 {
 		limit = 50
+	}
+	if limit > 500 {
+		limit = 500 // cap so a runaway client can't OOM the daemon
 	}
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, channel_id, author, body, mentions, task_id, created_at
@@ -153,7 +160,11 @@ func (r *ChannelRepository) Messages(ctx context.Context, channelID string, limi
 			return nil, err
 		}
 		if mentionsJSON != "" && mentionsJSON != "[]" {
-			_ = json.Unmarshal([]byte(mentionsJSON), &m.Mentions)
+			if err := json.Unmarshal([]byte(mentionsJSON), &m.Mentions); err != nil {
+				// Fail loud per [[feedback_silent_fallback_diagnostic_pattern]] —
+				// a corrupt mentions blob would silently skip @-fan-out otherwise.
+				return nil, fmt.Errorf("sqlite channel_messages: unmarshal mentions for %s: %w", m.ID, err)
+			}
 		}
 		out = append(out, &m)
 	}
@@ -166,7 +177,10 @@ func (r *ChannelRepository) SaveMessage(ctx context.Context, msg *persistence.Ch
 	}
 	mentionsJSON := "[]"
 	if len(msg.Mentions) > 0 {
-		b, _ := json.Marshal(msg.Mentions)
+		b, err := json.Marshal(msg.Mentions)
+		if err != nil {
+			return fmt.Errorf("sqlite channel_messages: marshal mentions: %w", err)
+		}
 		mentionsJSON = string(b)
 	}
 	_, err := r.db.ExecContext(ctx,

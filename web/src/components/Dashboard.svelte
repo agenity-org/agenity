@@ -56,6 +56,7 @@
   // pane visually empty even though chunks arrive over the WebSocket.
   import '@xterm/xterm/css/xterm.css';
   import SpiderChart from './SpiderChart.svelte';
+  import TeamTranscript from './TeamTranscript.svelte';
 
   let sessions = $state([]);
   let selectedName = $state(null);
@@ -723,7 +724,7 @@
             <span class="title-name">{selectedName}</span>
             <span class="subtitle">— live attach via WebSocket</span>
           {:else}
-            <span class="subtitle">Pick a session ← or click "+ spawn agent" to create one</span>
+            <span class="subtitle">Team Transcript — every comm in your team. Pick a session ← to attach a PTY.</span>
           {/if}
         </div>
         {#if selectedInfo}
@@ -737,7 +738,13 @@
           </div>
         {/if}
       </div>
-      <div class="term" bind:this={termContainer}></div>
+      {#if selectedName}
+        <div class="term" bind:this={termContainer}></div>
+      {:else}
+        <div class="transcript-mount">
+          <TeamTranscript team={selectedInfo?.team || 'default'} />
+        </div>
+      {/if}
     </section>
 
     <!-- Right: 4 cards (Identity / Location / Process / Scrum Master) — dense inline rows -->
@@ -1125,6 +1132,8 @@
   .center .title-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
   .center .title-actions button { font-size: 0.82rem; padding: 0.32rem 0.7rem; }
   .center .term { flex: 1; padding: 0.4rem 0.5rem; min-height: 0; overflow: hidden; }
+  .center .transcript-mount { flex: 1; padding: 0.4rem 0.5rem; min-height: 0; overflow: hidden; display: flex; }
+  .center .transcript-mount :global(.transcript) { flex: 1; }
   .center .term :global(.xterm) { height: 100%; }
   .center .term :global(.xterm-viewport) { height: 100% !important; }
 

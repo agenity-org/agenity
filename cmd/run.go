@@ -310,6 +310,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		rs.AgentCardStore = store.AgentCards()
 		rs.TaskStore = store.Tasks()
 		rs.SessionStore = store.Sessions()
+		rs.ChannelStore = store.Channels() // #657 epic #654 — Team Transcript
 		// #469 Wave D3 — wire the RBAC grant store + the production
 		// GrantCheck that consults it. The mint endpoint (#468 Wave D2)
 		// goes from "stub allow-all" to "real grant-gated" the moment

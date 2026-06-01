@@ -162,6 +162,11 @@ type Server struct {
 	// loop where the dashboard kept attaching to "full-stack".
 	SessionStore persistence.SessionRepository
 
+	// #655 epic #654 — ChannelStore backs the Team Transcript pane
+	// (POST/GET /api/v1/teams/{name}/messages). Nil = transcript
+	// endpoints return 503.
+	ChannelStore persistence.ChannelRepository
+
 	// #194 — Skill Library (10 LEAN builtins + user-defined CRUD).
 	skills *skills.Store
 
@@ -2003,6 +2008,11 @@ func (s *Server) teamByName(w http.ResponseWriter, r *http.Request) {
 	// Sub-resource: /api/v1/teams/{name}/resurrect
 	if sub == "resurrect" && r.Method == http.MethodPost {
 		s.resurrectTeamHandler(w, r, name)
+		return
+	}
+	// Sub-resource: /api/v1/teams/{name}/messages — Team Transcript (#657)
+	if sub == "messages" {
+		s.teamMessagesHandler(w, r)
 		return
 	}
 	// Sub-resource: /api/v1/teams/{name}/canon — view + edit team CLAUDE.md.
