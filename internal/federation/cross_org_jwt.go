@@ -41,11 +41,11 @@ import (
 	"time"
 )
 
-// crossOrgJWTTTL is the issued JWT's lifetime. 5 minutes balances
-// "callers need fresh tokens for sliding window" against "if Y's
-// grant for X is revoked, the cached token shouldn't outlive the
-// revocation by more than 5min". Conservative; production may tune.
-const crossOrgJWTTTL = 5 * time.Minute
+// crossOrgJWTTTL is the issued JWT's lifetime. V0.9.2-ARCH §15.2
+// mandates 60s default; per-grant override is supported via
+// CrossOrgJWTMinter.TTL. Short TTL bounds revocation exposure to
+// ≤60s even when tokens are cached at the caller side.
+const crossOrgJWTTTL = 60 * time.Second
 
 // jwtSafetyMargin is subtracted from jwt.exp when computing the
 // client-side cache expiry, so cached entries are dropped before

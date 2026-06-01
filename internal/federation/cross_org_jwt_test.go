@@ -138,6 +138,35 @@ func TestWaveF8_Minter_HappyPath_SignsWithExpectedClaims(t *testing.T) {
 	}
 }
 
+// TestP0_582_DefaultTTL_Is60s pins V0.9.2-ARCH §15.2: when no TTL is
+// set on the minter, the minted JWT expires exactly 60s from now.
+func TestP0_582_DefaultTTL_Is60s(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_700_000_000, 0)
+	signer := &stubSigner{}
+	m := &CrossOrgJWTMinter{
+		Issuer: "bob.example",
+		Signer: signer,
+		// TTL intentionally unset → falls through to crossOrgJWTTTL default
+		NowFn: func() time.Time { return now },
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/federation/jwt",
+		strings.NewReader(`{"scope":"a2a.send"}`))
+	r.Header.Set("X-Chepherd-Caller-Org", "alice.example")
+	r.Header.Set("X-Chepherd-Hub-Attest", "true")
+	m.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var resp CrossOrgJWTResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	wantExp := now.Add(60 * time.Second).Unix()
+	if resp.Expires != wantExp {
+		t.Errorf("default exp = %d, want %d (now+60s)", resp.Expires, wantExp)
+	}
+}
+
 // ─── Client ───────────────────────────────────────────────────────
 
 func TestWaveF8_Client_CacheHitOnRepeatCall(t *testing.T) {
