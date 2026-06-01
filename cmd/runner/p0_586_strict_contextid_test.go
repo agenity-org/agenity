@@ -38,6 +38,9 @@ func TestP0_586_Deliver_RejectsUnknownContextID(t *testing.T) {
 	if !strings.Contains(err.Error(), "does not match") {
 		t.Errorf("error should say 'does not match', got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "/a2a/<sid>") {
+		t.Errorf("error should hint at routing model, got: %v", err)
+	}
 }
 
 func TestP0_586_Deliver_AcceptsMatchingContextID(t *testing.T) {
