@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -499,12 +500,13 @@ func (r *Runtime) deriveAgentMCPURL() string {
 // mcpPortFromListenAddr extracts the port from a host:port string.
 // Empty / invalid input falls back to "9090" (the legacy hardcode)
 // so tests + pre-SetMCPListenAddr code paths still work.
+// net.SplitHostPort handles IPv6 bracketed addresses ([::1]:9090) correctly.
 func mcpPortFromListenAddr(addr string) string {
 	if addr == "" {
 		return "9090"
 	}
-	if i := strings.LastIndex(addr, ":"); i >= 0 && i+1 < len(addr) {
-		return addr[i+1:]
+	if _, port, err := net.SplitHostPort(addr); err == nil && port != "" {
+		return port
 	}
 	return "9090"
 }
@@ -1025,6 +1027,14 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// the activity tracker without ever touching r.mu so it can't deadlock
 	// any caller of List/Get.
 	go r.runActivitySniffer(s, act, id)
+	// #592 — post-spawn container health check. After a 2s grace period
+	// (time for OCI runtime to attempt container start), probe whether
+	// the container actually entered "running" state. Kernel keyring
+	// exhaustion (#592) causes podman run to record the container but
+	// the OCI runtime silently fails to start it — the session looks
+	// healthy from the spawn pipeline's perspective but the PTY is
+	// forever silent.
+	go r.postSpawnContainerCheck(spec.Name, 2*time.Second)
 	for _, h := range hooks {
 		h(s, spec.Name)
 	}
@@ -1082,6 +1092,37 @@ func (r *Runtime) runActivitySniffer(s *session.Session, act *sessionActivity, i
 			act.mu.Unlock()
 		}
 	}
+}
+
+// postSpawnContainerCheck waits grace, then probes whether the named
+// agent container is actually running. Kernel keyring exhaustion (#592)
+// causes the OCI runtime to silently fail to start the container while
+// podman run itself exits 0 — the session is "spawned" but the PTY is
+// forever silent. Loud stderr + HumanInbox on failure; no-op on BareExec.
+func (r *Runtime) postSpawnContainerCheck(name string, grace time.Duration) {
+	time.Sleep(grace)
+	running, ociErr, err := r.containerRuntime.ProbeContainerRunning(name)
+	if err != nil {
+		// inspect failure — either the container doesn't exist yet (race)
+		// or podman/docker is broken. Emit a warning but don't fire failure.
+		fmt.Fprintf(os.Stderr, "[chepherd-probe] %s: inspect error: %v\n", name, err)
+		return
+	}
+	if running {
+		return
+	}
+	msg := fmt.Sprintf("[failure] agent %q container failed to start", name)
+	if ociErr != "" {
+		msg += ": " + ociErr
+	}
+	fmt.Fprintf(os.Stderr, "[chepherd-probe] %s\n", msg)
+	r.HumanInbox("runtime", msg)
+	r.RecordEvent(Event{
+		Kind:  "container-start-failure",
+		Actor: "runtime",
+		Body:  msg,
+		Meta:  map[string]any{"name": name, "oci_error": ociErr},
+	})
 }
 
 // markExited flips the session's Exited flag + records its exit code.

@@ -93,6 +93,9 @@ func (f *instanceScopedContainerRuntime) ListAgentContainers() ([]string, error)
 	}
 	return out, nil
 }
+func (f *instanceScopedContainerRuntime) ProbeContainerRunning(string) (bool, string, error) {
+	return true, "", nil
+}
 func (f *instanceScopedContainerRuntime) stoppedNames() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
