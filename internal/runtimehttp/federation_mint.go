@@ -23,6 +23,7 @@ package runtimehttp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/chepherd/chepherd/internal/federation"
@@ -45,10 +46,10 @@ func (a *crossOrgGrantAdapter) Check(ctx context.Context, callerOrg, scope strin
 		return a.check(callerOrg, scope)
 	}
 	if a.store == nil {
-		// No store → permissive (matches the F8 minter's behavior
-		// when Grants is nil: every authenticated caller passes).
-		// Production deploys MUST wire a store + check function.
-		return nil
+		// #639 — fail-closed: no store wired means no grants can be
+		// verified. Returning nil here would allow ANY authenticated
+		// mTLS peer all scopes on a misconfigured deploy.
+		return fmt.Errorf("cross-org grant store not wired: deny all (fail-closed)")
 	}
 	// Fallback default: query the store for any grant matching
 	// the (caller → this-daemon, scope) tuple. Real production
