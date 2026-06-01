@@ -136,9 +136,8 @@ func renderAgentClaudeMD(spec SpawnSpec, peers []PeerBrief) string {
 	fmt.Fprintf(&b, "**Action when you see a knock**:\n\n")
 	fmt.Fprintf(&b, "1. Call the MCP tool `chepherd.get_task(taskID)` with the taskID from the marker — returns the full A2A task envelope `{task, input}` where `input` is the sender's `a2a.Message` with their actual message body in `parts[].text`.\n")
 	fmt.Fprintf(&b, "2. Do the task. Read their request, compose your response.\n")
-	fmt.Fprintf(&b, "3. Reply via stdout — write your response naturally in your output. chepherd-runner's silence-finalize completer captures everything you write AFTER the knock line and persists it as the agent reply on the task; state transitions WORKING → COMPLETED on idle.\n\n")
+	fmt.Fprintf(&b, "3. Call `chepherd.send_to_session(from_name, reply_body)` to deliver your reply to the sender — this generates a knock on THEIR PTY and gives them real-time notification. Extract `from_name` from the knock marker's `from=<name>` field. Also write your response to stdout; silence-finalize captures it as task history.\n\n")
 	fmt.Fprintf(&b, "**Recipient-scoping**: `chepherd.get_task` returns `-32004 forbidden` if you call it for a task whose contextID isn't your @-handle. Only call get_task for taskIDs from knock markers YOU received.\n\n")
-	fmt.Fprintf(&b, "**Don't reply by calling `chepherd.send_to_session` back** — the response routing is automatic through the runner's PTY pump. send_to_session is for INITIATING a peer call (which generates a knock on THEIR side), not for replying to one you received.\n\n")
 
 	fmt.Fprintf(&b, "## How to talk to the operator\n\n")
 	fmt.Fprintf(&b, "Use `chepherd.alert_human` MCP tool when you need human attention — they see it in the dashboard's inbox. Use sparingly: the human is the ultimate authority but you're expected to drive work autonomously between escalations.\n\n")

@@ -113,14 +113,24 @@ func TestV094Walk_F7_TunnelRoundTrip_ThroughRealHubBinary(t *testing.T) {
 		}
 	}()
 
-	// Confirm healthz reports the active tunnel.
-	hResp, _ := http.Get(baseURL + "/healthz")
-	var health map[string]any
-	_ = json.NewDecoder(hResp.Body).Decode(&health)
-	hResp.Body.Close()
-	tunnels, _ := health["tunnels"].(map[string]any)
+	// Confirm healthz reports the active tunnel. Retry briefly because
+	// the hub registers the tunnel asynchronously after the WS upgrade;
+	// on a loaded CI runner there is a small window where healthz reads
+	// tunnels.active=0 right after Dial returns. (#F7 race gate)
+	var tunnels map[string]any
+	for i := 0; i < 20; i++ {
+		hResp, _ := http.Get(baseURL + "/healthz")
+		var health map[string]any
+		_ = json.NewDecoder(hResp.Body).Decode(&health)
+		hResp.Body.Close()
+		tunnels, _ = health["tunnels"].(map[string]any)
+		if active, _ := tunnels["active"].(float64); active >= 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if active, _ := tunnels["active"].(float64); active < 1 {
-		t.Errorf("healthz.tunnels.active = %v, want >= 1", tunnels["active"])
+		t.Errorf("healthz.tunnels.active = %v, want >= 1 (after 1s of retries)", tunnels["active"])
 	}
 
 	// Alice POSTs an opaque blob through the hub.

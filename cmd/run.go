@@ -241,15 +241,16 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if mcpListen == "" {
 		mcpListen = mcpserver.DefaultListenAddr
 	}
-	// #471 Wave D5 — daemon-side A2ADeliverer retired. Post-R5
-	// (#466), the chepherd-runner owns its own A2A endpoint +
-	// PTY-driving Deliverer; the daemon no longer needs a Deliverer
-	// instance. The MCP server's chepherd.send_to_session shim is
-	// constructed without a Deliverer → returns -32000 "deliverer
-	// not wired" (deprecation behavior per its v0.9.2 comment).
-	// Operator-facing migration: use A2A SendMessage directly via
-	// the runner's /a2a/<sid>/jsonrpc endpoint (R2 #463).
-	mcpSrv := mcpserver.New(rt)
+	// #614 — wire A2ADeliverer into MCP server so chepherd.send_to_session
+	// routes messages into the target session's PTY. The Wave D5 (#471)
+	// comment that "retired" this was wrong: agents call send_to_session
+	// via MCP and there is no other path for them; the "use runner A2A
+	// directly" migration note only applies to external HTTP callers, not
+	// to in-session MCP tool calls. TaskStore enables task persistence.
+	daemonDeliverer := runtime.NewA2ADeliverer(rt)
+	daemonDeliverer.SetTaskStore(store.Tasks(), "daemon")
+	mcpSrv := mcpserver.NewWithDeliverer(rt, daemonDeliverer)
+	mcpSrv.SetTaskStore(store.Tasks())
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}

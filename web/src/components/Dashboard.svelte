@@ -15,6 +15,34 @@
   // SpiderChart — pure-SVG radar plot. Used inline by Dashboard for
   // the per-session scorecard. Each axis is {label, value (0..10)}.
   // 4 axes give the cleanest read at this size; more is supported.
+
+  // #627 — /app route doesn't go through AuthGate, so we install the
+  // same idempotent fetch-auth-patch here. Every /api/ call gets
+  // Authorization: Bearer <token> from localStorage. Identical to
+  // AuthGate.svelte lines 45-67.
+  if (typeof window !== 'undefined' && !window.__chepherdFetchPatched) {
+    window.__chepherdFetchPatched = true;
+    const _origFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input?.url || '');
+      if (url.startsWith('/api/')) {
+        let tok = '';
+        try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
+        init = init || {};
+        init.headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined));
+        if (tok && !init.headers.has('Authorization')) {
+          init.headers.set('Authorization', 'Bearer ' + tok);
+        }
+        return _origFetch(input, init).then(r => {
+          if (r.status === 401) {
+            try { window.dispatchEvent(new CustomEvent('chepherd-401')); } catch {}
+          }
+          return r;
+        });
+      }
+      return _origFetch(input, init);
+    };
+  }
 </script>
 
 <script>
@@ -83,6 +111,7 @@
   async function refreshSessions() {
     try {
       const res = await fetch(`${API}/sessions`);
+      if (!res.ok) { connected = false; return; }
       const data = await res.json();
       sessions = data.sessions || [];
       connected = true;
@@ -98,6 +127,7 @@
   async function refreshInbox() {
     try {
       const res = await fetch(`${API}/inbox`);
+      if (!res.ok) return;
       const data = await res.json();
       inbox = data.inbox || [];
     } catch {}
@@ -107,6 +137,7 @@
   async function refreshPeers() {
     try {
       const res = await fetch(`${API}/peers`);
+      if (!res.ok) { peers = []; return; }
       const data = await res.json();
       peers = data.peers || [];
     } catch { peers = []; }
@@ -116,6 +147,7 @@
   async function refreshA2ATasks() {
     try {
       const res = await fetch(`${API}/tasks`);
+      if (!res.ok) { a2aTasks = []; return; }
       const data = await res.json();
       a2aTasks = data.tasks || [];
     } catch { a2aTasks = []; }
@@ -124,6 +156,7 @@
   async function loadAllFolders() {
     try {
       const res = await fetch(`${API}/folders/recent`);
+      if (!res.ok) return;
       const data = await res.json();
       allFolders = data.folders || [];
     } catch {}
@@ -139,6 +172,7 @@
     try {
       const url = cwd ? `${API}/claude-sessions?cwd=${encodeURIComponent(cwd)}` : `${API}/claude-sessions`;
       const res = await fetch(url);
+      if (!res.ok) { claudeSessions = []; return; }
       const data = await res.json();
       claudeSessions = data.sessions || [];
     } catch { claudeSessions = []; }

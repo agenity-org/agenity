@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,7 @@ import (
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/runtime/agentpatterns"
+	"github.com/chepherd/chepherd/internal/runtime/knock"
 )
 
 // A2ADeliverer implements a2a.Deliverer by routing A2A SendMessage
@@ -134,73 +136,60 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, fmt.Errorf("a2a.SendMessage: target session %q not found", msg.ContextID)
 	}
-	text, err := a2a.ExtractText(msg)
-	if err != nil {
+	// Validate message has extractable text before persisting the task.
+	if _, err := a2a.ExtractText(msg); err != nil {
 		failed := d.failedTask(msg, err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
 	}
 	task := d.workingTask(msg)
 	// #225 row A4 — persist the Task row so GetTask/ListTasks see it.
+	// The task row MUST be persisted before the knock marker reaches
+	// the agent's PTY, otherwise chepherd.get_task races with the
+	// row write and returns -32001 not-found.
 	d.persistTask(ctx, msg, task, "message/send")
-	// #225 row A3 — pump PTY output through the broker so SSE
-	// subscribers see streaming task progress. No-op when broker
-	// is unset (back-compat for tests + pre-A3 deployments).
+
+	// #615 knock pattern — write the [chepherd-knock] marker line then
+	// the agent's submit sequence so claude-code processes the marker as
+	// a user message. The marker text carries taskID + from so the agent
+	// calls chepherd.get_task(taskID) to fetch the full message body.
 	//
-	// #379 P0 — pumpPTYToBroker also drives the A2A RECEIVE loop:
-	// silence-window detect → persist agent message in history →
-	// flip State to "completed".
+	// The "no submit sequence" note in knock.go was aspirational for a
+	// future output-injection path (runner R4 PTY ownership). In the
+	// current PTY stdin path both the daemon and the runner write to
+	// stdin — the submit sequence is required or the marker sits idle
+	// in claude-code's input box forever.
 	//
-	// #387 P0 — pump MUST subscribe BEFORE we write the user's
-	// message so the byte-offset send-mark splits banner (pre-send)
-	// from response (post-send). Pre-#387 we wrote the message
-	// first, then spawned pump — but claude-code's input-box redraw
-	// emits cursor bytes into the response window, defeating #385's
-	// cursor-gate. Order:
-	//
-	//   1. Create mark
-	//   2. Spawn pump; pump subscribes; pump signals mark.Subscribed
-	//   3. We wait for Subscribed
-	//   4. Write user's message + submit sequence
-	//   5. Call mark.MarkSendNow() — pump records sendOffset
-	//   6. Silence-finalize slices buf[sendOffset:] for the gate +
-	//      the completer's response text
-	var mark *pumpSendMark
-	if d.broker != nil || d.taskStore != nil {
-		mark = newPumpSendMark()
-		completer := d.taskCompleter(info.AgentSlug)
-		decideState := makeDecideStateFn(info.AgentSlug)
-		go pumpPTYToBrokerWithState(d.broker, sess, task, completer, mark, decideState)
-		// Brief bound so a slow Subscribe doesn't wedge Deliver. In
-		// practice subscribe is microseconds; 1s is paranoid.
-		select {
-		case <-mark.Subscribed:
-		case <-time.After(1 * time.Second):
-			// Pump didn't subscribe in time. Continue without
-			// marking — degrades to pre-#387 behavior (full-buffer
-			// cursor gate, may capture banner chrome on first
-			// message). Better than blocking the entire Deliver.
-		}
+	// from= falls back to "daemon" when the caller identity is unknown.
+	from := msg.From
+	if from == "" {
+		from = "daemon"
 	}
-	if _, err := sess.Write([]byte(text)); err != nil {
-		failed := d.failedTask(msg, "PTY write: "+err.Error())
+	marker := knock.FormatKnock(task.ID, from)
+	// Strip the trailing \n from the Marker wire format before PTY
+	// injection. The \n is correct for log/pipe contexts but toxic for
+	// TUI PTY injection: it triggers claude-code's multi-line textarea
+	// mode, after which \r no longer submits (it inserts a newline
+	// instead). In PTY mode the submit sequence (\r) handles the
+	// line-end; no preceding \n is needed.
+	markerForPTY := strings.TrimRight(marker, "\n")
+	if _, err := sess.Inject([]byte(markerForPTY)); err != nil {
+		failed := d.failedTask(msg, "PTY knock write: "+err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
 	}
-	// Submit via flavor-specific sequence (defaults to CR when no
-	// override). agentcatalog lookup keyed on the session's agent slug.
+	// Give the TUI 120ms to render the marker into the input box before
+	// sending the submit sequence. Without this gap, the TUI may process
+	// the marker+CR as a single burst and enter multi-line mode instead
+	// of submitting. Pattern mirrors PokePrompt's established 120ms gap.
+	time.Sleep(120 * time.Millisecond)
+	// Submit sequence — CR for claude-code; Inject (not Write) so
+	// lastOperatorWrite is not bumped (this is a system injection).
 	submitSeq := d.submitSequenceFor(info.AgentSlug)
-	if _, err := sess.Write(submitSeq); err != nil {
-		failed := d.failedTask(msg, "PTY submit: "+err.Error())
+	if _, err := sess.Inject(submitSeq); err != nil {
+		failed := d.failedTask(msg, "PTY knock submit: "+err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
-	}
-	// #387 P0 — mark the send boundary AFTER both writes land. The
-	// pump's responseBuf may already contain banner chunks at this
-	// point; sendOffset captures the current length so silence-
-	// finalize only sees response bytes (post-send).
-	if mark != nil {
-		mark.MarkSendNow()
 	}
 	return task, nil
 }

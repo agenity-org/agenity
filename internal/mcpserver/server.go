@@ -775,6 +775,7 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			Kind:      "message",
 			ContextID: a.Name,
 			Parts:     []a2a.Part{{Kind: "text", Text: body}},
+			From:      s.CurrentCaller(),
 		})
 		if err != nil {
 			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}

@@ -69,6 +69,11 @@ func TestV094Walk_RealServerExposesAgentsDirectory(t *testing.T) {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// CHEPHERD_FORCE_BAREEXEC=1 skips Podman/Docker availability probes
+	// (which can block several seconds on CI hosts) so the binary starts
+	// immediately. This test only exercises the HTTP surface — no real
+	// agent containers are needed. (#522 harness-must-mirror-production)
+	cmd.Env = append(os.Environ(), "CHEPHERD_FORCE_BAREEXEC=1")
 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start chepherd: %v", err)

@@ -75,12 +75,17 @@ func (r *Runtime) startTeamEventLoop() {
 }
 
 // teamEventLoop is the single fan-out goroutine. For each event:
-//  1. PTY notification — immediate. Reuses Session.Write so the
-//     notification appears inline in the affected agent's pane
-//     prefixed with "[chepherd team-event]".
-//  2. Briefing regen — debounced 1s. Cancels any pending regen for
+//  1. Briefing regen — debounced 1s. Cancels any pending regen for
 //     the same session + schedules a new one. Burst spawns collapse
 //     into one regen at the end of the burst.
+//  2. Team-canon materialise — synchronous file write under teams/.
+//
+// NOTE: PTY stdin injection for team-event notifications was removed.
+// Writing \n-prefixed text to PTY stdin triggers claude-code's
+// multi-line textarea mode; subsequent CR submit sequences insert
+// newlines instead of submitting the knock message. Agents learn
+// about team changes via CLAUDE.md regen (step 1) which is the
+// correct durable channel. (#615 root-cause / multi-line mode fix)
 func (r *Runtime) teamEventLoop() {
 	for ev := range r.teamEvents {
 		r.fanOutTeamEvent(ev)
@@ -118,32 +123,13 @@ func (r *Runtime) fanOutTeamEvent(ev teamEvent) {
 	}
 	r.mu.Unlock()
 
-	notification := renderTeamEventNotification(ev)
 	for _, t := range targets {
-		r.injectTeamEventNotification(t.sessionID, notification)
 		r.scheduleBriefingRegen(t.sessionID, t.spec, t.agentHomeDir)
 	}
 
 	r.materializeTeamCanon(ev.Team)
 }
 
-// injectTeamEventNotification writes the notification text into the
-// session's PTY stdin. The agent's claude-code reads it inline as if
-// the operator typed it.
-//
-// Immediate (no debounce) per architect's design answer.
-// #404 P0.3.
-func (r *Runtime) injectTeamEventNotification(sessionID string, notification string) {
-	r.mu.Lock()
-	sess := r.sessions[sessionID]
-	r.mu.Unlock()
-	if sess == nil {
-		return
-	}
-	if _, err := sess.Write([]byte(notification)); err != nil {
-		fmt.Fprintf(os.Stderr, "[chepherd-team-events] PTY write to %s failed: %v\n", sessionID, err)
-	}
-}
 
 // renderTeamEventNotification formats the inline notification.
 // Single line per architect's spec, prefixed [chepherd team-event].

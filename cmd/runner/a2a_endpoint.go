@@ -484,11 +484,11 @@ func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Ta
 		// upcoming Write lands on the live channel (not just the
 		// pre-subscribe ring snapshot). #387 P0.
 		<-mark.Subscribed
-		// #472 Wave K1 — write the knock marker, NOT the user text.
-		// Per V0.9.2-ARCH §10 Pattern 1 step 12: agent's pattern
-		// detector sees the marker + calls chepherd.get_task on its
-		// own to fetch the full message body. NO submit sequence —
-		// just the marker + a single trailing LF.
+		// #472 Wave K1 — write the knock marker + CR submit so
+		// claude-code processes the marker as a user message turn.
+		// The "no submit sequence" note was aspirational for a future
+		// output-injection path; in the current PTY stdin path the
+		// submit is required or the marker idles in the input box.
 		from := auth.SubjectFromRunnerContext(ctx)
 		if from == "" {
 			from = "anonymous"
@@ -497,6 +497,11 @@ func (d *runnerDeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Ta
 		if _, err := d.ptyW.Write([]byte(input)); err != nil {
 			task.Status.State = a2a.TaskStateFailed
 			return task, fmt.Errorf("runnerDeliverer: PTY write: %w", err)
+		}
+		// CR submits the knock marker to claude-code's TUI.
+		if _, err := d.ptyW.Write([]byte("\r")); err != nil {
+			task.Status.State = a2a.TaskStateFailed
+			return task, fmt.Errorf("runnerDeliverer: PTY submit: %w", err)
 		}
 		mark.MarkSendNow()
 	}
