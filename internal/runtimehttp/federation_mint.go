@@ -39,22 +39,26 @@ type crossOrgGrantAdapter struct {
 	check    func(callerOrg, scope string) error
 }
 
-func (a *crossOrgGrantAdapter) Check(ctx context.Context, callerOrg, scope string) error {
+func (a *crossOrgGrantAdapter) Check(ctx context.Context, callerOrg, scope string) (*federation.GrantMeta, error) {
 	_ = ctx
 	if a.check != nil {
-		return a.check(callerOrg, scope)
+		if err := a.check(callerOrg, scope); err != nil {
+			return nil, err
+		}
+		// check closure doesn't supply grant metadata; return nil meta.
+		return nil, nil
 	}
 	if a.store == nil {
 		// No store → permissive (matches the F8 minter's behavior
 		// when Grants is nil: every authenticated caller passes).
 		// Production deploys MUST wire a store + check function.
-		return nil
+		return nil, nil
 	}
 	// Fallback default: query the store for any grant matching
 	// the (caller → this-daemon, scope) tuple. Real production
 	// path overrides this via the explicit `check` closure wired
 	// in cmd/run.go.
-	return nil
+	return nil, nil
 }
 
 // mountCrossOrgFederationMint attaches the CrossOrgJWTMinter handler

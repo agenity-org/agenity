@@ -78,12 +78,30 @@ type JWTSigner interface {
 	Sign(claims map[string]any) (string, error)
 }
 
-// CrossOrgGrantChecker abstracts the §13 grant lookup. Returns
-// nil error iff callerOrg is authorized to call this daemon under
-// scope. The real impl in cmd/run.go is the GrantStore's check;
-// tests inject a stub.
+// GrantMeta carries the per-grant metadata the minter embeds in the
+// JWT when the §13 grant check succeeds. Both fields are optional:
+// callers that don't need audit/rate-limit signals may leave them
+// zero and the corresponding JWT claims are omitted.
+type GrantMeta struct {
+	GrantID   string       // embedded as chepherd_grant_id claim
+	RateWindow *RateWindow // embedded as chepherd_rate_window claim (nil → omitted)
+}
+
+// RateWindow carries the per-grant rate-limit configuration embedded
+// as the chepherd_rate_window JWT claim per V0.9.2-ARCH §15.2.
+type RateWindow struct {
+	CallsPerMinute int `json:"calls_per_minute"`
+	CallsPerDay    int `json:"calls_per_day"`
+}
+
+// CrossOrgGrantChecker abstracts the §13 grant lookup. Returns the
+// matched GrantMeta (grant ID + rate window) and nil error when the
+// callerOrg is authorized. GrantMeta may be nil when the checker
+// allows without a specific grant record (e.g. dev/permissive mode).
+// The real impl in cmd/run.go is the GrantStore's check; tests
+// inject a stub.
 type CrossOrgGrantChecker interface {
-	Check(ctx context.Context, callerOrg, scope string) error
+	Check(ctx context.Context, callerOrg, scope string) (*GrantMeta, error)
 }
 
 // CrossOrgJWTMinter is the daemon-side handler. Wire it onto the
@@ -129,8 +147,11 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scope required"})
 		return
 	}
+	var meta *GrantMeta
 	if m.Grants != nil {
-		if err := m.Grants.Check(r.Context(), callerOrg, req.Scope); err != nil {
+		var err error
+		meta, err = m.Grants.Check(r.Context(), callerOrg, req.Scope)
+		if err != nil {
 			writeJSON(w, http.StatusForbidden,
 				map[string]string{"error": "grant check: " + err.Error()})
 			return
@@ -156,6 +177,14 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"nbf":   nbf,
 		"exp":   exp,
 		"iat":   nbf,
+	}
+	if meta != nil {
+		if meta.GrantID != "" {
+			claims["chepherd_grant_id"] = meta.GrantID
+		}
+		if meta.RateWindow != nil {
+			claims["chepherd_rate_window"] = meta.RateWindow
+		}
 	}
 	jws, err := m.Signer.Sign(claims)
 	if err != nil {

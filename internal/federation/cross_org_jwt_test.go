@@ -43,9 +43,14 @@ func (s *stubSigner) Sign(claims map[string]any) (string, error) {
 	return "stub.jws." + string(body), nil
 }
 
-type stubGrants struct{ err error }
+type stubGrants struct {
+	err  error
+	meta *GrantMeta
+}
 
-func (g *stubGrants) Check(_ context.Context, _, _ string) error { return g.err }
+func (g *stubGrants) Check(_ context.Context, _, _ string) (*GrantMeta, error) {
+	return g.meta, g.err
+}
 
 func TestWaveF8_Minter_RejectsMissingCallerOrgHeader(t *testing.T) {
 	t.Parallel()
@@ -135,6 +140,102 @@ func TestWaveF8_Minter_HappyPath_SignsWithExpectedClaims(t *testing.T) {
 	}
 	if !strings.Contains(resp.JWT, `"aud":"runner-7"`) {
 		t.Errorf("aud claim missing: %s", resp.JWT)
+	}
+}
+
+// TestP0_580_Minter_EmbedsGrantID pins V0.9.2-ARCH §15.2 requirement
+// that chepherd_grant_id claim is present in the minted JWT when the
+// CrossOrgGrantChecker returns a non-empty GrantID.
+func TestP0_580_Minter_EmbedsGrantID(t *testing.T) {
+	t.Parallel()
+	signer := &stubSigner{}
+	m := &CrossOrgJWTMinter{
+		Issuer: "bob.example",
+		Signer: signer,
+		Grants: &stubGrants{meta: &GrantMeta{GrantID: "grant-abc-123"}},
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/federation/jwt",
+		strings.NewReader(`{"scope":"a2a.send"}`))
+	r.Header.Set("X-Chepherd-Caller-Org", "alice.example")
+	r.Header.Set("X-Chepherd-Hub-Attest", "true")
+	m.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var resp CrossOrgJWTResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if !strings.Contains(resp.JWT, `"chepherd_grant_id":"grant-abc-123"`) {
+		t.Errorf("chepherd_grant_id claim missing or wrong in JWT: %s", resp.JWT)
+	}
+}
+
+// TestP0_581_Minter_EmbedsRateWindow pins V0.9.2-ARCH §15.2 requirement
+// that chepherd_rate_window claim is present with calls_per_minute +
+// calls_per_day when the CrossOrgGrantChecker supplies a RateWindow.
+func TestP0_581_Minter_EmbedsRateWindow(t *testing.T) {
+	t.Parallel()
+	signer := &stubSigner{}
+	m := &CrossOrgJWTMinter{
+		Issuer: "bob.example",
+		Signer: signer,
+		Grants: &stubGrants{meta: &GrantMeta{
+			GrantID: "grant-xyz",
+			RateWindow: &RateWindow{
+				CallsPerMinute: 60,
+				CallsPerDay:    5000,
+			},
+		}},
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/federation/jwt",
+		strings.NewReader(`{"scope":"a2a.send"}`))
+	r.Header.Set("X-Chepherd-Caller-Org", "alice.example")
+	r.Header.Set("X-Chepherd-Hub-Attest", "true")
+	m.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var resp CrossOrgJWTResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if !strings.Contains(resp.JWT, `"chepherd_rate_window"`) {
+		t.Errorf("chepherd_rate_window claim missing from JWT: %s", resp.JWT)
+	}
+	if !strings.Contains(resp.JWT, `"calls_per_minute":60`) {
+		t.Errorf("calls_per_minute=60 missing from chepherd_rate_window: %s", resp.JWT)
+	}
+	if !strings.Contains(resp.JWT, `"calls_per_day":5000`) {
+		t.Errorf("calls_per_day=5000 missing from chepherd_rate_window: %s", resp.JWT)
+	}
+}
+
+// TestP0_580_Minter_NoGrantID_ClaimOmitted verifies that when the
+// checker returns nil meta (permissive/dev mode), chepherd_grant_id
+// is NOT emitted in the JWT (no spurious empty-string claims).
+func TestP0_580_Minter_NoGrantID_ClaimOmitted(t *testing.T) {
+	t.Parallel()
+	signer := &stubSigner{}
+	m := &CrossOrgJWTMinter{
+		Issuer: "bob.example",
+		Signer: signer,
+		Grants: &stubGrants{}, // nil meta → no grant ID
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/federation/jwt",
+		strings.NewReader(`{"scope":"a2a.send"}`))
+	r.Header.Set("X-Chepherd-Caller-Org", "alice.example")
+	r.Header.Set("X-Chepherd-Hub-Attest", "true")
+	m.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var resp CrossOrgJWTResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if strings.Contains(resp.JWT, `"chepherd_grant_id"`) {
+		t.Errorf("chepherd_grant_id should be absent when meta is nil: %s", resp.JWT)
+	}
+	if strings.Contains(resp.JWT, `"chepherd_rate_window"`) {
+		t.Errorf("chepherd_rate_window should be absent when meta is nil: %s", resp.JWT)
 	}
 }
 
