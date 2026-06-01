@@ -158,6 +158,16 @@ func (c *daemonClient) EmitAuditEvent(e runtime.AuditEvent) {
 }
 
 // Close shuts down the underlying WS conn. Idempotent.
+//
+// #588 — send a graceful WebSocket close frame before tearing down
+// the TCP connection so the daemon sees CloseNormalClosure (1000)
+// instead of "close 1006 (abnormal closure): unexpected EOF". The
+// abnormal-close was cosmetic (didn't break functionality) but
+// noisy in operator logs + masked real disconnect anomalies.
+//
+// The control-frame WriteControl honors a deadline so a flaky
+// network doesn't block shutdown; 2s is well under the runner's
+// 5s SIGTERM-to-exit budget.
 func (c *daemonClient) Close() {
 	if c == nil || c.conn == nil {
 		return
@@ -168,6 +178,13 @@ func (c *daemonClient) Close() {
 	default:
 		close(c.closed)
 	}
+	// Try graceful close; if the deadline fires or the conn is
+	// already broken, fall through to the TCP-level Close below.
+	_ = c.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "runner shutdown"),
+		time.Now().Add(2*time.Second),
+	)
 	_ = c.conn.Close()
 }
 
