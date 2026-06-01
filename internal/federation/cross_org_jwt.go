@@ -157,17 +157,21 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// claims (jti for replay prevention, chepherd_grant_id for grant
 	// reference, chepherd_rate_window for accounting bucket) were
 	// missing — see QA Category B.2 evidence (#560).
+	// §15.2 requires iss/sub to be URL form so DeriveJWKSURL(iss)
+	// produces a routable HTTPS endpoint (#584).
+	issURL := orgToURL(m.Issuer)
+	subURL := orgToURL(callerOrg)
 	claims := map[string]any{
-		"iss":                   m.Issuer,
-		"sub":                   callerOrg,
-		"aud":                   nonEmpty(req.Audience, m.Issuer),
-		"scope":                 req.Scope,
-		"nbf":                   nbf,
-		"exp":                   exp,
-		"iat":                   nbf,
-		"jti":                   uuid.NewString(),
-		"chepherd_grant_id":     synthesizeGrantID(callerOrg, m.Issuer, req.Scope),
-		"chepherd_rate_window":  now.Truncate(time.Minute).Unix(),
+		"iss":                  issURL,
+		"sub":                  subURL,
+		"aud":                  nonEmpty(req.Audience, issURL),
+		"scope":                req.Scope,
+		"nbf":                  nbf,
+		"exp":                  exp,
+		"iat":                  nbf,
+		"jti":                  uuid.NewString(),
+		"chepherd_grant_id":    synthesizeGrantID(callerOrg, m.Issuer, req.Scope),
+		"chepherd_rate_window": now.Truncate(time.Minute).Unix(),
 	}
 	jws, err := m.Signer.Sign(claims)
 	if err != nil {
@@ -177,7 +181,7 @@ func (m *CrossOrgJWTMinter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, &CrossOrgJWTResponse{
 		JWT:       jws,
-		Issuer:    m.Issuer,
+		Issuer:    issURL,
 		NotBefore: nbf,
 		Expires:   exp,
 	})
@@ -332,4 +336,16 @@ func nonEmpty(s, fallback string) string {
 		return s
 	}
 	return fallback
+}
+
+// orgToURL normalizes a bare org identifier to its canonical URL form
+// per V0.9.2-ARCH §15.2 — iss/sub claims MUST be URLs so that
+// DeriveJWKSURL(iss) yields a valid HTTPS endpoint (bare org IDs
+// produce un-routable "orgID/.well-known/jwks.json" strings).
+// Idempotent: already-URL values pass through unchanged.
+func orgToURL(orgID string) string {
+	if strings.HasPrefix(orgID, "https://") || strings.HasPrefix(orgID, "http://") {
+		return orgID
+	}
+	return "https://" + orgID
 }

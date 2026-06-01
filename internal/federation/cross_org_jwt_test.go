@@ -118,8 +118,8 @@ func TestWaveF8_Minter_HappyPath_SignsWithExpectedClaims(t *testing.T) {
 	if resp.JWT == "" {
 		t.Errorf("empty JWT")
 	}
-	if resp.Issuer != "bob.example" {
-		t.Errorf("iss = %q, want bob.example", resp.Issuer)
+	if resp.Issuer != "https://bob.example" {
+		t.Errorf("iss = %q, want https://bob.example", resp.Issuer)
 	}
 	if resp.NotBefore != now.Unix() {
 		t.Errorf("nbf = %d, want %d", resp.NotBefore, now.Unix())
@@ -127,8 +127,8 @@ func TestWaveF8_Minter_HappyPath_SignsWithExpectedClaims(t *testing.T) {
 	if want := now.Add(2 * time.Minute).Unix(); resp.Expires != want {
 		t.Errorf("exp = %d, want %d (now+ttl)", resp.Expires, want)
 	}
-	if !strings.Contains(resp.JWT, `"sub":"alice.example"`) {
-		t.Errorf("sub claim missing from minted JWT: %s", resp.JWT)
+	if !strings.Contains(resp.JWT, `"sub":"https://alice.example"`) {
+		t.Errorf("sub claim missing from minted JWT (want https://alice.example): %s", resp.JWT)
 	}
 	if !strings.Contains(resp.JWT, `"scope":"a2a.send"`) {
 		t.Errorf("scope claim missing: %s", resp.JWT)
