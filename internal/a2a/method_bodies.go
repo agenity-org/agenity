@@ -318,10 +318,18 @@ type setPushConfigResult struct {
 	Config pushConfig `json:"config"`
 }
 
+// pushConfigBody is the inner object for Set — only the mutable fields,
+// no id or taskId (those are top-level or server-assigned).
+type pushConfigBody struct {
+	URL       string   `json:"url"`
+	SigningKey string   `json:"signingKey,omitempty"`
+	Filters   []string `json:"filters,omitempty"`
+}
+
 // A2A v1.0 nested params: Set wraps the config under "pushNotificationConfig".
 type setTaskPushNotificationConfigParams struct {
-	TaskID             string     `json:"taskId"`
-	PushNotificationConfig pushConfig `json:"pushNotificationConfig"`
+	TaskID                 string         `json:"taskId"`
+	PushNotificationConfig pushConfigBody `json:"pushNotificationConfig"`
 }
 
 func (m *MethodBodies) handleSetTaskPushNotificationConfig(req JSONRPCRequest) JSONRPCResponse {
@@ -359,8 +367,8 @@ func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) J
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errorResp(req.ID, ErrCodeInvalidParams, "decode GetTaskPushNotificationConfigParams: "+err.Error())
 	}
-	if p.ID == "" {
-		return errorResp(req.ID, ErrCodeInvalidParams, "id is required")
+	if p.ID == "" || p.TaskID == "" {
+		return errorResp(req.ID, ErrCodeInvalidParams, "taskId and id are required")
 	}
 	cfg, err := m.Store.PushConfigs().Get(context.Background(), p.ID)
 	if isNotFound(err) {
@@ -368,6 +376,9 @@ func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) J
 	}
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "PushConfigs.Get: "+err.Error())
+	}
+	if cfg.TaskID != p.TaskID {
+		return errorResp(req.ID, ErrCodeTaskNotFound, "push-notification-config not found: "+p.ID)
 	}
 	resp := pushConfig{ID: cfg.ID, TaskID: cfg.TaskID, URL: cfg.URL, Filters: cfg.Filters}
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: setPushConfigResult{Config: resp}}
@@ -415,8 +426,19 @@ func (m *MethodBodies) handleDeleteTaskPushNotificationConfig(req JSONRPCRequest
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errorResp(req.ID, ErrCodeInvalidParams, "decode DeleteTaskPushNotificationConfigParams: "+err.Error())
 	}
-	if p.ID == "" {
-		return errorResp(req.ID, ErrCodeInvalidParams, "id is required")
+	if p.ID == "" || p.TaskID == "" {
+		return errorResp(req.ID, ErrCodeInvalidParams, "taskId and id are required")
+	}
+	// Verify ownership before deleting — prevent cross-task config deletion.
+	cfg, err := m.Store.PushConfigs().Get(context.Background(), p.ID)
+	if isNotFound(err) {
+		return errorResp(req.ID, ErrCodeTaskNotFound, "push-notification-config not found: "+p.ID)
+	}
+	if err != nil {
+		return errorResp(req.ID, ErrCodeInternalError, "PushConfigs.Get: "+err.Error())
+	}
+	if cfg.TaskID != p.TaskID {
+		return errorResp(req.ID, ErrCodeTaskNotFound, "push-notification-config not found: "+p.ID)
 	}
 	if err := m.Store.PushConfigs().Delete(context.Background(), p.ID); err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "PushConfigs.Delete: "+err.Error())

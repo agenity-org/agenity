@@ -128,10 +128,10 @@ func TestCancelTask_WorkingTransitionsToCanceled(t *testing.T) {
 // Get/Delete use {taskId, id}, List uses {taskId}.
 func TestPushNotificationConfigCRUD(t *testing.T) {
 	r, _ := newTestRouter(t)
-	// Set — nested params: {taskId, pushNotificationConfig: {...}}
+	// Set — nested params: {taskId, pushNotificationConfig: {url,...}} — no id/taskId inside body.
 	setResp := call(t, r, "tasks/pushNotificationConfig/set", setTaskPushNotificationConfigParams{
 		TaskID: "task-x",
-		PushNotificationConfig: pushConfig{
+		PushNotificationConfig: pushConfigBody{
 			URL:       "https://example.com/hook",
 			SigningKey: "secret",
 			Filters:   []string{"state-change"},
@@ -176,6 +176,37 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 	gone := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{TaskID: "task-x", ID: cfgID})
 	if gone.Error == nil || gone.Error.Code != ErrCodeTaskNotFound {
 		t.Errorf("expected -32001 TaskNotFound after delete, got %+v", gone.Error)
+	}
+}
+
+// TestPushNotifConfig_CrossTaskIsolation verifies Get/Delete return -32001 when
+// taskId doesn't match the config's owning task (reviewer-requested ownership check).
+func TestPushNotifConfig_CrossTaskIsolation(t *testing.T) {
+	r, _ := newTestRouter(t)
+	// Set under task-A.
+	setResp := call(t, r, "tasks/pushNotificationConfig/set", setTaskPushNotificationConfigParams{
+		TaskID: "task-A",
+		PushNotificationConfig: pushConfigBody{URL: "https://example.com/hook"},
+	})
+	if setResp.Error != nil {
+		t.Fatalf("Set: %+v", setResp.Error)
+	}
+	cfgID := setResp.Result.(setPushConfigResult).Config.ID
+
+	// Get with wrong taskId — must return not-found, not the config.
+	getWrong := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{TaskID: "task-B", ID: cfgID})
+	if getWrong.Error == nil || getWrong.Error.Code != ErrCodeTaskNotFound {
+		t.Errorf("Get with wrong taskId: expected -32001, got %+v", getWrong)
+	}
+	// Delete with wrong taskId — must return not-found, not actually delete.
+	delWrong := call(t, r, "tasks/pushNotificationConfig/delete", deletePushConfigParams{TaskID: "task-B", ID: cfgID})
+	if delWrong.Error == nil || delWrong.Error.Code != ErrCodeTaskNotFound {
+		t.Errorf("Delete with wrong taskId: expected -32001, got %+v", delWrong)
+	}
+	// Config must still exist for the correct owner.
+	getOK := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{TaskID: "task-A", ID: cfgID})
+	if getOK.Error != nil {
+		t.Errorf("Get with correct taskId should succeed: %+v", getOK.Error)
 	}
 }
 
