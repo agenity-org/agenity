@@ -410,6 +410,31 @@ func (s *Server) Handler() http.Handler {
 	return logMiddleware(s.authMiddleware(mux))
 }
 
+// FederationHandler returns an http.Handler for the mTLS-protected
+// federation listener. Unlike Handler() it does NOT wrap in
+// authMiddleware — the federation listener's mTLS certificate
+// pinning is the authentication layer for cross-org traffic.
+//
+// Exposes only the endpoints that federation peers need:
+//   - POST /api/v1/federation/jwt  — cross-org JWT mint (#557 F8.1)
+//   - GET  /.well-known/jwks.json  — JWKS for peer JWT verification
+//   - GET  /healthz                 — liveness probe
+//
+// #562 root cause: pre-fix, the federation listener used Handler()
+// which wraps authMiddleware → hub's forwarded requests hit 401
+// (no daemon-Bearer token). FederationHandler() fixes the wiring.
+func (s *Server) FederationHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.healthz)
+	s.mountCrossOrgFederationMint(mux)
+	if s.KeyStore != nil {
+		mux.HandleFunc(a2a.JWKSPath, s.jwksDynamic)
+	} else if len(s.JWKSBody) > 0 {
+		a2a.RegisterJWKS(mux, s.JWKSBody)
+	}
+	return logMiddleware(mux)
+}
+
 // authMiddleware (#139) enforces Bearer-token auth on every /api/v1/* and
 // /api-v08/v1/* path. Paths that DON'T require auth:
 //   - /healthz       (liveness probe, must not require creds)

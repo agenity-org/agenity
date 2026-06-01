@@ -39,8 +39,11 @@ func startFederationListener(addr string, rs *runtimehttp.Server) (string, *http
 	}
 	tlsCfg := federation.BuildServerTLSConfig(rs.FederationMTLS)
 	tlsLn := tls.NewListener(tcpLn, tlsCfg)
+	// #562 — use FederationHandler() (no authMiddleware) instead of
+	// Handler() (authMiddleware-wrapped). The hub has no daemon Bearer
+	// token; mTLS certificate pinning is the auth layer here.
 	srv := &http.Server{
-		Handler:           rs.Handler(),
+		Handler:           rs.FederationHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
