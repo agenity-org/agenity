@@ -320,7 +320,11 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		// Working repo — read/write. Source is the host path; the
 		// agent sees its workdir at the original cwd (chepherd-view)
 		// since claude-code expects that string to match its prompts.
-		"-v", hostCwd+":"+cwd+":rw",
+		// ,U chowns the source dir to the agent's namespaced UID at
+		// mount time — without it, daemon-owned 0700 workspace dirs
+		// (created by resolveProviderCwd's git clone) are unreadable
+		// by the agent user. Consistent with the home-dir mount above.
+		"-v", hostCwd+":"+cwd+":rw,U",
 		"--workdir", cwd,
 	)
 
