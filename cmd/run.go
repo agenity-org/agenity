@@ -183,6 +183,24 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// the check so dev builds without -X ldflags + bastions without
 	// podman still proceed normally.
 	runtime.VerifyAgentEntrypointSHA(rt.ContainerRuntime())
+	// #592 — keyring quota preflight: warn loudly if the Linux kernel
+	// keyring is near or over the per-user limit. OCI runtimes need
+	// keyring slots for setns/newuidmap; exhaustion causes containers to
+	// silently stay in "configured" state with a forever-silent PTY.
+	if kr := runtime.KeyringPreflight(); kr != nil {
+		if kr.Exceeded {
+			fmt.Fprintf(os.Stderr,
+				"[chepherd-keyring] ⚠ KEYRING QUOTA EXHAUSTED (uid=%d used=%d max=%d) — "+
+					"new agent containers will silently fail to start. "+
+					"Run: sudo keyctl clear @u  OR  loginctl kill-session <session> to free slots.\n",
+				kr.UID, kr.Used, kr.MaxKeys)
+		} else if kr.Warning {
+			fmt.Fprintf(os.Stderr,
+				"[chepherd-keyring] keyring quota at %d/%d (uid=%d) — approaching limit, "+
+					"spawning many agents may cause container start failures (#592).\n",
+				kr.Used, kr.MaxKeys, kr.UID)
+		}
+	}
 	// #258 — reap orphan sibling agent containers BEFORE the HTTP
 	// surface comes up. #270 — the listing is now instance-scoped so
 	// a parallel chepherd binary on the same host has its own pool +

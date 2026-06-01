@@ -65,6 +65,22 @@ type ContainerRuntime interface {
 	// cross-kill each other. Implementations that don't manage
 	// containers (BareExec) accept and ignore.
 	SetInstanceUUID(uuid string)
+	// ProbeContainerRunning checks whether the named agent container is
+	// actually running after a spawn. Returns (true, "", nil) when the
+	// container's State.Status is "running". Returns (false, ociErr, nil)
+	// when the container exists but is NOT running (configured/created/
+	// exited) — ociErr is the OCI runtime error message (e.g. "create
+	// keyring: Disk quota exceeded"). Returns (false, "", err) when the
+	// probe itself fails (e.g. podman not available, container never
+	// recorded). BareExec implementations always return (true, "", nil).
+	//
+	// name is the agent label (without the chepherd-agent-<uuid>- prefix);
+	// implementations prepend the prefix. Callers must wait a short
+	// grace period (≥1s) before calling so the OCI runtime has had time
+	// to attempt container start.
+	//
+	// #592 post-spawn container health check.
+	ProbeContainerRunning(name string) (running bool, ociErr string, err error)
 }
 
 // DetectRuntime returns the best available ContainerRuntime.
@@ -448,6 +464,27 @@ func (r *PodmanRuntime) ListAgentContainers() ([]string, error) {
 	return names, nil
 }
 
+// ProbeContainerRunning checks whether the named agent container is
+// actually running after a spawn. See ContainerRuntime.ProbeContainerRunning.
+func (r *PodmanRuntime) ProbeContainerRunning(name string) (bool, string, error) {
+	full := containerNamePrefix(r.instanceUUID) + name
+	args := podmanArgs()
+	out, err := exec.Command(args[0], append(args[1:], "inspect", full,
+		"--format", "{{.State.Status}}\t{{.State.Error}}")...).Output()
+	if err != nil {
+		// Container not found in podman's database.
+		return false, "", fmt.Errorf("podman inspect %s: %w", full, err)
+	}
+	line := strings.TrimSpace(string(out))
+	parts := strings.SplitN(line, "\t", 2)
+	status := strings.TrimSpace(parts[0])
+	ociErr := ""
+	if len(parts) == 2 {
+		ociErr = strings.TrimSpace(parts[1])
+	}
+	return status == "running", ociErr, nil
+}
+
 // ─── Docker ──────────────────────────────────────────────────────────────────
 
 type DockerRuntime struct {
@@ -550,6 +587,25 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	return dockerArgs, nil
 }
 
+// ProbeContainerRunning checks whether the named agent container is
+// actually running after a spawn. See ContainerRuntime.ProbeContainerRunning.
+func (r *DockerRuntime) ProbeContainerRunning(name string) (bool, string, error) {
+	full := containerNamePrefix(r.instanceUUID) + name
+	out, err := exec.Command("docker", "inspect", full,
+		"--format", "{{.State.Status}}\t{{.State.Error}}").Output()
+	if err != nil {
+		return false, "", fmt.Errorf("docker inspect %s: %w", full, err)
+	}
+	line := strings.TrimSpace(string(out))
+	parts := strings.SplitN(line, "\t", 2)
+	status := strings.TrimSpace(parts[0])
+	ociErr := ""
+	if len(parts) == 2 {
+		ociErr = strings.TrimSpace(parts[1])
+	}
+	return status == "running", ociErr, nil
+}
+
 // ─── BareExec ────────────────────────────────────────────────────────────────
 
 // BareExecRuntime runs agents directly on the host — no isolation.
@@ -567,8 +623,9 @@ func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cw
 	return argv, env
 }
 // BareExec has no container — Runtime.Stop's PTY close is sufficient.
-func (r *BareExecRuntime) StopContainer(name string) error      { return nil }
-func (r *BareExecRuntime) ListAgentContainers() ([]string, error) { return nil, nil }
+func (r *BareExecRuntime) StopContainer(name string) error                           { return nil }
+func (r *BareExecRuntime) ListAgentContainers() ([]string, error)                    { return nil, nil }
+func (r *BareExecRuntime) ProbeContainerRunning(string) (bool, string, error) { return true, "", nil }
 // #270 — BareExec doesn't manage containers; the UUID is accepted and
 // silently ignored to satisfy the interface.
 func (r *BareExecRuntime) SetInstanceUUID(string) {}

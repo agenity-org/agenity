@@ -72,6 +72,9 @@ func (f *fakeContainerRuntime) ListAgentContainers() ([]string, error) {
 	defer f.mu.Unlock()
 	return append([]string{}, f.listReturns...), f.listErr
 }
+func (f *fakeContainerRuntime) ProbeContainerRunning(string) (bool, string, error) {
+	return true, "", nil
+}
 func (f *fakeContainerRuntime) stoppedNames() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

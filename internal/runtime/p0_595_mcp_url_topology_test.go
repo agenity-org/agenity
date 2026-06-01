@@ -81,8 +81,10 @@ func TestP0_595_MCPPortFromListenAddr(t *testing.T) {
 		{"0.0.0.0:9090", "9090"},
 		{":8080", "8080"},
 		{"localhost:5555", "5555"},
-		{"", "9090"},        // empty fallback
-		{"no-colon", "9090"}, // malformed fallback
+		{"[::1]:9090", "9090"},   // IPv6 bracketed — net.SplitHostPort handles this
+		{"[::]:9099", "9099"},    // IPv6 any-address
+		{"", "9090"},             // empty fallback
+		{"no-colon", "9090"},     // malformed fallback
 	}
 	for _, c := range cases {
 		if got := mcpPortFromListenAddr(c.addr); got != c.want {
