@@ -35,8 +35,8 @@ func TestP0_586_Deliver_RejectsUnknownContextID(t *testing.T) {
 	if !strings.Contains(err.Error(), "actual-runner-sid") {
 		t.Errorf("error should name the runner's actual sid, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error should say 'not found', got: %v", err)
+	if !strings.Contains(err.Error(), "/a2a/<sid>") {
+		t.Errorf("error should hint at routing model, got: %v", err)
 	}
 }
 
