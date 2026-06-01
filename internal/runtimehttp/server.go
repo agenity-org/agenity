@@ -3619,6 +3619,13 @@ func (s *Server) claudeLoginCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.rt.Stop(name)
+	// #646 — Stop only clears the runtime registry. The persisted
+	// SessionStore row remains and listSessionsMerged surfaces it
+	// with live=false, leaving the cancelled oauth-capture session
+	// permanently visible in the topbar. Delete the persisted row.
+	if s.SessionStore != nil {
+		_ = s.SessionStore.Delete(r.Context(), name)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"cancelled": name})
 }
 
