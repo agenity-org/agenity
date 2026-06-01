@@ -100,8 +100,12 @@ func init() {
 	// each peer's agent-card via AgentCardRepository. PublicURL is what
 	// peers will use to reach us (defaults to listen addr; override for
 	// reverse-proxy + DNS-name setups).
-	runCmd.Flags().StringVar(&runFlagFederationRegistryURL, "federation-registry-url", "",
-		"hosted peer registry URL (empty = disabled). Peer discovery POSTs /announce + GETs /peers here.")
+	// #652 — default to $CHEPHERD_FEDERATION_REGISTRY_URL so operators
+	// can enable federation via container env without editing the flag
+	// list. The explicit flag still wins.
+	runCmd.Flags().StringVar(&runFlagFederationRegistryURL, "federation-registry-url",
+		os.Getenv("CHEPHERD_FEDERATION_REGISTRY_URL"),
+		"hosted peer registry URL (empty = disabled; default from $CHEPHERD_FEDERATION_REGISTRY_URL). Peer discovery POSTs /announce + GETs /peers here.")
 	runCmd.Flags().StringVar(&runFlagKeychainBackend, "keychain-backend", "",
 		"explicit keychain backend (empty = auto-select per platform: macos | secret-tool | file). Set to 'openbao' to use OpenBao HA backend.")
 	runCmd.Flags().StringVar(&runFlagOpenBaoAddr, "openbao-addr", "",
