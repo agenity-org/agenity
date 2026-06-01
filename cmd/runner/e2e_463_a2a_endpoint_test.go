@@ -14,8 +14,8 @@
 // Named assertions:
 //
 //	O1 — POST /a2a/<sid>/jsonrpc + body{method:"message/send"} →
-//	     200 + non-empty Task.ID + state == "working"
-//	O2 — POST + body{method:"tasks/get", params:{taskId:...}} →
+//	     200 + non-empty Task.ID + state == "TASK_STATE_WORKING"
+//	O2 — POST + body{method:"tasks/get", params:{id:...}} →
 //	     200 + Task returned with the same ID
 //	O3 — wrong-URL path (different sid) returns 404 (per-session
 //	     URL scope works — runner doesn't serve other sids)
@@ -150,7 +150,7 @@ func TestE2E_463_RunnerA2AEndpoint_SendThenGet(t *testing.T) {
 	getBody := map[string]any{
 		"jsonrpc": "2.0", "id": 2,
 		"method": "tasks/get",
-		"params": map[string]any{"taskId": taskID},
+		"params": map[string]any{"id": taskID},
 	}
 	postRPCExpectTaskID(t, endpoint, getBody, taskID, "O2")
 
@@ -201,8 +201,8 @@ func postRPC(t *testing.T, url string, body map[string]any, assertion string) st
 	if parsed.Error != nil {
 		t.Fatalf("%s FAIL: RPC error %d: %s", assertion, parsed.Error.Code, parsed.Error.Message)
 	}
-	if parsed.Result.Task.Status.State != "working" {
-		t.Errorf("%s FAIL: task state = %q, want working (body=%s)", assertion, parsed.Result.Task.Status.State, rawBody)
+	if parsed.Result.Task.Status.State != "TASK_STATE_WORKING" {
+		t.Errorf("%s FAIL: task state = %q, want TASK_STATE_WORKING (body=%s)", assertion, parsed.Result.Task.Status.State, rawBody)
 	}
 	return parsed.Result.Task.ID
 }

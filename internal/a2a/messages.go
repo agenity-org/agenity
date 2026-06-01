@@ -140,22 +140,22 @@ type TaskStatusDetails struct {
 type TaskState string
 
 const (
-	TaskStateSubmitted     TaskState = "submitted"
-	TaskStateWorking       TaskState = "working"
-	TaskStateInputRequired TaskState = "input-required"
+	TaskStateSubmitted     TaskState = "TASK_STATE_SUBMITTED"
+	TaskStateWorking       TaskState = "TASK_STATE_WORKING"
+	TaskStateInputRequired TaskState = "TASK_STATE_INPUT_REQUIRED"
 	// #484 Wave A5 — agent emitted an OAuth challenge URL (e.g. a
 	// tool needs GitHub API access and returned 401 with oauth_url).
 	// Caller resolves the challenge via the §15.3 chain and resubmits
 	// to transition the task back to WORKING.
-	TaskStateAuthRequired TaskState = "auth-required"
-	TaskStateCompleted    TaskState = "completed"
-	TaskStateFailed       TaskState = "failed"
-	TaskStateCanceled     TaskState = "canceled"
+	TaskStateAuthRequired TaskState = "TASK_STATE_AUTH_REQUIRED"
+	TaskStateCompleted    TaskState = "TASK_STATE_COMPLETED"
+	TaskStateFailed       TaskState = "TASK_STATE_FAILED"
+	TaskStateCanceled     TaskState = "TASK_STATE_CANCELED"
 	// #484 Wave A5 — pre-execution RBAC denial. Returned by the
 	// Deliverer when a peering grant check rejects the inbound A2A
 	// call before any agent execution starts. Lets SSE / webhook
 	// consumers distinguish denied-before-run from failed-mid-run.
-	TaskStateRejected TaskState = "rejected"
+	TaskStateRejected TaskState = "TASK_STATE_REJECTED"
 )
 
 // Artifact is the agent's emitted output. v0.9.2 scaffold returns

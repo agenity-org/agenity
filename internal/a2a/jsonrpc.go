@@ -67,6 +67,16 @@ const (
 	ErrCodeInternalError  = -32603
 )
 
+// A2A v1.0 §5.4 application-level error codes.
+const (
+	ErrCodeTaskNotFound              = -32001 // TaskNotFoundError
+	ErrCodeTaskNotCancelable         = -32002 // TaskNotCancelableError
+	ErrCodePushNotifNotSupported     = -32003 // PushNotificationNotSupportedError
+	ErrCodeUnsupportedOperation      = -32004 // UnsupportedOperationError
+	ErrCodeContentTypeNotSupported   = -32005 // ContentTypeNotSupportedError
+	ErrCodeInvalidAgentResponse      = -32006 // InvalidAgentResponseError
+)
+
 // methodHandler is a single A2A method's handler. v0.9.2 scaffold
 // returns ErrCodeInternalError for all 11; concrete behavior arrives
 // in subsequent sub-branches.

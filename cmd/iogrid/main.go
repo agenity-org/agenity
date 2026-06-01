@@ -561,7 +561,7 @@ func rewriteResultStateToFailed(path, reason string) error {
 	if status == nil {
 		status = map[string]any{}
 	}
-	status["state"] = "failed"
+	status["state"] = "TASK_STATE_FAILED"
 	status["message"] = map[string]any{
 		"role": "agent",
 		"kind": "message",

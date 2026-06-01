@@ -270,8 +270,8 @@ func TestWaveH2_PostRunner_HappyPath(t *testing.T) {
 		t.Errorf("envelope.kind = %v, want task", task["kind"])
 	}
 	status, _ := task["status"].(map[string]any)
-	if status["state"] != "completed" {
-		t.Errorf("envelope.status.state = %v, want completed", status["state"])
+	if status["state"] != "TASK_STATE_COMPLETED" {
+		t.Errorf("envelope.status.state = %v, want TASK_STATE_COMPLETED", status["state"])
 	}
 	history, _ := task["history"].([]any)
 	if len(history) != 2 {

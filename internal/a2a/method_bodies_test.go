@@ -48,12 +48,12 @@ func call(t *testing.T, r *Router, method string, params any) JSONRPCResponse {
 	return h(req)
 }
 
-// TestGetTask_NotFound pins the not-found error code.
+// TestGetTask_NotFound pins the not-found error code — A2A §5.4 -32001.
 func TestGetTask_NotFound(t *testing.T) {
 	r, _ := newTestRouter(t)
 	resp := call(t, r, "tasks/get", getTaskParams{TaskID: "missing"})
-	if resp.Error == nil || resp.Error.Code != -32004 {
-		t.Errorf("expected -32004 not-found, got %+v", resp.Error)
+	if resp.Error == nil || resp.Error.Code != ErrCodeTaskNotFound {
+		t.Errorf("expected ErrCodeTaskNotFound (-32001), got %+v", resp.Error)
 	}
 }
 
@@ -170,10 +170,10 @@ func TestPushNotificationConfigCRUD(t *testing.T) {
 	if !delResp.Result.(deletePushConfigResult).OK {
 		t.Errorf("Delete returned ok=false")
 	}
-	// Get-after-delete is not found.
+	// Get-after-delete is not found — A2A §5.4 -32001.
 	gone := call(t, r, "tasks/pushNotificationConfig/get", getPushConfigParams{ID: cfgID})
-	if gone.Error == nil || gone.Error.Code != -32004 {
-		t.Errorf("expected -32004 after delete, got %+v", gone.Error)
+	if gone.Error == nil || gone.Error.Code != ErrCodeTaskNotFound {
+		t.Errorf("expected ErrCodeTaskNotFound (-32001) after delete, got %+v", gone.Error)
 	}
 }
 
@@ -205,7 +205,7 @@ func TestGetAuthenticatedExtendedCard(t *testing.T) {
 	}
 }
 
-// TestStreamingMethods_WithoutSubscribeFn return -32004.
+// TestStreamingMethods_WithoutSubscribeFn returns ErrCodeUnsupportedOperation (-32004).
 func TestStreamingMethods_WithoutSubscribeFn(t *testing.T) {
 	store, err := sqlite.NewStore(context.Background(), ":memory:")
 	if err != nil {
@@ -216,9 +216,9 @@ func TestStreamingMethods_WithoutSubscribeFn(t *testing.T) {
 	r := NewRouter()
 	_ = mb.Register(r)
 	for _, m := range []string{"message/stream", "tasks/resubscribe"} {
-		resp := call(t, r, m, map[string]any{"taskId": "x", "message": map[string]any{"contextId": "c", "parts": []any{}}})
-		if resp.Error == nil || resp.Error.Code != -32004 {
-			t.Errorf("%s should return -32004 without SubscribeFn, got %+v", m, resp.Error)
+		resp := call(t, r, m, map[string]any{"id": "x", "message": map[string]any{"contextId": "c", "parts": []any{}}})
+		if resp.Error == nil || resp.Error.Code != ErrCodeUnsupportedOperation {
+			t.Errorf("%s should return ErrCodeUnsupportedOperation (-32004) without SubscribeFn, got %+v", m, resp.Error)
 		}
 	}
 }

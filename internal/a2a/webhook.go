@@ -146,10 +146,19 @@ func matchesFilters(filters []string, ev StreamEvent) bool {
 	if ev.Task == nil {
 		return false
 	}
-	current := strings.ToLower(string(ev.Task.Status.State))
+	// normalizeState strips TASK_STATE_ prefix so filters written as
+	// "working" match both old ("working") and new ("TASK_STATE_WORKING")
+	// wire values, and vice-versa.
+	normalizeState := func(s string) string {
+		s = strings.ToLower(strings.TrimSpace(s))
+		s = strings.TrimPrefix(s, "task_state_")
+		return s
+	}
+	current := normalizeState(string(ev.Task.Status.State))
 	for _, f := range filters {
 		want := strings.ToLower(strings.TrimSpace(f))
 		want = strings.TrimPrefix(want, "state:")
+		want = strings.TrimPrefix(want, "task_state_")
 		if want == "" {
 			continue
 		}

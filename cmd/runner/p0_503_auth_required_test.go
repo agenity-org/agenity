@@ -88,8 +88,8 @@ func main() {
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		t.Fatalf("decode result: %v\n%s", err, body)
 	}
-	if envelope.Status.State != "auth-required" {
-		t.Errorf("Status.State = %q, want auth-required\n%s", envelope.Status.State, body)
+	if envelope.Status.State != "TASK_STATE_AUTH_REQUIRED" {
+		t.Errorf("Status.State = %q, want TASK_STATE_AUTH_REQUIRED\n%s", envelope.Status.State, body)
 	}
 	if envelope.Status.Details == nil {
 		t.Fatalf("Status.Details = nil, want populated AuthChallenge\n%s", body)

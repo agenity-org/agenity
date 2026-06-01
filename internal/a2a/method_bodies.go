@@ -86,7 +86,7 @@ func (m *MethodBodies) Register(r *Router) error {
 // ─── GetTask ──────────────────────────────────────────────────────
 
 type getTaskParams struct {
-	TaskID string `json:"taskId"`
+	TaskID string `json:"id"`
 }
 
 type getTaskResult struct {
@@ -99,11 +99,11 @@ func (m *MethodBodies) handleGetTask(req JSONRPCRequest) JSONRPCResponse {
 		return errorResp(req.ID, ErrCodeInvalidParams, "decode GetTaskParams: "+err.Error())
 	}
 	if p.TaskID == "" {
-		return errorResp(req.ID, ErrCodeInvalidParams, "taskId is required")
+		return errorResp(req.ID, ErrCodeInvalidParams, "id is required")
 	}
 	rec, err := m.Store.Tasks().Get(context.Background(), p.TaskID)
 	if isNotFound(err) {
-		return errorResp(req.ID, -32004, "task not found: "+p.TaskID)
+		return errorResp(req.ID, ErrCodeTaskNotFound, "task not found: "+p.TaskID)
 	}
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "TaskRepository.Get: "+err.Error())
@@ -159,7 +159,7 @@ func (m *MethodBodies) handleListTasks(req JSONRPCRequest) JSONRPCResponse {
 // ─── CancelTask ───────────────────────────────────────────────────
 
 type cancelTaskParams struct {
-	TaskID string `json:"taskId"`
+	TaskID string `json:"id"`
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -173,12 +173,12 @@ func (m *MethodBodies) handleCancelTask(req JSONRPCRequest) JSONRPCResponse {
 		return errorResp(req.ID, ErrCodeInvalidParams, "decode CancelTaskParams: "+err.Error())
 	}
 	if p.TaskID == "" {
-		return errorResp(req.ID, ErrCodeInvalidParams, "taskId is required")
+		return errorResp(req.ID, ErrCodeInvalidParams, "id is required")
 	}
 	ctx := context.Background()
 	rec, err := m.Store.Tasks().Get(ctx, p.TaskID)
 	if isNotFound(err) {
-		return errorResp(req.ID, -32004, "task not found: "+p.TaskID)
+		return errorResp(req.ID, ErrCodeTaskNotFound, "task not found: "+p.TaskID)
 	}
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "TaskRepository.Get: "+err.Error())
@@ -226,23 +226,23 @@ type subscribeResult struct {
 }
 
 type resubscribeParams struct {
-	TaskID string `json:"taskId"`
+	TaskID string `json:"id"`
 }
 
 func (m *MethodBodies) handleResubscribeTask(req JSONRPCRequest) JSONRPCResponse {
 	if m.SubscribeFn == nil {
-		return errorResp(req.ID, -32004, "streaming not supported on this runner (no SSE binding)")
+		return errorResp(req.ID, ErrCodeUnsupportedOperation, "streaming not supported on this runner (no SSE binding)")
 	}
 	var p resubscribeParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errorResp(req.ID, ErrCodeInvalidParams, "decode ResubscribeTaskParams: "+err.Error())
 	}
 	if p.TaskID == "" {
-		return errorResp(req.ID, ErrCodeInvalidParams, "taskId is required")
+		return errorResp(req.ID, ErrCodeInvalidParams, "id is required")
 	}
 	rec, err := m.Store.Tasks().Get(context.Background(), p.TaskID)
 	if isNotFound(err) {
-		return errorResp(req.ID, -32004, "task not found: "+p.TaskID)
+		return errorResp(req.ID, ErrCodeTaskNotFound, "task not found: "+p.TaskID)
 	}
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "TaskRepository.Get: "+err.Error())
@@ -257,7 +257,7 @@ func (m *MethodBodies) handleResubscribeTask(req JSONRPCRequest) JSONRPCResponse
 
 func (m *MethodBodies) handleSendStreamingMessage(req JSONRPCRequest) JSONRPCResponse {
 	if m.SubscribeFn == nil {
-		return errorResp(req.ID, -32004, "streaming not supported on this runner (no SSE binding)")
+		return errorResp(req.ID, ErrCodeUnsupportedOperation, "streaming not supported on this runner (no SSE binding)")
 	}
 	var p SendMessageParams
 	if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -346,7 +346,7 @@ func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) J
 	}
 	cfg, err := m.Store.PushConfigs().Get(context.Background(), p.ID)
 	if isNotFound(err) {
-		return errorResp(req.ID, -32004, "push-notification-config not found: "+p.ID)
+		return errorResp(req.ID, ErrCodeTaskNotFound, "push-notification-config not found: "+p.ID)
 	}
 	if err != nil {
 		return errorResp(req.ID, ErrCodeInternalError, "PushConfigs.Get: "+err.Error())
@@ -356,7 +356,7 @@ func (m *MethodBodies) handleGetTaskPushNotificationConfig(req JSONRPCRequest) J
 }
 
 type listPushConfigsParams struct {
-	TaskID string `json:"taskId"`
+	TaskID string `json:"id"`
 }
 
 type listPushConfigsResult struct {

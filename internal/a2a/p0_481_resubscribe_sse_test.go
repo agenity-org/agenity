@@ -53,7 +53,7 @@ func seedResubscribeTask(t *testing.T, store persistence.Store, taskID, state st
 
 func postResubscribe(t *testing.T, url, taskID string, acceptSSE bool) *http.Response {
 	t.Helper()
-	body := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tasks/resubscribe","params":{"taskId":"` + taskID + `"}}`)
+	body := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tasks/resubscribe","params":{"id":"` + taskID + `"}}`)
 	req, _ := http.NewRequest(http.MethodPost, url+"/jsonrpc", body)
 	req.Header.Set("Content-Type", "application/json")
 	if acceptSSE {
