@@ -129,22 +129,27 @@ func TestP0_398v2_SpawnArgs_MCPURLPropagated(t *testing.T) {
 	// reading; both seams updated in #398 v2 commit).
 }
 
-// TestP0_398v2_MCPDefault_PointsAtContainerNameDNS — verifies the
-// runtime's MCP URL default emits ws://chepherd:9090/mcp/ws when no
-// env override. Reads the runtime.go literal indirectly via the
-// agent spawn env.
+// TestP0_398v2_MCPDefault_PointsAtContainerNameDNS — pins that the
+// chepherd-net container-pod default (HOSTNAME=chepherd) still
+// resolves to ws://chepherd:<port>/mcp/ws (#398 v2 contract preserved).
+// #595 replaced the hardcoded ":9090" with topology-aware detection;
+// the container-pod path is one of its cases, not an independent code
+// path. The new p0_595_mcp_url_topology_test.go covers all cases.
 func TestP0_398v2_MCPDefault_PointsAtContainerNameDNS(t *testing.T) {
-	// Read the runtime.go source to assert the default literal.
-	// This is the lightest-weight cross-package check; an integration
-	// test would require the whole spawn pipeline.
+	// Verify the old hardcoded literal is GONE — topology detection
+	// is now in deriveAgentMCPURL(), not a raw string in writeMCPConfig.
 	data, err := os.ReadFile("runtime.go")
 	if err != nil {
 		t.Fatalf("read runtime.go: %v", err)
 	}
-	if !strings.Contains(string(data), `mcpURL = "ws://chepherd:9090/mcp/ws"`) {
-		t.Errorf("runtime.go missing chepherd-net MCP URL default 'ws://chepherd:9090/mcp/ws' (#398 v2)")
+	if strings.Contains(string(data), `mcpURL = "ws://chepherd:9090/mcp/ws"`) {
+		t.Errorf("runtime.go still has old hardcoded 'ws://chepherd:9090/mcp/ws' — #595 replaced it with deriveAgentMCPURL()")
 	}
-	if strings.Contains(string(data), `mcpURL = "ws://host.containers.internal:9090/mcp/ws"`) {
-		t.Errorf("runtime.go still contains old host.containers.internal default — #398 v2 supersedes it")
+	// Container-pod path: HOSTNAME=chepherd → chepherd-net DNS URL.
+	rt := &Runtime{mcpListenAddr: "127.0.0.1:9090"}
+	t.Setenv("HOSTNAME", "chepherd")
+	got := rt.deriveAgentMCPURL()
+	if got != "ws://chepherd:9090/mcp/ws" {
+		t.Errorf("container-pod URL = %q, want ws://chepherd:9090/mcp/ws (#398 v2)", got)
 	}
 }
