@@ -49,6 +49,7 @@ type Store interface {
 	PushConfigs() PushNotificationConfigRepository
 	AgentCards() AgentCardRepository
 	Accounts() AccountRepository
+	Channels() ChannelRepository
 
 	// Close releases the underlying connection pool.
 	Close() error
@@ -361,6 +362,48 @@ type PushNotificationConfigRepository interface {
 	List(ctx context.Context, taskID string) ([]*PushNotificationConfig, error)
 	Save(ctx context.Context, config *PushNotificationConfig) error
 	Delete(ctx context.Context, id string) error
+}
+
+// ─── 11c. Channel repositories (#655 epic #654 Slack-chat) ────────
+
+type Channel struct {
+	ID         string
+	Name       string
+	Kind       string // "team" | "ad-hoc" | "dm"
+	CreatedBy  string
+	CreatedAt  time.Time
+	Visibility string // "irc" | "dm"
+}
+
+type ChannelMember struct {
+	ChannelID string
+	Member    string
+	JoinedAt  time.Time
+}
+
+type ChannelMessage struct {
+	ID        string
+	ChannelID string
+	Author    string
+	Body      string
+	Mentions  []string // parsed @-mentions
+	TaskID    string   // FK to A2A Task spawned by fan-out (per recipient)
+	CreatedAt time.Time
+}
+
+type ChannelRepository interface {
+	Get(ctx context.Context, id string) (*Channel, error)
+	GetByName(ctx context.Context, name string) (*Channel, error)
+	List(ctx context.Context) ([]*Channel, error)
+	Save(ctx context.Context, ch *Channel) error
+	Delete(ctx context.Context, id string) error
+
+	Members(ctx context.Context, channelID string) ([]*ChannelMember, error)
+	AddMember(ctx context.Context, m *ChannelMember) error
+	RemoveMember(ctx context.Context, channelID, member string) error
+
+	Messages(ctx context.Context, channelID string, limit int) ([]*ChannelMessage, error)
+	SaveMessage(ctx context.Context, msg *ChannelMessage) error
 }
 
 type PushNotificationConfig struct {

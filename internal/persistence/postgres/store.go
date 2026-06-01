@@ -33,6 +33,7 @@ type Store struct {
 	pushConfigs *PushNotificationConfigRepository
 	agentCards  *AgentCardRepository
 	accounts    *AccountRepository
+	channels    *ChannelRepository
 }
 
 // NewStore opens a PostgreSQL DSN, runs migrations, and returns a
@@ -69,6 +70,7 @@ func NewStoreFromDB(db *sql.DB) *Store {
 		pushConfigs: NewPushNotificationConfigRepository(db),
 		agentCards:  NewAgentCardRepository(db),
 		accounts:    NewAccountRepository(db),
+		channels:    NewChannelRepository(db),
 	}
 }
 
@@ -89,6 +91,7 @@ func (s *Store) PushConfigs() persistence.PushNotificationConfigRepository {
 }
 func (s *Store) AgentCards() persistence.AgentCardRepository { return s.agentCards }
 func (s *Store) Accounts() persistence.AccountRepository     { return s.accounts }
+func (s *Store) Channels() persistence.ChannelRepository     { return s.channels }
 
 func (s *Store) Close() error {
 	if s.db == nil {

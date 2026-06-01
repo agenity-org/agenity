@@ -208,7 +208,23 @@ func (s *minimalStore) PushConfigs() persistence.PushNotificationConfigRepositor
 func (s *minimalStore) AgentCards() persistence.AgentCardRepository { return stubAgentCards{} }
 func (s *minimalStore) Accounts() persistence.AccountRepository     { return stubAccounts{} }
 func (s *minimalStore) Artifacts() persistence.ArtifactRepository   { return stubArtifacts{} }
+func (s *minimalStore) Channels() persistence.ChannelRepository     { return stubChannels{} }
 func (s *minimalStore) Close() error                                { return nil }
+
+type stubChannels struct{}
+
+func (stubChannels) Get(_ context.Context, _ string) (*persistence.Channel, error)             { return nil, nil }
+func (stubChannels) GetByName(_ context.Context, _ string) (*persistence.Channel, error)       { return nil, nil }
+func (stubChannels) List(_ context.Context) ([]*persistence.Channel, error)                    { return nil, nil }
+func (stubChannels) Save(_ context.Context, _ *persistence.Channel) error                      { return nil }
+func (stubChannels) Delete(_ context.Context, _ string) error                                  { return nil }
+func (stubChannels) Members(_ context.Context, _ string) ([]*persistence.ChannelMember, error) { return nil, nil }
+func (stubChannels) AddMember(_ context.Context, _ *persistence.ChannelMember) error           { return nil }
+func (stubChannels) RemoveMember(_ context.Context, _, _ string) error                         { return nil }
+func (stubChannels) Messages(_ context.Context, _ string, _ int) ([]*persistence.ChannelMessage, error) {
+	return nil, nil
+}
+func (stubChannels) SaveMessage(_ context.Context, _ *persistence.ChannelMessage) error { return nil }
 
 type stubArtifacts struct{}
 
