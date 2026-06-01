@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -165,7 +166,14 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 		from = "daemon"
 	}
 	marker := knock.FormatKnock(task.ID, from)
-	if _, err := sess.Inject([]byte(marker)); err != nil {
+	// Strip the trailing \n from the Marker wire format before PTY
+	// injection. The \n is correct for log/pipe contexts but toxic for
+	// TUI PTY injection: it triggers claude-code's multi-line textarea
+	// mode, after which \r no longer submits (it inserts a newline
+	// instead). In PTY mode the submit sequence (\r) handles the
+	// line-end; no preceding \n is needed.
+	markerForPTY := strings.TrimRight(marker, "\n")
+	if _, err := sess.Inject([]byte(markerForPTY)); err != nil {
 		failed := d.failedTask(msg, "PTY knock write: "+err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err

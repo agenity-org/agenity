@@ -66,11 +66,9 @@ func TestP0_404_P03_RenderTeamEventNotification_Shape(t *testing.T) {
 					t.Errorf("notification missing %q: full=%q", sub, got)
 				}
 			}
-			// Leading + trailing newline so the notification stands out
-			// from previous PTY output.
-			if !strings.HasPrefix(got, "\n") || !strings.HasSuffix(got, "\n") {
-				t.Errorf("notification missing newline padding: %q", got)
-			}
+			// PTY stdin injection was removed (#615 multi-line textarea
+			// fix). The newline padding is no longer required — the
+			// rendered text is kept for logging/debugging purposes only.
 		})
 	}
 }
