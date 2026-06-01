@@ -78,7 +78,7 @@ func TestR4_PTYToBroker_Chunked_EndToEnd(t *testing.T) {
 	d.markObserver = func(m *runtime.PumpSendMark) { markCh <- m }
 
 	msg := a2a.Message{
-		ContextID: "ctx-r4",
+		ContextID: "test-sid",
 		Parts:     []a2a.Part{{Kind: "text", Text: "trigger"}},
 	}
 	task, err := d.Deliver(context.Background(), msg)
