@@ -303,6 +303,19 @@ func buildRunnerAgentCard(sid, runnerName, baseURL, daemonJWKSURL string) a2a.Ag
 				Description:  "Per-call JWT minted by chepherd-daemon (POST /api/v1/jwt/mint, Wave D2). Verify against daemon JWKS at " + jwksRef + " (Wave T2). ES256 signing.",
 			},
 		},
+		// #577 — A2A v1.0 §4.4 optional Agent Card fields.
+		Provider: &a2a.AgentProvider{
+			URL:          "https://chepherd.org",
+			Organization: "chepherd",
+		},
+		DocumentationURL: "https://chepherd.org/docs",
+		SupportedInterfaces: []a2a.AgentInterface{
+			{
+				URL:             endpointURL,
+				ProtocolBinding: "JSONRPC",
+				ProtocolVersion: "1.0",
+			},
+		},
 		XChepherdP2P: func() *a2a.ChepherdP2PExtension {
 			// #488 Wave F1 — populate the x-chepherd-p2p extension's
 			// signaling endpoint with this runner's reachable
