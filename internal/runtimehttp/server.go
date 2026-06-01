@@ -465,11 +465,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				got = r.URL.Query().Get("token")
 			}
 			if got == "" {
-				http.Error(w, "missing Bearer token", http.StatusUnauthorized)
+				// Return JSON so dashboard fetch().json() consumers don't
+				// crash with "Unexpected token 'm', 'missing Be...'".
+				writeJSON(w, http.StatusUnauthorized, map[string]any{
+					"error": "missing Bearer token",
+				})
 				return
 			}
 			if !constantTimeEqualString(got, s.AuthToken) {
-				http.Error(w, "invalid Bearer token", http.StatusUnauthorized)
+				writeJSON(w, http.StatusUnauthorized, map[string]any{
+					"error": "invalid Bearer token",
+				})
 				return
 			}
 		}

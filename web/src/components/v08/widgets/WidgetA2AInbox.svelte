@@ -13,7 +13,17 @@
   async function refresh() {
     try {
       const r = await fetch(`${API}/tasks`);
-      const data = await r.json();
+      // Read as text first so non-JSON errors (auth middleware, 502s,
+      // proxy plaintext) surface as a clean error string instead of a
+      // useless "Unexpected token 'm'..." JSON-parse exception.
+      const text = await r.text();
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try { const j = JSON.parse(text); msg = j.error || msg; } catch { msg = text.slice(0, 80) || msg; }
+        lastError = msg;
+        return;
+      }
+      const data = JSON.parse(text);
       tasks = data.tasks || [];
       lastError = '';
     } catch (e) {
