@@ -131,17 +131,19 @@ func (m *MethodBodies) handleGetAuthenticatedExtendedCard(req JSONRPCRequest) JS
 		ext.Grants = grants
 		ext.RateUsage = summarizeRateUsage(grants)
 	}
+	// A2A v1.0 §7.11: result IS the AgentCard directly, not nested under a
+	// "card" key. Return ExtendedAgentCard (embeds AgentCard) as the result.
 	return JSONRPCResponse{
 		JSONRPC: "2.0", ID: req.ID,
-		Result: getExtendedAgentCardResult{Card: ExtendedAgentCard{
+		Result: ExtendedAgentCard{
 			AgentCard:     card,
 			XChepherdAuth: ext,
-		}},
+		},
 	}
 }
 
-// getExtendedAgentCardResult is the spec wrapper. Same shape as
-// getAgentCardResult but the Card type is ExtendedAgentCard.
+// getExtendedAgentCardResult is kept for tests that still reference it;
+// production handler returns ExtendedAgentCard directly per A2A v1.0 §7.11.
 type getExtendedAgentCardResult struct {
 	Card ExtendedAgentCard `json:"card"`
 }

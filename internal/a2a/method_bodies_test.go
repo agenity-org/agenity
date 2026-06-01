@@ -193,15 +193,16 @@ func TestGetAuthenticatedExtendedCard(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
-	result, ok := resp.Result.(getExtendedAgentCardResult)
+	// A2A v1.0 §7.11: result IS the AgentCard directly (#570).
+	result, ok := resp.Result.(ExtendedAgentCard)
 	if !ok {
-		t.Fatalf("Result type = %T, want getExtendedAgentCardResult", resp.Result)
+		t.Fatalf("Result type = %T, want ExtendedAgentCard", resp.Result)
 	}
-	if result.Card.ProtocolVersion != "1.0.0" || result.Card.Name != "test-runner" {
-		t.Errorf("unexpected card payload: %+v", result.Card)
+	if result.ProtocolVersion != "1.0.0" || result.Name != "test-runner" {
+		t.Errorf("unexpected card payload: %+v", result)
 	}
-	if result.Card.XChepherdAuth == nil || result.Card.XChepherdAuth.Subject != "operator" {
-		t.Errorf("x-chepherd-auth missing or wrong: %+v", result.Card.XChepherdAuth)
+	if result.XChepherdAuth == nil || result.XChepherdAuth.Subject != "operator" {
+		t.Errorf("x-chepherd-auth missing or wrong: %+v", result.XChepherdAuth)
 	}
 }
 

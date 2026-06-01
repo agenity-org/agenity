@@ -75,14 +75,14 @@ func TestWaveA4_ExtendedCard_AuthenticatedNoGrants_EmitsBaseExtension(t *testing
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
-	result, ok := resp.Result.(getExtendedAgentCardResult)
+	result, ok := resp.Result.(ExtendedAgentCard)
 	if !ok {
 		t.Fatalf("Result type = %T, want getExtendedAgentCardResult", resp.Result)
 	}
-	if result.Card.Name != "test-runner" {
-		t.Errorf("embedded AgentCard.Name = %q, want test-runner", result.Card.Name)
+	if result.Name != "test-runner" {
+		t.Errorf("embedded AgentCard.Name = %q, want test-runner", result.Name)
 	}
-	ext := result.Card.XChepherdAuth
+	ext := result.XChepherdAuth
 	if ext == nil {
 		t.Fatal("x-chepherd-auth extension missing")
 	}
@@ -140,8 +140,8 @@ func TestWaveA4_ExtendedCard_WithGrants_EnumeratesAndSummarizes(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
-	result := resp.Result.(getExtendedAgentCardResult)
-	ext := result.Card.XChepherdAuth
+	result := resp.Result.(ExtendedAgentCard)
+	ext := result.XChepherdAuth
 	if ext == nil {
 		t.Fatal("x-chepherd-auth extension missing")
 	}
@@ -186,7 +186,7 @@ func TestWaveA4_ExtendedCard_WireShape_RoundTripsThroughJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp := callExtended(t, r, "y")
-	result := resp.Result.(getExtendedAgentCardResult)
+	result := resp.Result.(ExtendedAgentCard)
 
 	body, err := json.Marshal(result)
 	if err != nil {
@@ -198,8 +198,8 @@ func TestWaveA4_ExtendedCard_WireShape_RoundTripsThroughJSON(t *testing.T) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	card, _ := raw["card"].(map[string]any)
-	auth, _ := card["x-chepherd-auth"].(map[string]any)
+	// A2A v1.0 §7.11: result IS the AgentCard directly — no "card" wrapper.
+	auth, _ := raw["x-chepherd-auth"].(map[string]any)
 	if auth == nil {
 		t.Fatalf("x-chepherd-auth missing from wire: %s", body)
 	}
