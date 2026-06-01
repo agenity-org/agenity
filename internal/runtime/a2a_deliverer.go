@@ -178,6 +178,11 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
 	}
+	// Give the TUI 120ms to render the marker into the input box before
+	// sending the submit sequence. Without this gap, the TUI may process
+	// the marker+CR as a single burst and enter multi-line mode instead
+	// of submitting. Pattern mirrors PokePrompt's established 120ms gap.
+	time.Sleep(120 * time.Millisecond)
 	// Submit sequence — CR for claude-code; Inject (not Write) so
 	// lastOperatorWrite is not bumped (this is a system injection).
 	submitSeq := d.submitSequenceFor(info.AgentSlug)
