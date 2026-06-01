@@ -254,6 +254,12 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	if err := mcpSrv.StartHTTP(mcpListen); err != nil {
 		return fmt.Errorf("mcp server: %w", err)
 	}
+	// #595 — propagate the actual MCP listen addr into Runtime so
+	// writeMCPConfig's .mcp.json `url` derives the correct port +
+	// hostname for the deployment topology instead of hardcoding
+	// `ws://chepherd:9090/mcp/ws` (which only works in the canonical
+	// chepherd-net + container-pod deploy, NOT host-direct).
+	rt.SetMCPListenAddr(mcpListen)
 
 	// v0.9.2 (#208): wire the shepherd tier. Constructs ScrumMaster from
 	// the same persistence.Store the runtime uses; attaches via
