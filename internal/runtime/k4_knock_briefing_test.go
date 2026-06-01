@@ -10,8 +10,8 @@
 //	     from=<name>]
 //	B3 — Action #1 mentions chepherd.get_task by exact tool name
 //	B4 — Recipient-scoping warning present (mentions -32004 forbidden)
-//	B5 — Anti-pattern: "Don't reply by calling chepherd.send_to_session
-//	     back" (silence-finalize captures stdout reply automatically)
+//	B5 — Reply instruction: "chepherd.send_to_session(from_name, reply_body)"
+//	     for real-time sender notification (B5b checks wrong anti-pattern absent)
 //	B6 — Briefing knock section is positioned BEFORE the operator
 //	     section (so chronological reading hits knock-handling before
 //	     escalation guidance)
@@ -58,9 +58,13 @@ func TestK4_KnockSection_AllLandmarksPresent(t *testing.T) {
 	if !strings.Contains(s, "-32004 forbidden") {
 		t.Errorf("B4 FAIL: -32004 forbidden warning missing (recipient-scoping)")
 	}
-	// B5 — anti-pattern: don't reply via send_to_session
-	if !strings.Contains(s, "Don't reply by calling `chepherd.send_to_session` back") {
-		t.Errorf("B5 FAIL: anti-pattern callout (don't reply via send_to_session) missing")
+	// B5 — reply via send_to_session for real-time delivery (correct pattern)
+	if !strings.Contains(s, "chepherd.send_to_session(from_name, reply_body)") {
+		t.Errorf("B5 FAIL: send_to_session reply instruction missing")
+	}
+	// B5b — wrong anti-pattern must NOT be present
+	if strings.Contains(s, "Don't reply by calling `chepherd.send_to_session` back") {
+		t.Errorf("B5b FAIL: anti-pattern 'Don't reply via send_to_session' still present — must be removed")
 	}
 	// B6 — knock section before operator section
 	knockIdx := strings.Index(s, "Inbound peer messages — the knock pattern")
