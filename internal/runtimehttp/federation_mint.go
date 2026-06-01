@@ -40,12 +40,16 @@ type crossOrgGrantAdapter struct {
 }
 
 func (a *crossOrgGrantAdapter) Check(ctx context.Context, callerOrg, scope string) (*federation.GrantMeta, error) {
-	_ = ctx
 	if a.check != nil {
 		if err := a.check(callerOrg, scope); err != nil {
 			return nil, err
 		}
-		// check closure doesn't supply grant metadata; return nil meta.
+		// Authorization passed. Query the store for the matching grant's
+		// metadata (grant ID + rate window) so the minter can embed the
+		// §15.2 claims. Store may be nil in dev mode → nil meta is safe.
+		if a.store != nil {
+			return grantMetaFor(ctx, a.store, callerOrg)
+		}
 		return nil, nil
 	}
 	if a.store == nil {
@@ -54,11 +58,30 @@ func (a *crossOrgGrantAdapter) Check(ctx context.Context, callerOrg, scope strin
 		// Production deploys MUST wire a store + check function.
 		return nil, nil
 	}
-	// Fallback default: query the store for any grant matching
-	// the (caller → this-daemon, scope) tuple. Real production
-	// path overrides this via the explicit `check` closure wired
-	// in cmd/run.go.
-	return nil, nil
+	return grantMetaFor(ctx, a.store, callerOrg)
+}
+
+// grantMetaFor looks up the first active grant from granteeOrg in the
+// store and returns its metadata for embedding as §15.2 JWT claims.
+// A lookup error or empty result is non-fatal (caller is still authorized);
+// we return nil meta so the JWT is issued without grant claims.
+func grantMetaFor(ctx context.Context, store persistence.RBACGrantRepository, granteeOrg string) (*federation.GrantMeta, error) {
+	grants, err := store.List(ctx, persistence.GrantListOpts{
+		GranteeOrg: granteeOrg,
+		OnlyActive: true,
+	})
+	if err != nil || len(grants) == 0 {
+		return nil, nil
+	}
+	g := grants[0]
+	meta := &federation.GrantMeta{GrantID: g.ID}
+	if g.RateLimit != nil {
+		meta.RateWindow = &federation.RateWindow{
+			CallsPerMinute: g.RateLimit.CallsPerMinute,
+			CallsPerDay:    g.RateLimit.CallsPerDay,
+		}
+	}
+	return meta, nil
 }
 
 // mountCrossOrgFederationMint attaches the CrossOrgJWTMinter handler
