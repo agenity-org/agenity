@@ -148,21 +148,33 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	// row write and returns -32001 not-found.
 	d.persistTask(ctx, msg, task, "message/send")
 
-	// #615 knock pattern — write ONLY the [chepherd-knock] marker line.
-	// NO message text, NO submit sequence. The agent's claude-code reads
-	// the marker, calls chepherd.get_task(taskID) via MCP, fetches the
-	// full message from the TaskRepository, and replies via stdout.
-	// The runner-side silence-finalize pump handles state transitions.
+	// #615 knock pattern — write the [chepherd-knock] marker line then
+	// the agent's submit sequence so claude-code processes the marker as
+	// a user message. The marker text carries taskID + from so the agent
+	// calls chepherd.get_task(taskID) to fetch the full message body.
 	//
-	// from= falls back to "daemon" when the caller identity is unknown
-	// (tests, external HTTP A2A callers that don't set msg.From).
+	// The "no submit sequence" note in knock.go was aspirational for a
+	// future output-injection path (runner R4 PTY ownership). In the
+	// current PTY stdin path both the daemon and the runner write to
+	// stdin — the submit sequence is required or the marker sits idle
+	// in claude-code's input box forever.
+	//
+	// from= falls back to "daemon" when the caller identity is unknown.
 	from := msg.From
 	if from == "" {
 		from = "daemon"
 	}
 	marker := knock.FormatKnock(task.ID, from)
-	if _, err := sess.Write([]byte(marker)); err != nil {
+	if _, err := sess.Inject([]byte(marker)); err != nil {
 		failed := d.failedTask(msg, "PTY knock write: "+err.Error())
+		d.persistTask(ctx, msg, failed, "message/send")
+		return failed, err
+	}
+	// Submit sequence — CR for claude-code; Inject (not Write) so
+	// lastOperatorWrite is not bumped (this is a system injection).
+	submitSeq := d.submitSequenceFor(info.AgentSlug)
+	if _, err := sess.Inject(submitSeq); err != nil {
+		failed := d.failedTask(msg, "PTY knock submit: "+err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
 		return failed, err
 	}
