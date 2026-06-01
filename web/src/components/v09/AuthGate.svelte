@@ -122,6 +122,18 @@
   }
 
   onMount(async () => {
+    // #566 — propagate ?token= URL param to localStorage so the auth
+    // probe below finds it via readStoredToken(). Strip from URL after.
+    try {
+      const urlTok = new URL(location.href).searchParams.get('token');
+      if (urlTok) {
+        storeToken(urlTok);
+        const clean = new URL(location.href);
+        clean.searchParams.delete('token');
+        history.replaceState(null, '', clean.toString());
+      }
+    } catch {}
+
     const tok = readStoredToken();
     if (!tok) { authStatus = 'login'; return; }
     const ok = await probeAuth(tok);

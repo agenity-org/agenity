@@ -479,6 +479,19 @@
   }
 
   onMount(() => {
+    // #566 — propagate ?token= URL param to localStorage so the fetch
+    // patch's localStorage.getItem('chepherd-token') picks it up.
+    // Strip it from the URL after storing to avoid Referer leakage.
+    try {
+      const urlTok = new URL(location.href).searchParams.get('token');
+      if (urlTok) {
+        localStorage.setItem('chepherd-token', urlTok);
+        const clean = new URL(location.href);
+        clean.searchParams.delete('token');
+        history.replaceState(null, '', clean.toString());
+      }
+    } catch {}
+
     // Restore persisted theme.
     try {
       const stored = localStorage.getItem('chepherd-theme');
