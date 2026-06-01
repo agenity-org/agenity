@@ -1042,9 +1042,10 @@ func (s *Server) collectVCSTokenEnv(providerID string) []string {
 }
 
 // resolveProviderCwd maps a provider_id to a working directory.
-// If provider_id is set, uses the provider's repo URL to derive a state-managed
-// clone path. If cwd is also provided, it wins (explicit override).
-func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, error) {
+// cloneURL, when non-empty, is the specific repo URL the operator selected
+// in the Stage 2 discovery tree (#651). It overrides the provider's generic
+// base RepoURL (e.g. "https://github.com") so git clone targets the right repo.
+func (s *Server) resolveProviderCwd(providerID, fallbackCwd, cloneURL string) (string, error) {
 	if providerID == "" {
 		if fallbackCwd == "" {
 			fallbackCwd, _ = os.UserHomeDir()
@@ -1120,10 +1121,27 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, err
 		// in .git/config). Use GIT_ASKPASS via a short-lived helper
 		// script that prints the token, then git clones with the bare
 		// HTTPS URL → .git/config has NO credentials, only the URL.
-		dir := filepath.Join(s.rt.StateDir(), "workspaces", sanitizeID(p.ID))
+		//
+		// #651: use the caller-supplied cloneURL (specific repo selected
+		// by the operator in Stage 2 discovery tree) if non-empty;
+		// otherwise fall back to the provider's generic RepoURL (which is
+		// the provider homepage, e.g. "https://github.com", and is NOT a
+		// valid git remote).
+		effectiveCloneURL := cloneURL
+		if effectiveCloneURL == "" {
+			effectiveCloneURL = p.RepoURL
+		}
+		// Derive workspace dir from the effective URL so each repo gets
+		// its own directory (provider ID is non-unique across repos from
+		// the same provider token).
+		dirKey := effectiveCloneURL
+		if dirKey == "" {
+			dirKey = p.ID
+		}
+		dir := filepath.Join(s.rt.StateDir(), "workspaces", sanitizeID(dirKey))
 		if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
 			_ = os.MkdirAll(dir, 0o700)
-			cloneURL := p.RepoURL
+			cloneURL := effectiveCloneURL
 			env := os.Environ()
 			cleanupAsk := func() {}
 			if p.Token != "" && strings.HasPrefix(cloneURL, "https://") {
@@ -1150,7 +1168,7 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd string) (string, err
 			// Belt-and-braces: strip any URL credentials the clone might
 			// have written to .git/config (older git versions store the
 			// full URL even with askpass). Re-write origin to the bare URL.
-			_ = exec.Command("git", "-C", dir, "remote", "set-url", "origin", p.RepoURL).Run()
+			_ = exec.Command("git", "-C", dir, "remote", "set-url", "origin", effectiveCloneURL).Run()
 		}
 		return dir, nil
 	}
@@ -1268,17 +1286,19 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name, Agent, Team, Role, Cwd, SystemPrompt string
 			ProviderID                                 string                 `json:"provider_id"`
-			AgentArgs                                  []string               `json:"agent_args"`
-			ResumeUUID                                 string                 `json:"resume_uuid"`
-			UseDefaultPrompt                           bool                   `json:"use_default_prompt"`
-			StatSheet                                  runtime.AgentStatSheet `json:"stat_sheet"`
-			ClaudeTokenID                              string                 `json:"claude_token_id"`
+			// CloneURL is the specific repo URL selected in Stage 2 (#651).
+			CloneURL     string                 `json:"clone_url"`
+			AgentArgs    []string               `json:"agent_args"`
+			ResumeUUID   string                 `json:"resume_uuid"`
+			UseDefaultPrompt bool               `json:"use_default_prompt"`
+			StatSheet    runtime.AgentStatSheet `json:"stat_sheet"`
+			ClaudeTokenID string                `json:"claude_token_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		cwd, err := s.resolveProviderCwd(req.ProviderID, req.Cwd)
+		cwd, err := s.resolveProviderCwd(req.ProviderID, req.Cwd, req.CloneURL)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
@@ -2330,7 +2350,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	if team == "" {
 		team = p.Name
 	}
-	cwd, _ := s.resolveProviderCwd(req.ProviderID, req.Cwd)
+	cwd, _ := s.resolveProviderCwd(req.ProviderID, req.Cwd, "")
 	if cwd == "" {
 		cwd = os.Getenv("HOME")
 	}

@@ -48,7 +48,7 @@ func TestP0_594_CwdTranslation_HomeChepherdToHostHome(t *testing.T) {
 		t.Skipf("operator $HOME/repos doesn't exist (%v); skipping translation success case", err)
 	}
 	s := &Server{}
-	got, err := s.resolveProviderCwd("", "/home/chepherd/repos")
+	got, err := s.resolveProviderCwd("", "/home/chepherd/repos", "")
 	if err != nil {
 		t.Fatalf("resolveProviderCwd: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestP0_594_CwdTranslation_HomeChepherdToHostHome(t *testing.T) {
 func TestP0_594_CwdTranslation_NonExistentCwd_ActionableError(t *testing.T) {
 	s := &Server{}
 	bogus := "/definitely/does/not/exist/anywhere/12345"
-	_, err := s.resolveProviderCwd("", bogus)
+	_, err := s.resolveProviderCwd("", bogus, "")
 	if err == nil {
 		t.Fatal("expected error for non-existent cwd, got nil")
 	}
@@ -78,9 +78,9 @@ func TestP0_594_CwdTranslation_NonExistentCwd_ActionableError(t *testing.T) {
 func TestP0_594_CwdTranslation_EmptyDefaultsToHome(t *testing.T) {
 	s := &Server{}
 	home, _ := os.UserHomeDir()
-	got, err := s.resolveProviderCwd("", "")
+	got, err := s.resolveProviderCwd("", "", "")
 	if err != nil {
-		t.Fatalf("resolveProviderCwd: %v", err)
+		t.Fatalf("resolveProviderCwd: %v", err)  // empty fallbackCwd → UserHomeDir
 	}
 	if got != home {
 		t.Fatalf("default cwd = %q, want $HOME = %q", got, home)
@@ -91,7 +91,7 @@ func TestP0_594_CwdTranslation_AbsolutePathPassthrough(t *testing.T) {
 	s := &Server{}
 	// Pick an absolute path that exists + isn't /home/chepherd/...
 	// /tmp is universally writable + exists.
-	got, err := s.resolveProviderCwd("", "/tmp")
+	got, err := s.resolveProviderCwd("", "/tmp", "")
 	if err != nil {
 		t.Fatalf("resolveProviderCwd: %v", err)
 	}

@@ -296,6 +296,9 @@
         // can do the smarter clone-path resolution for external/embedded
         // providers. Fallback (empty) keeps the existing $HOME default.
         provider_id: selection?.repo?.provider_id || selection?.repo?.token_id || '',
+        // #651 — pass the specific repo clone_url selected in Stage 2 so
+        // resolveProviderCwd clones the right repo, not the provider homepage.
+        clone_url: selection?.repo?.clone_url || '',
         role_id: memberRole(m),
         owned_skills: ownedSkills,
         owned_skills_scope: m.owned_skills_scope || {},
