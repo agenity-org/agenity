@@ -27,6 +27,7 @@
   let mentionQuery = $state('');     // text after the @ up to the caret
   let mentionStart = $state(-1);     // index in composeBody of the '@'
   let mentionIndex = $state(0);      // highlighted item index
+  let leadTargets = $state({});      // { teamName: leadHandle } populated lazily (#662)
 
   // Role aliases — surfaced in autocomplete so the operator can ping by role
   // even when they don't remember the exact agent handle. Backend resolves
@@ -314,6 +315,41 @@
     setTimeout(() => { mentionOpen = false; }, 150);
   }
 
+  // ── Default-route hint (#662) ────────────────────────────────────────
+  // Lazy-fetch the team's lead handle when the scope changes; show in the
+  // compose meta strip. If the backend doesn't have the endpoint yet we
+  // just leave the hint empty (graceful degrade).
+  async function ensureLead(teamName) {
+    if (!teamName || teamName === 'all') return;
+    if (leadTargets[teamName] !== undefined) return;
+    leadTargets = { ...leadTargets, [teamName]: '' }; // mark in-flight
+    try {
+      const r = await fetch(`${API}/teams/${encodeURIComponent(teamName)}/lead`);
+      if (r.ok) {
+        const j = await r.json();
+        const lead = j.lead || j.handle || '';
+        leadTargets = { ...leadTargets, [teamName]: lead };
+        return;
+      }
+    } catch {}
+    // Fallback: scan channel members for known lead roles. We don't have
+    // role metadata in the members list, so this is best-effort by handle
+    // pattern — backend ticket will plug the real resolver.
+    const members = (transcript.channel?.members || []);
+    const candidates = ['scrum-master', 'tech-lead', 'orchestrator', 'architect'];
+    let lead = '';
+    for (const c of candidates) {
+      const hit = members.find(m => m === c || m.endsWith('-' + c));
+      if (hit) { lead = hit; break; }
+    }
+    if (!lead && members.length > 0) lead = members[0];
+    leadTargets = { ...leadTargets, [teamName]: lead };
+  }
+
+  const defaultTarget = $derived(
+    selectedScope === 'all' ? '' : (leadTargets[selectedScope] || '')
+  );
+
   onMount(() => {
     loadTeams();
     refresh();
@@ -321,10 +357,12 @@
     return () => clearInterval(id);
   });
 
-  // When the user changes scope via the dropdown, refresh immediately.
+  // When the user changes scope via the dropdown, refresh immediately
+  // and fetch the default target for the lead-hint (#662).
   $effect(() => {
     selectedScope;
     refresh();
+    ensureLead(selectedScope);
   });
 </script>
 
@@ -369,6 +407,11 @@
               <span class="badge multi">multi ({m.recipients.length})</span>
             {/if}
           </div>
+          {#if m.routed_to_default && m.default_target}
+            <div class="routed-sub" data-testid="routed-sub">
+              ↪ routed to <span class="mention">@{m.default_target}</span> <span class="muted">(lead)</span>
+            </div>
+          {/if}
           {#if isLong(m.body) && !expanded[m.id]}
             <div class="body">
               {@html renderBody({ body: preview(m.body) })}
@@ -424,6 +467,11 @@
           Will wake: <strong>{previewWillWake}</strong> agent{previewWillWake === 1 ? '' : 's'}
           (~{previewTokens.toLocaleString()} tokens, ~${previewCost})
         </span>
+      {:else if defaultTarget}
+        <span class="cost-preview" data-testid="default-target-hint">
+          → default: <strong>@{defaultTarget}</strong>
+          <span class="muted">(no @-mention — will route to team lead)</span>
+        </span>
       {:else}
         <span class="cost-preview muted">No @-mentions — will be posted to transcript only (no agent wake).</span>
       {/if}
@@ -474,6 +522,9 @@
   .arrow { color: var(--fg-muted, #666); }
   .ts { color: var(--fg-muted, #666); font-size: 0.75rem; margin-left: auto; }
   .badge.multi { background: rgba(135,206,235,0.18); color: var(--accent-2, #87ceeb); font-size: 0.7rem; padding: 0.05rem 0.4rem; border-radius: 3px; }
+  .routed-sub { font-size: 0.75rem; color: var(--fg-muted, #888); margin: 0.1rem 0 0.25rem 0.1rem; }
+  .routed-sub .muted { color: var(--fg-muted, #666); }
+  .routed-sub .mention { color: var(--accent-2, #87ceeb); font-weight: 600; }
   .body { padding: 0.35rem 0.6rem 0.35rem 0.8rem; background: var(--bg-elevated, #131313); border-left: 2px solid var(--border, #2a2a2a); border-radius: 0 4px 4px 0; white-space: pre-wrap; word-break: break-word; font-size: 0.88rem; }
   .body :global(.mention) { color: var(--accent-2, #87ceeb); font-weight: 600; }
   .body :global(.ticket) { color: #ffb86c; text-decoration: none; font-weight: 600; }
@@ -504,6 +555,7 @@
   .cost-preview { color: var(--fg-muted, #888); font-size: 0.78rem; flex: 1; }
   .cost-preview.muted { color: var(--fg-muted, #666); }
   .cost-preview strong { color: var(--accent-2, #87ceeb); }
+  .cost-preview .muted { color: var(--fg-muted, #666); margin-left: 0.3rem; }
   .primary { background: var(--accent-2, #87ceeb); border: 0; color: #0a0a0a; padding: 0.4rem 1rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
   .primary:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
