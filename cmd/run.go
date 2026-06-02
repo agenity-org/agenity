@@ -19,6 +19,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -33,9 +34,9 @@ import (
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/federation"
+	"github.com/chepherd/chepherd/internal/keychain"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/keychain"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
@@ -44,28 +45,31 @@ import (
 	"github.com/chepherd/chepherd/internal/runtimetui"
 	"github.com/chepherd/chepherd/internal/scrummaster"
 	"github.com/chepherd/chepherd/internal/vault"
+	"github.com/chepherd/chepherd/internal/webrtcrtc"
 )
 
 var (
-	runFlagAgent                 string
-	runFlagCwd                   string
-	runFlagNoShepherd            bool
-	runFlagStateDir              string
-	runFlagHeadless              bool
-	runFlagListen                string
-	runFlagWebDir                string
-	runFlagMCPListen             string
+	runFlagAgent                    string
+	runFlagCwd                      string
+	runFlagNoShepherd               bool
+	runFlagStateDir                 string
+	runFlagHeadless                 bool
+	runFlagListen                   string
+	runFlagWebDir                   string
+	runFlagMCPListen                string
 	runFlagFederationRegistryURL    string // #225 row C1 — hosted peer registry
 	runFlagFederationPublicURL      string // #225 row C1 — this chepherd's public URL for announcements
 	runFlagFederationOutboundBearer string // #225 §DoD walk — retired in #471 Wave D5; flag retained as a no-op for back-compat; FederatedDeliverer moved to runner side in Wave R
 	runFlagFederationMTLS           bool   // #487 Wave T3 — enforce mTLS on cross-org federation traffic
 	runFlagFederationOrgID          string // #487 Wave T3 — this daemon's org identifier (CN on its cert)
 	runFlagFederationListen         string // #527 Wave T3.1 — federation-facing mTLS HTTP listener address (separate from dashboard listener)
-	runFlagIOgridEndpoint        string
-	runFlagKeychainBackend       string // #322 H6.1 — keychain backend (default = auto)
-	runFlagOpenBaoAddr           string // #322 H6.1 — OpenBao server URL
-	runFlagOpenBaoTokenFile      string // #322 H6.1 — OpenBao auth token file // #318 (#225 row E1) — iogrid recipe-dispatch endpoint URL
-	runFlagScrumMasterName       string // #225 row F4 — name for the auto-spawned Scrum Master (back-compat default: "shepherd")
+	runFlagIOgridEndpoint           string
+	runFlagKeychainBackend          string // #322 H6.1 — keychain backend (default = auto)
+	runFlagOpenBaoAddr              string // #322 H6.1 — OpenBao server URL
+	runFlagOpenBaoTokenFile         string // #322 H6.1 — OpenBao auth token file // #318 (#225 row E1) — iogrid recipe-dispatch endpoint URL
+	runFlagScrumMasterName          string // #225 row F4 — name for the auto-spawned Scrum Master (back-compat default: "shepherd")
+	runFlagHubURL                   string // #672 — central chepherd-hub URL for hub-relayed WebRTC A2A (empty = disabled)
+	runFlagOrgID                    string // #672 — this daemon's org identity on the hub (X-Chepherd-Org)
 )
 
 var runCmd = &cobra.Command{
@@ -126,6 +130,17 @@ func init() {
 		"shared bearer token sent on every cross-instance SendMessage POST (use B3 trust-list + ES256 JWT in production; this flag is the §DoD walk-friendly bootstrap path).")
 	runCmd.Flags().StringVar(&runFlagScrumMasterName, "scrummaster-name", "shepherd",
 		"name for the auto-spawned Scrum Master session (back-compat default: 'shepherd'; set to 'scrummaster' for canonical naming).")
+	// #672 — hub-relayed WebRTC A2A. When --hub-url is set the daemon
+	// reaches no-inbound peers through the central chepherd-hub: it dials
+	// out via the hub's signaling queue + answers inbound offers the same
+	// way, with NO inbound HTTP required on either side. --org-id is this
+	// daemon's identity on the hub (X-Chepherd-Org header). Both default
+	// from env so container operators can enable hub-relay without
+	// editing the flag list.
+	runCmd.Flags().StringVar(&runFlagHubURL, "hub-url", os.Getenv("CHEPHERD_HUB_URL"),
+		"#672 — central chepherd-hub URL for hub-relayed WebRTC A2A (empty = disabled; default from $CHEPHERD_HUB_URL). When set, the daemon dials + answers peers through the hub with zero inbound HTTP.")
+	runCmd.Flags().StringVar(&runFlagOrgID, "org-id", os.Getenv("CHEPHERD_ORG_ID"),
+		"#672 — this daemon's org identity on the hub (X-Chepherd-Org header; default from $CHEPHERD_ORG_ID). Required when --hub-url is set.")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -406,6 +421,64 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			rs.Federation = fed
 		}
 
+		// #672 — HUB-RELAYED WEBRTC A2A. When --hub-url is set the daemon
+		// reaches no-inbound peers through the central chepherd-hub:
+		//   · HubSignaler-backed PCStore dials OUT via the hub queue
+		//   · HubAnswerer answers inbound offers (also OUT-only)
+		//   · HubDiscovery announces self + discovers peers
+		//   · TURN creds fetched from the hub + merged into ICE config
+		// Everything is outbound to the hub; ZERO inbound HTTP required.
+		// Unset → no behavioral change (block skipped entirely).
+		if runFlagHubURL != "" {
+			hubOrg := runFlagOrgID
+			if hubOrg == "" {
+				hubOrg = "org-" + rt.InstanceUUID()
+			}
+			hubClient := &http.Client{Timeout: 30 * time.Second}
+			hubCtx, hubCancel := context.WithCancel(context.Background())
+			defer hubCancel()
+
+			// Base ICE config = STUN defaults; merge hub TURN creds when
+			// the hub serves them (503 = TURN disabled → STUN-only).
+			iceCfg := webrtcrtc.Config{}
+			if creds, terr := webrtcrtc.FetchHubTURN(hubCtx, hubClient, runFlagHubURL, hubOrg); terr != nil {
+				fmt.Fprintf(os.Stderr, "warn: hub TURN creds: %v (STUN-only)\n", terr)
+			} else {
+				iceCfg = webrtcrtc.MergeTURN(iceCfg, creds)
+			}
+
+			// Outbound: HubSignaler-backed PCStore (non-trickle bundled ICE).
+			hubSignaler := webrtcrtc.NewHubSignaler(runFlagHubURL, hubOrg, hubClient)
+			hubPCStore := webrtcrtc.NewPCStore(iceCfg, hubSignaler)
+			hubPCStore.GatherBeforeOffer = true
+			rs.Deliverer = &federation.HubDeliverer{
+				Fallback: daemonDeliverer,
+				Cards:    store.AgentCards(),
+				PCStore:  hubPCStore,
+				SelfSID:  rt.InstanceUUID(),
+			}
+
+			// Inbound: HubAnswerer drains offer frames + serves A2A onto
+			// each answerer DataChannel, delivering to the local deliverer.
+			hubAnswerer := federation.NewHubAnswerer(runFlagHubURL, hubOrg, iceCfg, daemonDeliverer, hubClient)
+			go hubAnswerer.Start(hubCtx)
+
+			// Discovery: announce self + poll peers into the AgentCard cache
+			// + PeerRegistry (external=true via chepherd.list / list_peers).
+			selfCard, _ := json.Marshal(map[string]any{
+				"protocolVersion": "1.0",
+				"name":            hubOrg,
+				"url":             webrtcrtc.HubPeerScheme + hubOrg,
+			})
+			hubDiscovery := federation.NewHubDiscovery(
+				runFlagHubURL, hubOrg, "default", selfCard,
+				store.AgentCards(), rt.Peers(), hubClient)
+			go hubDiscovery.Start(hubCtx)
+
+			fmt.Printf("✓ Hub-relay A2A via %s (org=%s) — dial+answer through hub, zero inbound HTTP\n",
+				runFlagHubURL, hubOrg)
+		}
+
 		// #466 Wave R5 — DAEMON DE-A2A CUTOVER. The A2A surface
 		// (/jsonrpc + /.well-known/agent-card.json + /a2a/stream/) is
 		// now hosted INSIDE each chepherd-runner process at
@@ -525,7 +598,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// "default" tribe so 4-eyes coverage is on by default; pass
 	// --no-shepherd to opt out (or stop it from the dashboard).
 	_ = prompts.Worker // exposed via runtimehttp for explicit worker spawns w/ default prompt
-		// #350 D4 auto-resume: query persisted sessions w/ claude_session_uuid
+	// #350 D4 auto-resume: query persisted sessions w/ claude_session_uuid
 	// + Spawn each with --resume <uuid>. Operator's pre-restart state
 	// continues seamlessly post-restart. No-op when no persistence wired.
 	if resumable, err := rt.ResumableSessions(context.Background()); err == nil {
@@ -792,7 +865,6 @@ func pokeShepherd(sess *session.Session, body string) {
 	time.Sleep(120 * time.Millisecond)
 	_, _ = sess.Write([]byte("\r"))
 }
-
 
 // iogridExtension returns the AgentCard's x-iogrid extension shape.
 // Returns nil when --iogrid-endpoint is unset (extension omitted from
