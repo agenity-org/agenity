@@ -14,7 +14,30 @@
 set -euo pipefail
 
 IMAGE="${CHEPHERD_IMAGE:-chepherd:latest}"
+AGENT_IMAGE="${CHEPHERD_AGENT_IMAGE:-chepherd-agent:latest}"
 PORT="${CHEPHERD_PORT:-8083}"
+
+# Agent-image dependency check — the chepherd daemon spawns sibling
+# containers from ${AGENT_IMAGE}. Without it every spawn dies with
+# the misleading "fork/exec /usr/bin/claude: no such file or
+# directory" surfacing in the dashboard. Auto-rebuild if missing so
+# `podman image prune` (disk cleanup) doesn't silently break spawn.
+# Set CHEPHERD_SKIP_AGENT_IMAGE_CHECK=1 to bypass.
+if [ -z "${CHEPHERD_SKIP_AGENT_IMAGE_CHECK:-}" ]; then
+  if ! podman image exists "${AGENT_IMAGE}" 2>/dev/null; then
+    echo "→ ${AGENT_IMAGE} missing — building (was wiped by image prune, or never built)..." >&2
+    if [ -f "$(dirname "$0")/../Dockerfile.agent" ]; then
+      ( cd "$(dirname "$0")/.." && podman build -f Dockerfile.agent -t "${AGENT_IMAGE}" . ) >&2 || {
+        echo "FATAL: ${AGENT_IMAGE} build failed; spawns will fail with fork/exec errors. See above." >&2
+        exit 1
+      }
+      echo "→ ${AGENT_IMAGE} built." >&2
+    else
+      echo "FATAL: Dockerfile.agent not found and ${AGENT_IMAGE} missing — cannot proceed." >&2
+      exit 1
+    fi
+  fi
+fi
 # State dir is version-agnostic — contains operator data (vault, git
 # providers, canon, agent home dirs, embedded gitea, etc.) that
 # persists across chepherd releases.
