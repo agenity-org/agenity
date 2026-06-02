@@ -317,14 +317,13 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		// for slirp4netns gateway).
 		// Per-agent persistent home (claude session files, config).
 		"-v", hostHome+":/home/agent:rw,U",
-		// Working repo — read/write. Source is the host path; the
-		// agent sees its workdir at the original cwd (chepherd-view)
-		// since claude-code expects that string to match its prompts.
-		// ,U chowns the source dir to the agent's namespaced UID at
-		// mount time — without it, daemon-owned 0700 workspace dirs
-		// (created by resolveProviderCwd's git clone) are unreadable
-		// by the agent user. Consistent with the home-dir mount above.
-		"-v", hostCwd+":"+cwd+":rw,U",
+		// Working repo — read/write. ,U flag is conditional: SAFE on
+		// chepherd-managed workspace clones (under state-dir), FATAL
+		// on operator-owned host bind mounts (recursive chown fails
+		// on foreign-owned files like iogrid/.git/index → container
+		// stuck in Created). Heuristic: ,U only when path includes
+		// the managed workspaces/ path. Operator-hit 2026-06-02.
+		"-v", hostCwd + ":" + cwd + workspaceMountFlags(hostCwd),
 		"--workdir", cwd,
 	)
 
@@ -702,6 +701,20 @@ func mcpMounts(env []string) []string {
 //     UDP-socket-LocalAddr trick.
 //
 // Returns "" if neither mode resolves; callers default CHEPHERD_MCP_URL.
+// workspaceMountFlags returns the podman mount flags for the cwd bind.
+// Returns ":rw,U" when the source path is under chepherd's managed
+// workspaces/ tree (safe to recursive-chown), ":rw" otherwise. The latter
+// protects operator-owned host directories where ,U would fail on
+// foreign-owned files (e.g. another user's git checkout in the same
+// repos parent) and leave the container in Created status forever.
+func workspaceMountFlags(hostCwd string) string {
+	if strings.Contains(hostCwd, "/.local/state/chepherd/workspaces/") ||
+		strings.Contains(hostCwd, "/state/chepherd/workspaces/") {
+		return ":rw,U"
+	}
+	return ":rw"
+}
+
 func HostAddrForAgent() string {
 	// With sibling-container architecture, the chepherd container is
 	// reachable by name on the same podman network, OR by the host's

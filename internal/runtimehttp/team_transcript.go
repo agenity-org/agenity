@@ -34,12 +34,15 @@ package runtimehttp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/runtime"
 	"github.com/google/uuid"
@@ -637,10 +640,17 @@ func (s *Server) teamTranscriptPost(w http.ResponseWriter, r *http.Request, ch *
 		return
 	}
 
-	// Fan out to each named recipient via the existing send_to_session
-	// shim — wakes them via the knock pattern. The operator never gets
-	// a knock (they see everything in the transcript UI).
+	// Fan out to each named recipient via the A2A Deliverer — same path
+	// chepherd.send_to_session uses. Each delivery becomes a knock
+	// marker in the recipient's PTY so the agent wakes and calls
+	// chepherd.get_task to fetch the body. The operator never gets a
+	// knock (they see everything in the transcript UI).
+	//
+	// Operator-hit 2026-06-02: before this commit the loop only filtered
+	// to "delivered" status but NEVER called Deliver(); agents got no
+	// knock for operator messages.
 	delivered := []string{}
+	undelivered := []string{}
 	for _, rcpt := range recipients {
 		if rcpt == "operator" || rcpt == author {
 			continue
@@ -648,22 +658,40 @@ func (s *Server) teamTranscriptPost(w http.ResponseWriter, r *http.Request, ch *
 		if s.rt == nil {
 			continue
 		}
-		if _, info := s.rt.Get(rcpt); info != nil {
-			// Best-effort — use rt.SendToSession if wired; otherwise skip
-			// (the fan-out via A2A wire lands in Wave 2; this v1 ships
-			// the persistence + transcript view).
-			delivered = append(delivered, rcpt)
+		if _, info := s.rt.Get(rcpt); info == nil {
+			fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: skip — rt.Get returned nil\n", author, rcpt)
+			undelivered = append(undelivered, rcpt)
+			continue
 		}
+		if s.Deliverer == nil {
+			fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: skip — s.Deliverer nil (persistence-only mode)\n", author, rcpt)
+			undelivered = append(undelivered, rcpt)
+			continue
+		}
+		if _, err := s.Deliverer.Deliver(r.Context(), a2a.Message{
+			Role:      "user",
+			Kind:      "message",
+			ContextID: rcpt,
+			Parts:     []a2a.Part{{Kind: "text", Text: body}},
+			From:      author,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: Deliver err: %v\n", author, rcpt, err)
+			undelivered = append(undelivered, rcpt)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: delivered via Deliverer.Deliver\n", author, rcpt)
+		delivered = append(delivered, rcpt)
 	}
 
 	resp := map[string]any{
-		"id":         msg.ID,
-		"author":     author,
-		"body":       body,
-		"mentions":   mentions,
-		"recipients": recipients,
-		"delivered":  delivered,
-		"created_at": msg.CreatedAt,
+		"id":          msg.ID,
+		"author":      author,
+		"body":        body,
+		"mentions":    mentions,
+		"recipients":  recipients,
+		"delivered":   delivered,
+		"undelivered": undelivered,
+		"created_at":  msg.CreatedAt,
 	}
 	if routedToDefault {
 		resp["routed_to_default"] = true

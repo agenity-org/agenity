@@ -167,6 +167,14 @@ type Server struct {
 	// endpoints return 503.
 	ChannelStore persistence.ChannelRepository
 
+	// Deliverer backs the Team Transcript POST fan-out — each parsed
+	// recipient triggers an a2a.Deliver call so the addressed agents
+	// actually receive a knock. Wired from cmd/run.go's daemonDeliverer.
+	// Nil = persistence-only mode (transcript shows the message but
+	// agents don't get woken). 2026-06-02 operator hit the nil path:
+	// "they are not getting operator's messages".
+	Deliverer a2a.Deliverer
+
 	// #194 — Skill Library (10 LEAN builtins + user-defined CRUD).
 	skills *skills.Store
 
