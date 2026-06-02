@@ -47,8 +47,14 @@ RUN npm install -g opencode-ai 2>/dev/null || true
 # agent user inside is UID 1000 ≠ container root. All credentials and
 # state are provided through /run/secrets/ mounts owned via the U flag.
 RUN useradd -m -u 1000 -s /bin/bash agent \
-    && mkdir -p /home/agent/.claude/projects /run/secrets \
+    && mkdir -p /home/agent/.claude/projects /run/secrets /home/agent/.local/bin \
+    && ln -sf /usr/bin/claude /home/agent/.local/bin/claude \
     && chown -R agent:agent /home/agent
+# ↑ /home/agent/.local/bin/claude symlink quiets Claude Code 2.1.160+'s
+# self-doctor warning ("installMethod is native, but claude command not
+# found at /home/agent/.local/bin/claude"). The npm-global install lands
+# at /usr/bin/claude → symlink keeps both paths valid + the self-check
+# happy without changing the actual install method.
 
 # Entrypoint: link /run/secrets/claude-credentials to ~/.claude/.credentials.json
 # so claude-code can find it at its hardcoded path. The mount is provided by

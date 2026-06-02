@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -184,6 +185,16 @@ func (s *Server) teamMessagesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) teamTranscriptGet(w http.ResponseWriter, r *http.Request, ch *persistence.Channel) {
+	// Merge BOTH sources of agent communication into the unified
+	// transcript so the operator sees every message in one pane:
+	//
+	//   1. ChannelMessage (operator-initiated via POST /api/v1/teams/.../messages)
+	//   2. TaskStore (every chepherd.send_to_session knock + A2A message/send)
+	//
+	// Without this merge, agent↔agent comms via send_to_session land
+	// in TaskStore but are invisible to the operator. Operator complaint
+	// 2026-06-02: "I just had a conversation but I don't see anything
+	// in A2A inbox or Team Transcript".
 	msgs, err := s.ChannelStore.Messages(r.Context(), ch.ID, 100)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -200,6 +211,76 @@ func (s *Server) teamTranscriptGet(w http.ResponseWriter, r *http.Request, ch *p
 			CreatedAt:  m.CreatedAt,
 		})
 	}
+	// Merge in A2A tasks (agent↔agent + human↔agent comms via
+	// chepherd.send_to_session / A2A message/send). Each Task carries
+	// the sender's @-handle in the input Message's From field (set by
+	// the MCP send_to_session shim) and the recipient in contextId
+	// (the runner sid which is the recipient's @-handle for short
+	// names, or the long sid). Decode input.parts[].text for the body.
+	if s.TaskStore != nil {
+		tasks, err := s.TaskStore.List(r.Context(), persistence.TaskListOpts{Limit: 200})
+		if err == nil {
+			for _, t := range tasks {
+				if len(t.InputBlob) == 0 {
+					continue
+				}
+				// The persisted InputBlob is the A2A Message envelope
+				// at the ROOT level (not nested under .message) — fields
+				// are role/contextId/parts/kind directly.
+				var msg struct {
+					Role      string `json:"role"`
+					ContextID string `json:"contextId"`
+					Parts     []struct {
+						Kind string `json:"kind"`
+						Text string `json:"text"`
+					} `json:"parts"`
+				}
+				if err := json.Unmarshal(t.InputBlob, &msg); err != nil {
+					continue
+				}
+				// Extract body from text parts (best effort).
+				var body string
+				for _, p := range msg.Parts {
+					if p.Kind == "text" {
+						body = p.Text
+						break
+					}
+				}
+				if body == "" {
+					continue
+				}
+				// A2A spec: role="user" means inbound-to-runner. The
+				// actual sender's @-handle lives in the From field which
+				// is json:"-" (non-serialized — chepherd-internal only).
+				// Best we can do here is label by role: "user" = an
+				// external caller (operator or peer agent). For richer
+				// attribution, send_to_session would need to also write
+				// a ChannelMessage row with the resolved From handle —
+				// follow-up work.
+				author := msg.Role
+				if author == "" {
+					author = "?"
+				}
+				rcpt := msg.ContextID
+				if rcpt == "" {
+					rcpt = t.RunnerSID
+				}
+				rows = append(rows, transcriptRow{
+					ID:         "task:" + t.ID,
+					Author:     author,
+					Body:       body,
+					Recipients: []string{rcpt},
+					CreatedAt:  t.CreatedAt,
+				})
+			}
+		}
+	}
+
+	// Sort merged rows newest-first by CreatedAt for consistent display.
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+	})
+
 	// also list current members so the UI can show the team roster
 	members, _ := s.ChannelStore.Members(r.Context(), ch.ID)
 	memberNames := make([]string, 0, len(members))
