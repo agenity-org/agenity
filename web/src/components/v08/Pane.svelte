@@ -11,9 +11,7 @@
   import WidgetSessionList from './widgets/WidgetSessionList.svelte';
   import WidgetSessionBoard from './widgets/WidgetSessionBoard.svelte';
   import WidgetCard from './widgets/WidgetCard.svelte';
-  import WidgetInbox from './widgets/WidgetInbox.svelte';
   import WidgetFederation from './widgets/WidgetFederation.svelte';
-  import WidgetA2AInbox from './widgets/WidgetA2AInbox.svelte';
   import TeamTranscript from '../TeamTranscript.svelte';
   import WidgetMultiHostWorkspace from './widgets/WidgetMultiHostWorkspace.svelte';
   import WidgetEvents from './widgets/WidgetEvents.svelte';
@@ -247,7 +245,6 @@
     'agent-identity': 'ⓘ identity',
     'agent-runtime': '⚙ runtime',
     'shepherd-assessment-card': '✻ scorecard',
-    'inbox': '✉ inbox',
     'events': '⏱ events',
     'mcp-log': '🔧 MCP log',
     'canon-viewer': '📜 canon',
@@ -257,7 +254,6 @@
     'accounts': '⚓ accounts',
     'role-matrix': '🎮 roles',
     'federation': '⇄ federation',
-    'a2a-inbox': '◈ A2A inbox',
     'multi-host': '⛓ multi-host',
     'team-transcript': '💬 team transcript',
   };
@@ -432,8 +428,6 @@
         <WidgetAgentRuntime agent={(sessions || []).find(s => s.name === selectedAgent) || null} />
       {:else if node.widget === 'shepherd-assessment-card'}
         <WidgetSpider {selectedAgent} {sessions} />
-      {:else if node.widget === 'inbox'}
-        <WidgetInbox {inbox} />
       {:else if node.widget === 'events'}
         <WidgetEvents {events} />
       {:else if node.widget === 'mcp-log'}
@@ -450,14 +444,20 @@
         <WidgetAccounts />
       {:else if node.widget === 'federation'}
         <WidgetFederation />
-      {:else if node.widget === 'a2a-inbox'}
-        <WidgetA2AInbox />
       {:else if node.widget === 'team-transcript'}
         <TeamTranscript team={node.config?.team || 'default'} />
       {:else if node.widget === 'multi-host'}
         <WidgetMultiHostWorkspace />
       {:else if node.widget === 'role-matrix'}
         <WidgetRoleMatrix />
+      {:else if node.widget === 'inbox' || node.widget === 'a2a-inbox'}
+        <!-- #666 — removed widgets. Graceful degradation for saved layouts
+             that still reference them. Team Transcript subsumes both. -->
+        <div class="empty removed">
+          <p><strong>Widget no longer available</strong></p>
+          <p>The <code>{node.widget}</code> widget has been removed — the Team Transcript subsumes both A2A inbox and user inbox.</p>
+          <p>Right-click this tab → change widget → pick <strong>team transcript</strong> (or any other).</p>
+        </div>
       {:else}
         <div class="empty">widget: {node.widget}</div>
       {/if}
@@ -677,4 +677,7 @@
   .chip.ctx { background: rgba(135, 206, 235, 0.15); color: var(--accent-2); }
   .pane-body { flex: 1; overflow: hidden; min-height: 0; }
   .empty { color: var(--fg-faint); padding: 1rem; text-align: center; font-size: 0.85rem; }
+  .empty.removed { color: var(--fg-muted); padding: 1.25rem; font-size: 0.82rem; }
+  .empty.removed p { margin: 0.35rem 0; }
+  .empty.removed code { background: var(--bg-elev); padding: 0.05rem 0.3rem; border-radius: 3px; }
 </style>

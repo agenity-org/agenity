@@ -101,13 +101,12 @@
             kind: 'h', ratio: 0.5,
             a: { kind: 'pane', id: 'p_transcript', widget: 'team-transcript', config: { team: 'default' } },
             b: {
-              kind: 'h', ratio: 0.34,
+              kind: 'h', ratio: 0.5,
+              // #666 — A2A inbox + user inbox removed; Team Transcript
+              // subsumes both. Bottom band collapses to federation +
+              // multi-host (the remaining v0.9.3 cross-instance surfaces).
               a: { kind: 'pane', id: 'p_fed', widget: 'federation', config: {} },
-              b: {
-                kind: 'h', ratio: 0.5,
-                a: { kind: 'pane', id: 'p_a2a', widget: 'a2a-inbox', config: {} },
-                b: { kind: 'pane', id: 'p_mh', widget: 'multi-host', config: {} },
-              },
+              b: { kind: 'pane', id: 'p_mh', widget: 'multi-host', config: {} },
             },
           },
         },
@@ -117,7 +116,9 @@
           b: {
             kind: 'v', ratio: 0.55,
             a: { kind: 'pane', id: 'p5', widget: 'shepherd-assessment-card', config: {} },
-            b: { kind: 'pane', id: 'p6', widget: 'inbox', config: {} },
+            // #666 — was 'inbox' (user inbox) widget; Team Transcript
+            // subsumes h↔a + a↔a + multi-recipient in one view.
+            b: { kind: 'pane', id: 'p6', widget: 'team-transcript', config: { team: 'default' } },
           },
         },
       },
