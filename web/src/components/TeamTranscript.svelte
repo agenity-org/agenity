@@ -17,9 +17,24 @@
   let composeError = $state('');
   let lastFetchError = $state('');
   let messagesEl = $state(null);
+  let composeEl = $state(null);
   let lastMessageCount = $state(0);
   let userScrolledUp = $state(false);
   let expanded = $state({});         // {msgId: bool} for show-more bodies
+
+  // @-autocomplete state (#664)
+  let mentionOpen = $state(false);
+  let mentionQuery = $state('');     // text after the @ up to the caret
+  let mentionStart = $state(-1);     // index in composeBody of the '@'
+  let mentionIndex = $state(0);      // highlighted item index
+
+  // Role aliases — surfaced in autocomplete so the operator can ping by role
+  // even when they don't remember the exact agent handle. Backend resolves
+  // these via resolveTeamLead / role lookups.
+  const ROLE_ALIASES = [
+    'tech-lead', 'scrum-master', 'orchestrator', 'architect',
+    'worker', 'reviewer', 'qa', 'frontend', 'backend',
+  ];
 
   const API = '/api/v1';
 
@@ -97,6 +112,7 @@
         return;
       }
       composeBody = '';
+      mentionOpen = false;
       await refresh();
     } catch (e) {
       composeError = e?.message || 'send failed';
@@ -175,12 +191,127 @@
     return body.slice(0, cut) + (body.length > cut ? '…' : '');
   }
 
-  // Compose keys: Enter sends, Shift+Enter newline (Slack-style).
+  // ── @-autocomplete (#664) ────────────────────────────────────────────
+  // List of candidate handles: live agents from channel.members + role
+  // aliases + the two magic broadcast tokens.
+  const mentionCandidates = $derived.by(() => {
+    const live = (transcript.channel?.members || []).slice();
+    // Also surface members of OTHER teams in 'all' scope by scraping
+    // recent message authors/recipients — best-effort, no extra fetch.
+    const seen = new Set(live);
+    for (const m of (transcript.messages || [])) {
+      if (m.author && !seen.has(m.author) && m.author !== 'operator') {
+        seen.add(m.author); live.push(m.author);
+      }
+      for (const r of (m.recipients || [])) {
+        if (!seen.has(r)) { seen.add(r); live.push(r); }
+      }
+    }
+    const aliases = ROLE_ALIASES.filter(a => !seen.has(a));
+    return [...live, ...aliases, 'everyone', 'all-teams'];
+  });
+
+  const mentionFiltered = $derived.by(() => {
+    if (!mentionOpen) return [];
+    const q = (mentionQuery || '').toLowerCase();
+    if (!q) return mentionCandidates.slice(0, 8);
+    return mentionCandidates.filter(c => c.toLowerCase().startsWith(q)).slice(0, 8);
+  });
+
+  // Re-evaluate whether the autocomplete should be open based on the
+  // caret position + current composeBody contents.
+  function updateMentionState() {
+    if (!composeEl) { mentionOpen = false; return; }
+    const caret = composeEl.selectionStart ?? composeBody.length;
+    // Walk back from caret to find the most recent '@'. Stop at whitespace
+    // or a non-mention character — autocomplete only fires for fresh tokens.
+    let i = caret - 1;
+    while (i >= 0) {
+      const ch = composeBody[i];
+      if (ch === '@') break;
+      if (/[\s,;]/.test(ch)) { i = -1; break; }
+      // Allow letters/digits/_-
+      if (!/[a-zA-Z0-9_-]/.test(ch)) { i = -1; break; }
+      i--;
+    }
+    if (i < 0) { mentionOpen = false; return; }
+    // The '@' must be at start-of-string or follow whitespace/punctuation —
+    // otherwise it's an email address or similar.
+    if (i > 0 && !/[\s(,;]/.test(composeBody[i - 1])) {
+      mentionOpen = false; return;
+    }
+    mentionStart = i;
+    mentionQuery = composeBody.slice(i + 1, caret);
+    mentionOpen = true;
+    mentionIndex = 0;
+  }
+
+  function acceptMention(handle) {
+    if (mentionStart < 0 || !composeEl) return;
+    const caret = composeEl.selectionStart ?? composeBody.length;
+    const before = composeBody.slice(0, mentionStart);
+    const after = composeBody.slice(caret);
+    const insert = '@' + handle + ' ';
+    composeBody = before + insert + after;
+    mentionOpen = false;
+    mentionQuery = '';
+    mentionStart = -1;
+    // Restore caret to just after the inserted token+space.
+    const newCaret = (before + insert).length;
+    setTimeout(() => {
+      if (composeEl) {
+        composeEl.focus();
+        composeEl.setSelectionRange(newCaret, newCaret);
+      }
+    }, 0);
+  }
+
+  // Compose keys: Enter sends, Shift+Enter newline (Slack-style). When the
+  // mention popup is open, ArrowUp/Down navigate, Enter/Tab accept, Esc
+  // closes (intercepts the keys before they hit the textarea).
   function handleKeydown(e) {
+    if (mentionOpen && mentionFiltered.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        mentionIndex = (mentionIndex + 1) % mentionFiltered.length;
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        mentionIndex = (mentionIndex - 1 + mentionFiltered.length) % mentionFiltered.length;
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        acceptMention(mentionFiltered[mentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        mentionOpen = false;
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       send();
     }
+  }
+
+  function handleInput() {
+    // After the textarea has updated composeBody (bind:value already fired),
+    // re-evaluate the mention popup.
+    updateMentionState();
+  }
+
+  function handleClickOrSelect() {
+    // Caret moved without typing — close popup if we drifted off the token.
+    updateMentionState();
+  }
+
+  function handleBlur() {
+    // Give the popup-click a chance to fire before closing.
+    setTimeout(() => { mentionOpen = false; }, 150);
   }
 
   onMount(() => {
@@ -261,13 +392,32 @@
   </div>
 
   <footer class="compose">
-    <textarea
-      bind:value={composeBody}
-      placeholder="Type a message — @-mention to ping specific agents (e.g., @tech-lead) or @everyone for broadcast. Enter sends · Shift+Enter newline."
-      onkeydown={handleKeydown}
-      disabled={composeSending}
-      data-testid="transcript-compose"
-    ></textarea>
+    <div class="compose-wrap">
+      <textarea
+        bind:this={composeEl}
+        bind:value={composeBody}
+        placeholder="Type a message — @-mention to ping specific agents (e.g., @tech-lead) or @everyone for broadcast. Enter sends · Shift+Enter newline."
+        onkeydown={handleKeydown}
+        oninput={handleInput}
+        onclick={handleClickOrSelect}
+        onkeyup={handleClickOrSelect}
+        onblur={handleBlur}
+        disabled={composeSending}
+        data-testid="transcript-compose"
+      ></textarea>
+      {#if mentionOpen && mentionFiltered.length > 0}
+        <ul class="mention-popup" data-testid="mention-popup">
+          {#each mentionFiltered as cand, i}
+            <li
+              class:active={i === mentionIndex}
+              data-testid="mention-item"
+              onmousedown={(e) => { e.preventDefault(); acceptMention(cand); }}
+              onmouseenter={() => mentionIndex = i}
+            >@{cand}</li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
     <div class="compose-meta">
       {#if previewWillWake > 0}
         <span class="cost-preview">
@@ -336,7 +486,20 @@
   .empty { color: var(--fg-muted, #888); font-size: 0.85rem; }
   .err { color: #e74c3c; font-size: 0.8rem; }
   .compose { border-top: 1px solid var(--border, #2a2a2a); padding: 0.7rem 1rem; }
+  .compose-wrap { position: relative; }
   .compose textarea { width: 100%; box-sizing: border-box; min-height: 3.5rem; padding: 0.45rem 0.6rem; background: var(--bg-elevated, #1a1a1a); color: var(--fg, #f5f5f5); border: 1px solid var(--border, #2a2a2a); border-radius: 4px; font: inherit; font-family: ui-monospace, monospace; font-size: 0.85rem; resize: vertical; }
+  .mention-popup {
+    position: absolute; left: 0.4rem; bottom: calc(100% + 0.2rem);
+    list-style: none; margin: 0; padding: 0.25rem 0;
+    background: var(--bg-elevated, #1a1a1a);
+    border: 1px solid var(--border, #2a2a2a); border-radius: 6px;
+    min-width: 12rem; max-height: 14rem; overflow-y: auto;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    font-family: ui-monospace, monospace; font-size: 0.82rem;
+    z-index: 50;
+  }
+  .mention-popup li { padding: 0.25rem 0.7rem; cursor: pointer; color: var(--fg, #f5f5f5); }
+  .mention-popup li.active, .mention-popup li:hover { background: rgba(135,206,235,0.18); color: var(--accent-2, #87ceeb); }
   .compose-meta { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.4rem; }
   .cost-preview { color: var(--fg-muted, #888); font-size: 0.78rem; flex: 1; }
   .cost-preview.muted { color: var(--fg-muted, #666); }
