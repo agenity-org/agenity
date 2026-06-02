@@ -350,6 +350,27 @@
     selectedScope === 'all' ? '' : (leadTargets[selectedScope] || '')
   );
 
+  // ── Per-row alert-kind styling (#667) ────────────────────────────────
+  function kindClass(m) {
+    const k = (m && m.kind) || '';
+    if (k === 'alert:failure') return 'alert-failure';
+    if (k === 'alert:stuck') return 'alert-stuck';
+    if (k === 'alert:question') return 'alert-question';
+    if (k === 'alert:accomplishment') return 'alert-accomplishment';
+    return '';
+  }
+  function kindLabel(m) {
+    const k = (m && m.kind) || '';
+    if (!k || k === 'message' || !k.startsWith('alert:')) return '';
+    const bare = k.slice('alert:'.length);
+    const icon =
+      bare === 'failure' ? '⛔' :
+      bare === 'stuck' ? '⏸' :
+      bare === 'question' ? '⚠' :
+      bare === 'accomplishment' ? '✅' : '•';
+    return `${icon} ${bare}`;
+  }
+
   onMount(() => {
     loadTeams();
     refresh();
@@ -394,7 +415,7 @@
     {#each groupedMessages as [day, msgs]}
       <div class="day-divider">── {day} ──</div>
       {#each msgs as m (m.id)}
-        <article class="msg">
+        <article class="msg {kindClass(m)}" data-testid="transcript-row" data-kind={m.kind || 'message'}>
           <div class="row1">
             {#if selectedScope === 'all' && m.team}
               <span class="team-chip" style="background: {teamColor(m.team)}">{m.team}</span>
@@ -402,6 +423,9 @@
             <span class="chip from">@{m.author}</span>
             <span class="arrow">→</span>
             <span class="chip to" title={(m.recipients || []).join(', ')}>{recipientLabel(m)}</span>
+            {#if kindLabel(m)}
+              <span class="kind-label kind-{(m.kind || '').replace('alert:', '')}">{kindLabel(m)}</span>
+            {/if}
             <span class="ts">{relTime(m.created_at)}</span>
             {#if m.recipients && m.recipients.length > 1}
               <span class="badge multi">multi ({m.recipients.length})</span>
@@ -507,8 +531,17 @@
   .members { color: var(--fg-muted, #888); font-size: 0.78rem; flex: 1; }
   .messages { flex: 1; overflow-y: auto; padding: 0.8rem 1rem; }
   .day-divider { color: var(--fg-muted, #666); font-size: 0.75rem; text-align: center; margin: 0.8rem 0 0.5rem; }
-  .msg { margin-bottom: 0.85rem; }
+  .msg { margin-bottom: 0.85rem; padding-left: 0.5rem; border-left: 3px solid transparent; }
+  .msg.alert-failure { border-left-color: #e74c3c; background: rgba(231,76,60,0.04); }
+  .msg.alert-stuck { border-left-color: #f39c12; background: rgba(243,156,18,0.04); }
+  .msg.alert-question { border-left-color: #f1c40f; background: rgba(241,196,15,0.04); }
+  .msg.alert-accomplishment { border-left-color: #5cd57f; background: rgba(92,213,127,0.04); }
   .row1 { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
+  .kind-label { font-size: 0.72rem; font-weight: 600; padding: 0.05rem 0.4rem; border-radius: 3px; text-transform: lowercase; }
+  .kind-label.kind-failure { background: rgba(231,76,60,0.18); color: #e74c3c; }
+  .kind-label.kind-stuck { background: rgba(243,156,18,0.18); color: #f39c12; }
+  .kind-label.kind-question { background: rgba(241,196,15,0.18); color: #f1c40f; }
+  .kind-label.kind-accomplishment { background: rgba(92,213,127,0.18); color: #5cd57f; }
   .team-chip {
     color: #0a0a0a; font-weight: 700; font-size: 0.7rem;
     padding: 0.08rem 0.45rem; border-radius: 3px; text-transform: lowercase;
