@@ -1407,7 +1407,16 @@ func (r *Runtime) UpsertSessionInfoForTest(info *SessionInfo) {
 	if r.info == nil {
 		r.info = map[string]*SessionInfo{}
 	}
+	if r.byName == nil {
+		r.byName = map[string]string{}
+	}
 	r.info[info.ID] = info
+	// Mirror name → ID so JoinTeam (which validates against byName) and
+	// other byName-keyed lookups (Get, Pause, Stop) work in tests that
+	// inject SessionInfo without going through Spawn. Idempotent.
+	if info.Name != "" {
+		r.byName[info.Name] = info.ID
+	}
 }
 
 func (r *Runtime) List() []*SessionInfo {

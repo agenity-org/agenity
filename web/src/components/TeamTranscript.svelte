@@ -29,6 +29,9 @@
   let mentionIndex = $state(0);      // highlighted item index
   let leadTargets = $state({});      // { teamName: leadHandle } populated lazily (#662)
 
+  // Ticket-filter state (#665) — set when kanban dispatches chepherd-transcript-filter
+  let ticketFilter = $state(null);   // { repo, num } or null
+
   // Role aliases — surfaced in autocomplete so the operator can ping by role
   // even when they don't remember the exact agent handle. Backend resolves
   // these via resolveTeamLead / role lookups.
@@ -59,22 +62,52 @@
 
   async function refresh() {
     try {
-      // 'all' scope fetches every team's transcript and merges.
-      // For now backend doesn't have a multi-team endpoint; iterate.
+      // 'all' scope: prefer the multi-team transcript endpoint that returns
+      // pre-tagged rows + per-row team_github_url (#665 backend contract);
+      // fall back to per-team iteration when the endpoint isn't live yet.
       let merged = { channel: { name: selectedScope, members: [] }, messages: [] };
-      const scopes = selectedScope === 'all' ? (teams.length ? teams : [team]) : [selectedScope];
-      const allMsgs = [];
-      for (const s of scopes) {
-        const r = await fetch(`${API}/teams/${encodeURIComponent(s)}/messages`);
-        if (!r.ok) continue;
-        const text = await r.text();
+      if (selectedScope === 'all') {
         try {
-          const j = JSON.parse(text);
-          (j.messages || []).forEach(m => allMsgs.push({ ...m, team: s }));
-          if (selectedScope !== 'all' && j.channel) merged.channel = j.channel;
+          const r = await fetch(`${API}/transcript?teams=all`);
+          if (r.ok) {
+            const j = await r.json();
+            if (Array.isArray(j.messages)) {
+              merged.messages = j.messages;
+              const grew = merged.messages.length > lastMessageCount;
+              transcript = merged;
+              lastMessageCount = merged.messages.length;
+              if (grew && !userScrolledUp) {
+                setTimeout(() => { if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight; }, 50);
+              }
+              lastFetchError = '';
+              return;
+            }
+          }
         } catch {}
+        // Fallback: iterate per-team.
+        const scopes = teams.length ? teams : [team];
+        const allMsgs = [];
+        for (const s of scopes) {
+          const r = await fetch(`${API}/teams/${encodeURIComponent(s)}/messages`);
+          if (!r.ok) continue;
+          const text = await r.text();
+          try {
+            const j = JSON.parse(text);
+            (j.messages || []).forEach(m => allMsgs.push({ ...m, team: s }));
+          } catch {}
+        }
+        merged.messages = allMsgs;
+      } else {
+        const r = await fetch(`${API}/teams/${encodeURIComponent(selectedScope)}/messages`);
+        if (r.ok) {
+          const text = await r.text();
+          try {
+            const j = JSON.parse(text);
+            (j.messages || []).forEach(m => merged.messages.push({ ...m, team: selectedScope }));
+            if (j.channel) merged.channel = j.channel;
+          } catch {}
+        }
       }
-      merged.messages = allMsgs;
       const grew = merged.messages.length > lastMessageCount;
       transcript = merged;
       lastMessageCount = merged.messages.length;
@@ -131,9 +164,16 @@
   const previewTokens = $derived(previewWillWake * 400);
   const previewCost = $derived((previewTokens * 0.000015).toFixed(4));
 
-  // Sort + group messages
+  // Sort + group messages (with optional ticket-filter from kanban click, #665)
+  const filteredMessages = $derived.by(() => {
+    const all = (transcript.messages || []).slice();
+    if (!ticketFilter || !ticketFilter.num) return all;
+    // Word-boundary-ish match: #N not followed by another digit
+    const re = new RegExp(`#${ticketFilter.num}(?!\\d)`);
+    return all.filter(m => re.test(m.body || ''));
+  });
   const sortedMessages = $derived.by(() => {
-    return (transcript.messages || [])
+    return filteredMessages
       .slice()
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   });
@@ -157,20 +197,48 @@
   }
 
   // Body rendering: @-mention highlight + #-ticket auto-link.
-  // Tickets resolve against the team's github_url (auto-derived from
-  // any team member's spawn-time clone_url; same source the kanban widget
-  // already uses). For 'all' scope we use the message's own team.
+  // Per-row team_github_url (backend #665/#662 contract) drives the repo
+  // for #-ticket links; falls back to the chepherd repo for legacy rows
+  // that don't carry the field.
+  function repoForMsg(m) {
+    if (m && m.team_github_url) {
+      return m.team_github_url.replace(/\/+$/, '');
+    }
+    return 'https://github.com/chepherd/chepherd';
+  }
+
   function renderBody(m) {
     let html = m.body || '';
     // escape minimal HTML
     html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     // @mention
     html = html.replace(/@([a-zA-Z][a-zA-Z0-9_-]*)/g, '<span class="mention">@$1</span>');
-    // #ticket — best-effort link to GitHub (the team's repo). Kanban
-    // widget knows the real per-team repo; here we default to the
-    // chepherd repo until per-team repo prop is threaded through.
-    html = html.replace(/#(\d+)\b/g, '<a class="ticket" href="https://github.com/chepherd/chepherd/issues/$1" target="_blank" rel="noopener">#$1 ↗</a>');
+    // #ticket — link to GitHub. Use data-ticket attrs so the click
+    // handler can intercept and dispatch chepherd-ticket-focus (#665)
+    // alongside the GitHub navigation.
+    const repo = repoForMsg(m);
+    html = html.replace(/#(\d+)\b/g, (_match, num) => {
+      const url = `${repo}/issues/${num}`;
+      return `<a class="ticket" href="${url}" target="_blank" rel="noopener" data-ticket-num="${num}" data-ticket-repo="${repo}">#${num} ↗</a>`;
+    });
     return html;
+  }
+
+  // Intercept clicks inside the message body so #-ticket clicks ALSO emit
+  // the chepherd-ticket-focus event (kanban listens, scrolls to card). We
+  // don't preventDefault — the link still opens in a new tab — but the
+  // event fires for the in-dashboard kanban link (#665).
+  function onMessagesClick(e) {
+    const a = e.target?.closest?.('a.ticket');
+    if (!a) return;
+    const num = parseInt(a.getAttribute('data-ticket-num') || '0', 10);
+    const repo = a.getAttribute('data-ticket-repo') || '';
+    if (!num) return;
+    try {
+      window.dispatchEvent(new CustomEvent('chepherd-ticket-focus', {
+        detail: { repo, num },
+      }));
+    } catch {}
   }
 
   function recipientLabel(m) {
@@ -375,7 +443,19 @@
     loadTeams();
     refresh();
     const id = setInterval(refresh, 5000);
-    return () => clearInterval(id);
+
+    // Listen for kanban → transcript filter requests (#665).
+    const onFilter = (ev) => {
+      const d = ev.detail || {};
+      if (!d.num) return;
+      ticketFilter = { repo: d.repo || '', num: d.num };
+    };
+    window.addEventListener('chepherd-transcript-filter', onFilter);
+
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('chepherd-transcript-filter', onFilter);
+    };
   });
 
   // When the user changes scope via the dropdown, refresh immediately
@@ -411,7 +491,14 @@
     </div>
   </header>
 
-  <div class="messages" bind:this={messagesEl} onscroll={onScroll}>
+  {#if ticketFilter && ticketFilter.num}
+    <div class="filter-chip" data-testid="transcript-filter-chip">
+      filtering <strong>#{ticketFilter.num}</strong>
+      <button class="x" onclick={() => ticketFilter = null} title="Clear filter">×</button>
+    </div>
+  {/if}
+
+  <div class="messages" bind:this={messagesEl} onscroll={onScroll} onclick={onMessagesClick}>
     {#each groupedMessages as [day, msgs]}
       <div class="day-divider">── {day} ──</div>
       {#each msgs as m (m.id)}
@@ -438,7 +525,7 @@
           {/if}
           {#if isLong(m.body) && !expanded[m.id]}
             <div class="body">
-              {@html renderBody({ body: preview(m.body) })}
+              {@html renderBody({ body: preview(m.body), team_github_url: m.team_github_url })}
               <button class="expand" onclick={() => expanded = { ...expanded, [m.id]: true }}>▾ show more</button>
             </div>
           {:else}
@@ -529,6 +616,14 @@
     padding: 0.25rem 0.5rem; font: inherit; font-size: 0.88rem;
   }
   .members { color: var(--fg-muted, #888); font-size: 0.78rem; flex: 1; }
+  .filter-chip {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.35rem 1rem; background: rgba(135,206,235,0.10);
+    border-bottom: 1px solid var(--border, #2a2a2a);
+    color: var(--accent-2, #87ceeb); font-size: 0.8rem;
+  }
+  .filter-chip .x { background: transparent; border: 0; color: inherit; font-size: 1.05rem; cursor: pointer; padding: 0 0.3rem; }
+  .filter-chip .x:hover { color: #fff; }
   .messages { flex: 1; overflow-y: auto; padding: 0.8rem 1rem; }
   .day-divider { color: var(--fg-muted, #666); font-size: 0.75rem; text-align: center; margin: 0.8rem 0 0.5rem; }
   .msg { margin-bottom: 0.85rem; padding-left: 0.5rem; border-left: 3px solid transparent; }
@@ -560,7 +655,7 @@
   .routed-sub .mention { color: var(--accent-2, #87ceeb); font-weight: 600; }
   .body { padding: 0.35rem 0.6rem 0.35rem 0.8rem; background: var(--bg-elevated, #131313); border-left: 2px solid var(--border, #2a2a2a); border-radius: 0 4px 4px 0; white-space: pre-wrap; word-break: break-word; font-size: 0.88rem; }
   .body :global(.mention) { color: var(--accent-2, #87ceeb); font-weight: 600; }
-  .body :global(.ticket) { color: #ffb86c; text-decoration: none; font-weight: 600; }
+  .body :global(.ticket) { color: #ffb86c; text-decoration: none; font-weight: 600; cursor: pointer; }
   .body :global(.ticket:hover) { text-decoration: underline; }
   .expand {
     display: inline-block; margin-top: 0.2rem; padding: 0.05rem 0.4rem;

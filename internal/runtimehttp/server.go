@@ -263,6 +263,10 @@ func (s *Server) Handler() http.Handler {
 	// v0.6 unified-model endpoints
 	mux.HandleFunc("/api/v1/teams", s.teamsHandler)
 	mux.HandleFunc("/api/v1/teams/", s.teamByName)
+	// #668 — multi-team merged transcript endpoint. Replaces N per-team
+	// fetches with one round-trip for the frontend's "all" scope. Each
+	// row carries its team tag so the UI can render cross-team feeds.
+	mux.HandleFunc("/api/v1/transcript", s.transcriptMultiTeamHandler)
 	mux.HandleFunc("/api/v1/memberships", s.membershipsHandler)
 	mux.HandleFunc("/api/v1/reviews/", s.reviewsByTarget)
 	mux.HandleFunc("/api/v1/workspaces", s.workspacesHandler)
@@ -2021,6 +2025,29 @@ func (s *Server) teamByName(w http.ResponseWriter, r *http.Request) {
 	// Sub-resource: /api/v1/teams/{name}/messages — Team Transcript (#657)
 	if sub == "messages" {
 		s.teamMessagesHandler(w, r)
+		return
+	}
+	// Sub-resource: /api/v1/teams/{name}/ticket-mentions — per-ticket
+	// counts for the kanban "💬 N" badge (#665 BE).
+	if sub == "ticket-mentions" {
+		s.ticketMentionsHandler(w, r, name)
+		return
+	}
+	// Sub-resource: /api/v1/teams/{name}/lead — resolved lead @-handle
+	// for the team (#662 default-route compose hint). Frontend calls this
+	// lazily on team-picker change so the compose box can render
+	// "→ default: @<lead>" before the operator types.
+	if sub == "lead" {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+			return
+		}
+		lead := s.resolveTeamLead(name)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"team": name,
+			"lead": lead,
+			"role": s.resolveTeamLeadRole(name, lead),
+		})
 		return
 	}
 	// Sub-resource: /api/v1/teams/{name}/canon — view + edit team CLAUDE.md.

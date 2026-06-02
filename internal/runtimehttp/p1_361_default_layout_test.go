@@ -40,9 +40,14 @@ func TestP1_361_DefaultLayout_IncludesV093Widgets(t *testing.T) {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	src := string(body)
+	// #666 (2026-06-02) — the standalone A2A Inbox widget was removed
+	// after Team Transcript subsumed agent↔agent comms. The default
+	// layout still surfaces federation + multi-host + team-transcript
+	// (the new home for A2A traffic) so the original intent of #361
+	// (no right-click pane-picking) holds for v0.9.4.
 	for _, want := range []string{
 		"widget: 'federation'",
-		"widget: 'a2a-inbox'",
+		"widget: 'team-transcript'",
 		"widget: 'multi-host'",
 	} {
 		if !strings.Contains(src, want) {
