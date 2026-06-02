@@ -63,6 +63,7 @@ var (
 	flagQuiet        = flag.Bool("quiet", false, "suppress per-poll heartbeat logs")
 	flagRegister     = flag.Bool("register", true, "register with the daemon's peer registry on startup + heartbeat every 30s (#669)")
 	flagHeartbeatInt = flag.Duration("heartbeat", 30*time.Second, "heartbeat interval (server TTL is 90s per #669 DoD)")
+	flagAdvertise    = flag.String("advertise-url", "", "URL the daemon should use to reach this peer (overrides http://<listen>/...). Set when daemon runs in a different network namespace (e.g. containerised daemon → use host.containers.internal:PORT).")
 )
 
 // AgentCard mirrors the A2A v1.0 spec shape served at
@@ -308,10 +309,14 @@ func postAck(author, body string) error {
 // backend Deliverer dereferences to discover this peer's /jsonrpc URL
 // from the served AgentCard.
 func registerPeer() error {
+	base := *flagAdvertise
+	if base == "" {
+		base = "http://" + *flagListen
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"name":           *flagName,
 		"team":           *flagTeam,
-		"agent_card_url": "http://" + *flagListen + "/.well-known/agent-card.json",
+		"agent_card_url": base + "/.well-known/agent-card.json",
 	})
 	req, _ := http.NewRequest("POST",
 		*flagDaemon+"/api/v1/peers/register",
