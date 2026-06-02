@@ -13,6 +13,9 @@
   let composeSending = $state(false);
   let composeError = $state('');
   let lastFetchError = $state('');
+  let messagesEl = $state(null);
+  let lastMessageCount = $state(0);
+  let userScrolledUp = $state(false);
 
   const API = '/api/v1';
 
@@ -26,11 +29,28 @@
         lastFetchError = msg;
         return;
       }
-      transcript = JSON.parse(text);
+      const next = JSON.parse(text);
+      const grew = (next.messages?.length || 0) > lastMessageCount;
+      transcript = next;
+      lastMessageCount = next.messages?.length || 0;
+      // Auto-scroll to bottom only if user hasn't scrolled up to read history
+      if (grew && !userScrolledUp) {
+        setTimeout(() => {
+          if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+        }, 50);
+      }
       lastFetchError = '';
     } catch (e) {
       lastFetchError = e?.message || 'fetch failed';
     }
+  }
+
+  // Track whether user has scrolled away from the bottom (so we don't
+  // yank them back when new messages arrive while they're reading older).
+  function onScroll() {
+    if (!messagesEl) return;
+    const atBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 40;
+    userScrolledUp = !atBottom;
   }
 
   async function send() {
@@ -69,15 +89,24 @@
   const previewTokens = $derived(previewWillWake * 400); // rough estimate
   const previewCost = $derived((previewTokens * 0.000015).toFixed(4));
 
-  // Group messages by day for the divider headers
+  // Sort messages oldest→newest so chat reads top-to-bottom with the
+  // newest at the bottom (Slack-style). Backend may return either order
+  // — explicit client-side sort makes the UI deterministic.
+  const sortedMessages = $derived.by(() => {
+    return (transcript.messages || [])
+      .slice()
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  });
+
+  // Group by day (chronological day order; oldest day first).
   const groupedMessages = $derived.by(() => {
-    const groups = {};
-    for (const m of (transcript.messages || [])) {
+    const groups = new Map();
+    for (const m of sortedMessages) {
       const day = new Date(m.created_at).toLocaleDateString();
-      groups[day] = groups[day] || [];
-      groups[day].push(m);
+      if (!groups.has(day)) groups.set(day, []);
+      groups.get(day).push(m);
     }
-    return Object.entries(groups);
+    return [...groups.entries()];
   });
 
   function relTime(ts) {
@@ -122,10 +151,10 @@
     </div>
   </header>
 
-  <div class="messages">
+  <div class="messages" bind:this={messagesEl} onscroll={onScroll}>
     {#each groupedMessages as [day, msgs]}
       <div class="day-divider">── {day} ──</div>
-      {#each msgs.slice().reverse() as m (m.id)}
+      {#each msgs as m (m.id)}
         <article class="msg">
           <div class="row1">
             <span class="chip from">@{m.author}</span>
