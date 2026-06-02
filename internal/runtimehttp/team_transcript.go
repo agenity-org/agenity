@@ -224,13 +224,17 @@ func (s *Server) teamTranscriptGet(w http.ResponseWriter, r *http.Request, ch *p
 				if len(t.InputBlob) == 0 {
 					continue
 				}
-				// The persisted InputBlob is the A2A Message envelope
-				// at the ROOT level (not nested under .message) — fields
-				// are role/contextId/parts/kind directly.
+				// The persisted InputBlob is the A2A Message envelope at
+				// the ROOT level (not nested under .message). Fields:
+				// role/contextId/parts/kind. The chepherd-internal sender
+				// @-handle is in chepherd_from (since 2026-06-02 — pre
+				// that, From was json:"-" and the transcript showed every
+				// agent as "user"; now correctly attributed).
 				var msg struct {
-					Role      string `json:"role"`
-					ContextID string `json:"contextId"`
-					Parts     []struct {
+					Role        string `json:"role"`
+					ContextID   string `json:"contextId"`
+					ChepherdFrom string `json:"chepherd_from"`
+					Parts       []struct {
 						Kind string `json:"kind"`
 						Text string `json:"text"`
 					} `json:"parts"`
@@ -249,15 +253,12 @@ func (s *Server) teamTranscriptGet(w http.ResponseWriter, r *http.Request, ch *p
 				if body == "" {
 					continue
 				}
-				// A2A spec: role="user" means inbound-to-runner. The
-				// actual sender's @-handle lives in the From field which
-				// is json:"-" (non-serialized — chepherd-internal only).
-				// Best we can do here is label by role: "user" = an
-				// external caller (operator or peer agent). For richer
-				// attribution, send_to_session would need to also write
-				// a ChannelMessage row with the resolved From handle —
-				// follow-up work.
-				author := msg.Role
+				// Prefer the resolved chepherd_from sender (post-2026-06-02);
+				// fall back to A2A role for older persisted blobs ("user").
+				author := msg.ChepherdFrom
+				if author == "" {
+					author = msg.Role
+				}
 				if author == "" {
 					author = "?"
 				}

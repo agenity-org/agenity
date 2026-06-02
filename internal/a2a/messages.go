@@ -55,9 +55,13 @@ type Message struct {
 	// From is the sender's chepherd @-name (short session name). Set by
 	// the MCP shim (send_to_session) from CurrentCaller() so the
 	// Deliverer can stamp the knock marker with the correct "from=<name>"
-	// field. Not part of the A2A v1.0 wire spec — chepherd-internal only.
-	// (#615 knock pattern)
-	From string `json:"-"`
+	// field. Not part of the A2A v1.0 wire spec — chepherd-internal
+	// extension namespaced as chepherd_from. Persisted in InputBlob so
+	// the Team Transcript can attribute messages to the real sender
+	// instead of falling back to A2A role ("user"). External A2A peers
+	// MUST ignore unknown fields per spec.
+	// (#615 knock pattern; transcript attribution 2026-06-02)
+	From string `json:"chepherd_from,omitempty"`
 }
 
 // Part is one entry in Message.Parts. Discriminated by Kind.
