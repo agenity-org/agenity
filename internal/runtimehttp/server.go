@@ -1232,18 +1232,26 @@ func sanitizeID(id string) string {
 // session records from SessionStore so the dashboard sees the full
 // available-session set. Each entry includes a `live` boolean —
 // live==true means runtime has it in memory (attachable); live==false
-// means it was persisted previously but isn't currently spawned (the
-// dashboard should display "resumable", not auto-attach). #314 D4.
+// means it was persisted previously but isn't currently spawned.
+//
+// ROOT-CAUSE FIX (the real one): dedup must be by SessionStore key
+// (id), not by name. Pre-fix the live-set was keyed by info.Name
+// ("tech-lead") and the persisted-set was keyed by id ("tech-lead-
+// 1780381185841682501"). Every check missed → every persisted row
+// was re-emitted as a fake "orphan" even when its agent was alive.
+// That's what produced the "61 orphans" sidebar mess AND the
+// "3 fresh orphans on Trio spawn" symptom — they were duplicates of
+// the live agents, not real orphans.
 func (s *Server) listSessionsMerged(ctx context.Context) []map[string]any {
 	var (
-		out       []map[string]any
-		liveNames = map[string]struct{}{}
+		out     []map[string]any
+		liveIDs = map[string]struct{}{}
 	)
 	if s.rt != nil {
 		live := s.rt.List()
 		out = make([]map[string]any, 0, len(live))
 		for _, info := range live {
-			liveNames[info.Name] = struct{}{}
+			liveIDs[info.ID] = struct{}{} // key by ID to match SessionStore.List()
 			out = append(out, infoToMap(info, true))
 		}
 	}
@@ -1255,7 +1263,7 @@ func (s *Server) listSessionsMerged(ctx context.Context) []map[string]any {
 		return out
 	}
 	for _, id := range ids {
-		if _, alreadyLive := liveNames[id]; alreadyLive {
+		if _, alreadyLive := liveIDs[id]; alreadyLive {
 			continue
 		}
 		state, err := s.SessionStore.Get(ctx, id)
