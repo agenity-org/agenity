@@ -46,6 +46,7 @@ import (
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/chepherd/chepherd/internal/webrtcrtc"
 	"github.com/google/uuid"
 )
 
@@ -678,6 +679,32 @@ func (s *Server) teamTranscriptPost(w http.ResponseWriter, r *http.Request, ch *
 		// Fire-and-forget: peer ACKs separately via its own POST to the
 		// team transcript endpoint, so we don't block on the response.
 		if peer := s.registeredPeerByName(rcpt); peer != nil {
+			// #672 — a hub-discovered peer has no directly-dialable HTTP
+			// endpoint (jsonrpc_url is "hub://<org>"). Route it through the
+			// A2A Deliverer (HubDeliverer) with a peer-routing contextID so
+			// delivery goes over the hub-relayed WebRTC DataChannel instead
+			// of an (impossible) HTTP POST to a hub:// URL.
+			if strings.HasPrefix(peer.JSONRPCURL, webrtcrtc.HubPeerScheme) {
+				if s.Deliverer == nil {
+					fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: skip — hub peer but s.Deliverer nil\n", author, rcpt)
+					undelivered = append(undelivered, rcpt)
+					continue
+				}
+				if _, err := s.Deliverer.Deliver(r.Context(), a2a.Message{
+					Role:      "user",
+					Kind:      "message",
+					ContextID: "@" + rcpt + "/inbox",
+					Parts:     []a2a.Part{{Kind: "text", Text: body}},
+					From:      author,
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: hub-relay deliver err: %v\n", author, rcpt, err)
+					undelivered = append(undelivered, rcpt)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: delivered via hub-relay WebRTC (%s)\n", author, rcpt, peer.JSONRPCURL)
+				delivered = append(delivered, rcpt)
+				continue
+			}
 			if err := s.deliverToRegisteredPeer(r.Context(), peer, author, body); err != nil {
 				fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: HTTP deliver err: %v\n", author, rcpt, err)
 				undelivered = append(undelivered, rcpt)
