@@ -753,7 +753,61 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 	// emitTeamEvent is safe to call; pre-this calls are no-ops (the
 	// channel is nil, emitTeamEvent's nil-check drops the event).
 	r.startTeamEventLoop()
+	// Background orphan reaper — every 30s, delete sessionsRepo rows
+	// whose id has no matching in-memory session. Catches the cases
+	// Stop's explicit Delete misses: container crashes, daemon restart
+	// where the agent died, raw `podman kill` from outside chepherd.
+	// Boot-time CHEPHERD_CLEANUP_ORPHANS_ON_START handles the daemon-
+	// restart case at startup; this catches everything that leaks at
+	// runtime between restarts.
+	if r.sessionsRepo != nil {
+		go r.orphanReaperLoop()
+	}
 	return r, nil
+}
+
+// orphanReaperLoop runs forever (until process exit), scanning
+// sessionsRepo for rows whose id is not in r.sessions and deleting
+// them. Tick interval = 30s. Safe to run concurrent with Spawn/Stop
+// because Spawn writes the in-memory map BEFORE the persistence row,
+// so "in repo but not in memory" is always a real orphan.
+func (r *Runtime) orphanReaperLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		r.reapOnce(context.Background())
+	}
+}
+
+// reapOnce performs one pass of the orphan reaper. Extracted so tests
+// can drive it deterministically without waiting on the ticker.
+func (r *Runtime) reapOnce(ctx context.Context) int {
+	if r.sessionsRepo == nil {
+		return 0
+	}
+	ids, err := r.sessionsRepo.List(ctx)
+	if err != nil {
+		return 0
+	}
+	r.mu.Lock()
+	live := make(map[string]struct{}, len(r.sessions))
+	for id := range r.sessions {
+		live[id] = struct{}{}
+	}
+	r.mu.Unlock()
+	deleted := 0
+	for _, id := range ids {
+		if _, alive := live[id]; alive {
+			continue
+		}
+		if err := r.sessionsRepo.Delete(ctx, id); err == nil {
+			deleted++
+		}
+	}
+	if deleted > 0 {
+		fmt.Fprintf(os.Stderr, "[chepherd-reaper] swept %d orphan session row(s)\n", deleted)
+	}
+	return deleted
 }
 
 // SpawnSpec describes how to bring up a new session.
@@ -1716,6 +1770,16 @@ func (r *Runtime) Stop(name string) error {
 		fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: PTY closed\n", name)
 	}
 	_ = os.Remove(filepath.Join(r.stateDir, "sessions", id+".json"))
+	// Root cause fix: parallel to claudeLoginCancel (#646) — Stop
+	// previously only cleared the in-memory registry + legacy JSON file,
+	// leaving the sqlite SessionStore row dangling. The dashboard then
+	// surfaced the row as "orphan" forever. Mirror the in-memory
+	// teardown into the persistence layer.
+	if r.sessionsRepo != nil {
+		if err := r.sessionsRepo.Delete(context.Background(), id); err != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-stop] %s: sessionsRepo.Delete %s: %v\n", name, id, err)
+		}
+	}
 	// #258 — kill the sibling container explicitly. PTY close alone
 	// doesn't reliably propagate to `podman run --rm`'s cleanup. Run
 	// before broadcast so the next List() doesn't include a row whose
