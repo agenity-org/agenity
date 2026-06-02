@@ -353,6 +353,15 @@ type Runtime struct {
 	// rt.WithShepherd(scrummaster.New(cfg)) to enable.
 	shepherd scrummaster.ScrumMaster
 
+	// peers is the registry of external A2A peers that have registered
+	// themselves as team members via POST /api/v1/peers/register (#669).
+	// Always non-nil after NewWithStore. External peers are NOT chepherd-
+	// managed sessions (no container, no PTY) — they live in another
+	// process / host and expose their own /jsonrpc endpoint to receive
+	// A2A messages. teamMembersOf in internal/runtimehttp merges
+	// peers.ListByTeam with rt.List() so @everyone fans out to both.
+	peers *PeerRegistry
+
 	// sessionsRepo is the SessionRepository handle (#208 v0.9.2).
 	// Set by NewWithStore when a persistence.Store is provided; Spawn
 	// writes an initial session record so shepherd.discoverSessions
@@ -645,6 +654,62 @@ func (r *Runtime) AgentRegistry() *agententity.Store {
 	return r.agentRegistry
 }
 
+// Peers exposes the external A2A peer registry (#669). Used by the
+// runtimehttp package to register / heartbeat / deregister external
+// peers and by team_transcript.go's teamMembersOf to merge external
+// peers into the team's member list for fan-out.
+//
+// Always non-nil after NewWithStore. Returns a pointer so callers see
+// live state without taking a snapshot.
+func (r *Runtime) Peers() *PeerRegistry {
+	return r.peers
+}
+
+// RegisteredPeers returns the @-handles of external peers registered
+// against the given team (filtered + TTL-swept). Convenience wrapper
+// used by teamMembersOf to merge external peers with chepherd-managed
+// sessions in one call.
+//
+// Refs #669.
+func (r *Runtime) RegisteredPeers(team string) []PeerInfo {
+	if r.peers == nil {
+		return nil
+	}
+	return r.peers.ListByTeam(team)
+}
+
+// TeamMembers returns the merged @-handle list of every agent on the
+// given team — chepherd-managed sessions (Runtime.List filtered by
+// info.Team == team) PLUS externally-registered A2A peers
+// (peers.ListByTeam(team)). Used as the single source of truth for
+// @everyone fan-out so external peers are first-class team members
+// (#669 DoD).
+//
+// Returns deduplicated names (in case an external peer accidentally
+// shares a name with a managed session — managed-session wins to
+// preserve PTY-delivery semantics).
+func (r *Runtime) TeamMembers(team string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, info := range r.List() {
+		if info != nil && info.Team == team {
+			if _, dup := seen[info.Name]; dup {
+				continue
+			}
+			seen[info.Name] = struct{}{}
+			out = append(out, info.Name)
+		}
+	}
+	for _, p := range r.RegisteredPeers(team) {
+		if _, dup := seen[p.Name]; dup {
+			continue
+		}
+		seen[p.Name] = struct{}{}
+		out = append(out, p.Name)
+	}
+	return out
+}
+
 // AgentForSession returns the registered Agent that the given live
 // session is currently attached to, or nil if the session predates
 // the v0.9 registry (legacy v0.8 spawn without UUID).
@@ -740,6 +805,7 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		agentRegistry:    agentStore,
 		sessionToAgent:   make(map[string]uuid.UUID),
 		instanceUUID:     instUUID,
+		peers:            NewPeerRegistry(),
 	}
 	// #216 closes the Spawn ↔ SessionRepository seam left open by
 	// PR #211 (runtime migration) + PR #213 (daemon retire). With a

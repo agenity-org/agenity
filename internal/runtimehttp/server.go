@@ -324,8 +324,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/roles/", s.roleByID)
 	// #198 — Operator Canon (Layer 1 of 3-layer agent context)
 	mux.HandleFunc("/api/v1/canon", s.canonRoot)
-	// v0.9.3 #225 row C1 — federated peer registry view.
+	// v0.9.3 #225 row C1 — federated peer registry view (read-only cache
+	// of agent cards harvested from federation peers).
 	mux.HandleFunc("/api/v1/peers", s.peersList)
+	// #669 — external A2A peer registration (POST register, heartbeat,
+	// DELETE deregister, GET registered list). The bare /api/v1/peers
+	// path stays the federation cache; everything under /api/v1/peers/
+	// is the live registration surface.
+	mux.HandleFunc("/api/v1/peers/register", s.peersRegisterHandler)
+	mux.HandleFunc("/api/v1/peers/", s.peersByNameHandler)
 	mux.HandleFunc("/api/v1/tasks", s.tasksList)
 	mux.HandleFunc("/api/v1/tasks/", s.taskByID)
 	// #311 C5.1 — WebRTC signaling relay endpoints. /webrtc/offer

@@ -32,6 +32,7 @@
 package runtimehttp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -137,18 +138,31 @@ func resolveRecipients(mentions []string, teamMembers []string, allTeams func(st
 	return out
 }
 
-// teamMembersOf returns the @-handles of agents on a given team.
+// teamMembersOf returns the @-handles of agents on a given team —
+// chepherd-managed sessions PLUS externally-registered A2A peers (#669).
+// Externally-registered peers are first-class team members so @everyone
+// broadcasts fan out to them via HTTP POST to /jsonrpc (vs PTY write
+// for chepherd-managed sessions). See deliverToRegisteredPeer for the
+// fire-and-forget HTTP path.
 func (s *Server) teamMembersOf(team string) []string {
 	if s.rt == nil {
 		return nil
 	}
-	var out []string
-	for _, info := range s.rt.List() {
-		if info != nil && info.Team == team {
-			out = append(out, info.Name)
-		}
+	return s.rt.TeamMembers(team)
+}
+
+// registeredPeerByName looks up a registered external peer by @-handle.
+// Returns nil when the name doesn't belong to an external peer (caller
+// falls back to the in-process Deliverer for chepherd-managed sessions).
+func (s *Server) registeredPeerByName(name string) *runtime.PeerInfo {
+	if s.rt == nil || s.rt.Peers() == nil {
+		return nil
 	}
-	return out
+	p, ok := s.rt.Peers().Get(name)
+	if !ok {
+		return nil
+	}
+	return &p
 }
 
 // leadRolePriority is the canonical lead-role precedence used by
@@ -658,6 +672,21 @@ func (s *Server) teamTranscriptPost(w http.ResponseWriter, r *http.Request, ch *
 		if s.rt == nil {
 			continue
 		}
+		// #669 — when the recipient is an externally-registered A2A peer
+		// (no chepherd-managed session), deliver via HTTP POST to its
+		// /jsonrpc endpoint instead of the in-process PTY Deliverer.
+		// Fire-and-forget: peer ACKs separately via its own POST to the
+		// team transcript endpoint, so we don't block on the response.
+		if peer := s.registeredPeerByName(rcpt); peer != nil {
+			if err := s.deliverToRegisteredPeer(r.Context(), peer, author, body); err != nil {
+				fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: HTTP deliver err: %v\n", author, rcpt, err)
+				undelivered = append(undelivered, rcpt)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: delivered via HTTP POST %s\n", author, rcpt, peer.JSONRPCURL)
+			delivered = append(delivered, rcpt)
+			continue
+		}
 		if _, info := s.rt.Get(rcpt); info == nil {
 			fmt.Fprintf(os.Stderr, "[transcript-post] %s → %s: skip — rt.Get returned nil\n", author, rcpt)
 			undelivered = append(undelivered, rcpt)
@@ -801,6 +830,65 @@ func (s *Server) ticketMentionsHandler(w http.ResponseWriter, r *http.Request, t
 	}
 	writeJSON(w, http.StatusOK, counts)
 }
+
+// deliverToRegisteredPeer POSTs an A2A message/send envelope to the
+// peer's /jsonrpc endpoint (#669). Fire-and-forget: we ignore the
+// JSON-RPC response body since the peer ACKs its receipt via its own
+// POST to /api/v1/teams/<team>/messages (per the v0.9.4 federation
+// pattern). We still wait for the HTTP round-trip to complete so that
+// network-level failures (unreachable host, 5xx) surface in the
+// delivered/undelivered split returned to the caller.
+//
+// Wire format (per #669 ticket spec):
+//
+//	{"jsonrpc":"2.0","id":"<uuid>","method":"message/send",
+//	 "params":{"role":"user","kind":"message","contextId":"<peer-name>",
+//	           "parts":[{"kind":"text","text":"<body>"}],
+//	           "chepherd_from":"<sender>"}}
+//
+// Refs #669.
+func (s *Server) deliverToRegisteredPeer(ctx context.Context, peer *runtime.PeerInfo, sender, body string) error {
+	if peer == nil || peer.JSONRPCURL == "" {
+		return fmt.Errorf("peer JSONRPCURL empty")
+	}
+	envelope := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      uuid.NewString(),
+		"method":  "message/send",
+		"params": map[string]any{
+			"role":          "user",
+			"kind":          "message",
+			"contextId":     peer.Name,
+			"parts":         []map[string]any{{"kind": "text", "text": body}},
+			"chepherd_from": sender,
+		},
+	}
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("marshal envelope: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, peer.JSONRPCURL, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: peerDeliveryTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", peer.JSONRPCURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("peer returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// peerDeliveryTimeout caps HTTP round-trips to externally-registered
+// peers so a misbehaving peer can't block the transcript-post fan-out
+// indefinitely. 5s is generous for healthy peers + tight enough that a
+// dead peer doesn't visibly stall the operator's transcript-post.
+const peerDeliveryTimeout = 5 * time.Second
 
 // runtime import sanity (compile-time check that the import is used)
 var _ = runtime.SessionInfo{}
