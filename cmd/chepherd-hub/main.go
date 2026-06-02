@@ -173,6 +173,7 @@ func run() error {
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
 	srv.signaling.CloseAll()
+	srv.registry.CloseAll()
 	srv.tunnels.closeAll()
 	stunStop()
 	turnStop()
@@ -228,6 +229,7 @@ func envOr(key, fallback string) string {
 type server struct {
 	cfg        *config
 	signaling  *signalingQueue
+	registry   *registryStore                // #672 — peer-discovery directory
 	turn       *turnRelay                    // nil when TURN disabled (no --turn-secret)
 	tunnels    *tunnelManager                // #497 Wave F7 — reverse-proxy tunnels
 	federation *federationRegistryWithClient // #498 Wave F8 — cross-org JWT relay
@@ -237,6 +239,7 @@ func newServer(cfg *config) *server {
 	return &server{
 		cfg:        cfg,
 		signaling:  newSignalingQueue(),
+		registry:   newRegistryStore(),
 		tunnels:    newTunnelManager(),
 		federation: loadFederationTargetsFromConfig(cfg),
 	}
@@ -252,6 +255,10 @@ func (s *server) mux() http.Handler {
 	mux.HandleFunc("/v1/signaling/answer", s.makeSignalingHandler(SignalingAnswer))
 	mux.HandleFunc("/v1/signaling/ice", s.makeSignalingHandler(SignalingICE))
 	mux.HandleFunc("/v1/signaling/pending", s.handleSignalingPending)
+	// #672 — peer-discovery directory. Daemons announce/heartbeat
+	// their presence; peers list live orgs for cross-party discovery.
+	mux.HandleFunc("/v1/registry/announce", s.handleRegistryAnnounce)
+	mux.HandleFunc("/v1/registry/peers", s.handleRegistryPeers)
 	// #496 Wave F6 — TURN credentials mint endpoint.
 	mux.HandleFunc("/v1/turn/credentials", s.handleTURNCredentials)
 	// #497 Wave F7 — reverse-proxy tunnel + tunnel control.

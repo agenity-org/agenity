@@ -130,6 +130,7 @@ func newHubServer(t *testing.T, cfg *config) (*httptest.Server, *server) {
 	httpSrv := httptest.NewServer(srv.mux())
 	t.Cleanup(func() {
 		srv.signaling.CloseAll()
+		srv.registry.CloseAll()
 		httpSrv.Close()
 	})
 	return httpSrv, srv
