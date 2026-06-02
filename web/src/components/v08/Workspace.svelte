@@ -98,12 +98,16 @@
           // operator-visible on fresh /v0.9.3/ load.
           a: { kind: 'pane', id: 'p2', widget: 'terminal', config: {} },
           b: {
-            kind: 'h', ratio: 0.34,
-            a: { kind: 'pane', id: 'p_fed', widget: 'federation', config: {} },
+            kind: 'h', ratio: 0.5,
+            a: { kind: 'pane', id: 'p_transcript', widget: 'team-transcript', config: { team: 'default' } },
             b: {
-              kind: 'h', ratio: 0.5,
-              a: { kind: 'pane', id: 'p_a2a', widget: 'a2a-inbox', config: {} },
-              b: { kind: 'pane', id: 'p_mh', widget: 'multi-host', config: {} },
+              kind: 'h', ratio: 0.34,
+              a: { kind: 'pane', id: 'p_fed', widget: 'federation', config: {} },
+              b: {
+                kind: 'h', ratio: 0.5,
+                a: { kind: 'pane', id: 'p_a2a', widget: 'a2a-inbox', config: {} },
+                b: { kind: 'pane', id: 'p_mh', widget: 'multi-host', config: {} },
+              },
             },
           },
         },

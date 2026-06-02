@@ -14,6 +14,7 @@
   import WidgetInbox from './widgets/WidgetInbox.svelte';
   import WidgetFederation from './widgets/WidgetFederation.svelte';
   import WidgetA2AInbox from './widgets/WidgetA2AInbox.svelte';
+  import TeamTranscript from '../TeamTranscript.svelte';
   import WidgetMultiHostWorkspace from './widgets/WidgetMultiHostWorkspace.svelte';
   import WidgetEvents from './widgets/WidgetEvents.svelte';
   import WidgetSpider from './widgets/WidgetSpider.svelte';
@@ -258,6 +259,7 @@
     'federation': '⇄ federation',
     'a2a-inbox': '◈ A2A inbox',
     'multi-host': '⛓ multi-host',
+    'team-transcript': '💬 team transcript',
   };
 
   // Per-pane derived agent for the terminal widget header chips.
@@ -450,6 +452,8 @@
         <WidgetFederation />
       {:else if node.widget === 'a2a-inbox'}
         <WidgetA2AInbox />
+      {:else if node.widget === 'team-transcript'}
+        <TeamTranscript team={node.config?.team || 'default'} />
       {:else if node.widget === 'multi-host'}
         <WidgetMultiHostWorkspace />
       {:else if node.widget === 'role-matrix'}
