@@ -38,6 +38,14 @@ type PCStore struct {
 	cfg      Config
 	signaler Signaler
 
+	// GatherBeforeOffer, when true, makes dial() block on full ICE
+	// gathering before handing the offer to the signaler (non-trickle,
+	// bundled candidates). Required for the #672 hub-relay path where
+	// the hub's /v1/signaling/ice receiver is scaffold-only and trickle
+	// can't be relied on. The direct-HTTP path leaves this false to
+	// preserve its (lower-latency) trickle behavior.
+	GatherBeforeOffer bool
+
 	mu    sync.Mutex
 	conns map[string]*PeerConnection
 }
@@ -124,7 +132,12 @@ func (s *PCStore) dial(ctx context.Context, peerURL string, dialTimeout time.Dur
 		}
 	})
 
-	offer, err := pc.CreateOffer()
+	var offer webrtc.SessionDescription
+	if s.GatherBeforeOffer {
+		offer, err = pc.CreateOfferGathered()
+	} else {
+		offer, err = pc.CreateOffer()
+	}
 	if err != nil {
 		_ = pc.Close()
 		return nil, fmt.Errorf("PCStore.dial: CreateOffer: %w", err)

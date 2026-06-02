@@ -219,6 +219,65 @@ func (p *PeerConnection) CreateOffer() (webrtc.SessionDescription, error) {
 	return offer, nil
 }
 
+// CreateOfferGathered generates an SDP offer, sets it as the local
+// description, then BLOCKS until ICE gathering completes so the returned
+// SDP carries all host+srflx+relay candidates inline (non-trickle,
+// bundled ICE). Returns the gathered local description.
+//
+// #672 hub-relay needs this: the chepherd-hub signaling relay's
+// /v1/signaling/ice receiver is a scaffold, so we MUST NOT depend on
+// trickle for correctness. Bundling candidates into the offer SDP makes
+// the offer self-sufficient — the answerer can complete the connection
+// from the single offer frame with no follow-up ICE frames.
+func (p *PeerConnection) CreateOfferGathered() (webrtc.SessionDescription, error) {
+	gatherDone := webrtc.GatheringCompletePromise(p.pc)
+	offer, err := p.pc.CreateOffer(nil)
+	if err != nil {
+		return webrtc.SessionDescription{}, fmt.Errorf("CreateOffer: %w", err)
+	}
+	if err := p.pc.SetLocalDescription(offer); err != nil {
+		return webrtc.SessionDescription{}, fmt.Errorf("SetLocalDescription: %w", err)
+	}
+	<-gatherDone
+	ld := p.pc.LocalDescription()
+	if ld == nil {
+		return webrtc.SessionDescription{}, errors.New("CreateOfferGathered: nil local description after gather")
+	}
+	return *ld, nil
+}
+
+// SetRemoteOfferGathered accepts an inbound SDP offer + generates an
+// answer, BLOCKING until ICE gathering completes so the returned answer
+// SDP carries all candidates inline (non-trickle, bundled ICE). The
+// answerer-side counterpart to CreateOfferGathered.
+//
+// #672 hub-relay: same rationale as CreateOfferGathered — the answer
+// frame must be self-sufficient because trickle ICE through the hub is
+// scaffold-only.
+func (p *PeerConnection) SetRemoteOfferGathered(offer webrtc.SessionDescription) (webrtc.SessionDescription, error) {
+	if err := p.verifyRemoteFingerprint(offer); err != nil {
+		_ = p.pc.Close()
+		return webrtc.SessionDescription{}, err
+	}
+	if err := p.pc.SetRemoteDescription(offer); err != nil {
+		return webrtc.SessionDescription{}, fmt.Errorf("SetRemoteDescription: %w", err)
+	}
+	gatherDone := webrtc.GatheringCompletePromise(p.pc)
+	answer, err := p.pc.CreateAnswer(nil)
+	if err != nil {
+		return webrtc.SessionDescription{}, fmt.Errorf("CreateAnswer: %w", err)
+	}
+	if err := p.pc.SetLocalDescription(answer); err != nil {
+		return webrtc.SessionDescription{}, fmt.Errorf("SetLocalDescription: %w", err)
+	}
+	<-gatherDone
+	ld := p.pc.LocalDescription()
+	if ld == nil {
+		return webrtc.SessionDescription{}, errors.New("SetRemoteOfferGathered: nil local description after gather")
+	}
+	return *ld, nil
+}
+
 // SetRemoteOffer accepts an inbound SDP offer + generates an answer.
 // Answerer-side flow.
 //
