@@ -558,6 +558,21 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 				"shepherding": info.Shepherding, "created_at": info.CreatedAt,
 			})
 		}
+		// #671 — merge in #669 externally-registered A2A peers so
+		// discovery surfaces the full team membership (not just
+		// chepherd-managed PTY sessions). External entries carry
+		// external=true so callers can distinguish; role is empty
+		// since the peer self-describes via its AgentCard.
+		if s.rt.Peers() != nil {
+			for _, p := range s.rt.Peers().List() {
+				out = append(out, map[string]any{
+					"name": p.Name, "agent": "external-a2a", "team": p.Team,
+					"role": "", "paused": false,
+					"shepherding": "", "created_at": p.JoinedAt,
+					"external": true,
+				})
+			}
+		}
 		resp.Result = map[string]any{"sessions": out}
 	case "list_peers":
 		// #474 Wave K3 — V0.9.2-ARCHITECTURE §10 Pattern 1 step 1.

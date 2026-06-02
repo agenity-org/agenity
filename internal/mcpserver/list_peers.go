@@ -30,19 +30,25 @@ import (
 
 // listPeerEntry is the per-peer wire shape. JSON tags MUST match
 // internal/runtimehttp/agents_v172.go directoryEntry — the spec is
-// frozen at the D1 contract.
+// frozen at the D1 contract. The External flag (#671) lets callers
+// distinguish chepherd-managed PTY sessions from externally-registered
+// A2A peers (#669); omitted on the wire when false to preserve the
+// frozen shape for managed entries.
 type listPeerEntry struct {
 	SID          string `json:"sid"`
 	Name         string `json:"name"`
 	AgentCardURL string `json:"agent_card_url"`
+	External     bool   `json:"external,omitempty"`
 }
 
-// buildListPeersEntries filters the runtime's session registry to
-// the given team, excludes the caller's own session, and projects
-// each remaining info into the {sid, name, agent_card_url} shape.
+// buildListPeersEntries filters the runtime's session registry AND the
+// #669 external peer registry to the given team, excludes the caller's
+// own session, and projects each entry into {sid, name, agent_card_url,
+// external?}. External A2A peers carry External=true and use their
+// self-advertised AgentCardURL verbatim (peers self-host their cards).
 //
-// Empty teamFilter returns an empty slice (callers in no team have
-// no team peers; chepherd.list is the right tool for global view).
+// Empty teamFilter returns an empty slice (callers in no team have no
+// team peers; chepherd.list is the right tool for global view).
 func buildListPeersEntries(rt *runtime.Runtime, caller, teamFilter, baseURL string) []listPeerEntry {
 	entries := []listPeerEntry{}
 	if rt == nil {
@@ -63,6 +69,19 @@ func buildListPeersEntries(rt *runtime.Runtime, caller, teamFilter, baseURL stri
 			Name:         info.Name,
 			AgentCardURL: agentCardURL(baseURL, info.ID),
 		})
+	}
+	if teamFilter != "" && rt.Peers() != nil {
+		for _, p := range rt.Peers().ListByTeam(teamFilter) {
+			if p.Name == caller {
+				continue
+			}
+			entries = append(entries, listPeerEntry{
+				SID:          p.Name,
+				Name:         p.Name,
+				AgentCardURL: p.AgentCardURL,
+				External:     true,
+			})
+		}
 	}
 	return entries
 }
