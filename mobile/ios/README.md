@@ -1,5 +1,9 @@
 # chepherd-rc-ios
 
+> **Status:** Living · pre-release **v0.2.0-rc3** · App Store submission pending
+> **Component line:** chepherd-rc client (versioned independently from the chepherd daemon, which is at v0.9.2)
+> **Audience:** iOS contributors building/sideloading the chepherd-rc mobile client
+
 [![ios-build](https://github.com/chepherd/chepherd-rc-ios/actions/workflows/ios-build.yml/badge.svg)](https://github.com/chepherd/chepherd-rc-ios/actions/workflows/ios-build.yml)
 [![release](https://img.shields.io/github/v/tag/chepherd/chepherd-rc-ios?label=release&sort=semver)](https://github.com/chepherd/chepherd-rc-ios/releases)
 
@@ -84,10 +88,10 @@ Mirrors `chepherd/docs/DESIGN-SYSTEM.md`. The Swift palette tokens live in `Sour
 
 ## Status
 
-**v0.2.0-rc3** — buildable iOS app with full sign-in (ASWebAuthenticationSession +
-Keychain TokenStore) + WSTransport relayed-mode session list + SwiftUI
-dashboard mirroring the chepherd TUI palette. WebRTC peer-to-peer mode
-+ WidgetKit lock-screen complications are the Wave 8 follow-ups.
+**v0.2.0-rc3** (chepherd-rc client line) — buildable iOS app with full sign-in
+(ASWebAuthenticationSession + Keychain TokenStore) + WSTransport relayed-mode
+session list + SwiftUI dashboard mirroring the chepherd TUI palette. WebRTC
+peer-to-peer mode + WidgetKit lock-screen complications are the next follow-ups.
 
 App Store submission pending:
   - App icon assets (1024x1024 + sized variants)

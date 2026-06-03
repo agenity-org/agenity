@@ -1,5 +1,10 @@
 # Chepherd Federation Mesh — Pre-Go-Live UAT Results
 
+> **Status:** Canon — operator sign-off record (point-in-time UAT result; not edited after acceptance)
+> **Authority:** Operator-accepted go-live verdict for the federation mesh (chepherd daemon v0.9.4 in development; mesh feature set per #669–#675)
+> **Audience:** Operators + reviewers verifying mesh go-live readiness
+> **Issue refs** use inline `#NNN`; resolve against the chepherd issue tracker.
+
 **Campaign:** `wf_7bceaf4f-57e` (9 validators + adversarial verify, 16 agents) · independent 4-eyes review · fixes + independent acceptance · 2026-06-03
 **System under test:** prod hub `https://signal.openova.io` + Party A (`openova-hq`, HQ host) + Party B (`openova-bastion`, bastion) — everything claimed complete in #669, #670, #671, #672.
 

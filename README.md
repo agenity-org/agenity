@@ -1,16 +1,16 @@
 # chepherd
 
-[![release](https://img.shields.io/github/v/tag/chepherd/chepherd?label=release&sort=semver)](https://github.com/chepherd/chepherd/releases)
+[![daemon release](https://img.shields.io/badge/daemon-v0.9.2-green)](https://github.com/chepherd/chepherd/releases/tag/v0.9.2)
 [![license](https://img.shields.io/github/license/chepherd/chepherd)](LICENSE)
-[![chepherd-rc](https://img.shields.io/badge/chepherd--rc-v0.2.0--rc3-blue)](https://chepherd.org)
+[![chepherd-rc client](https://img.shields.io/badge/chepherd--rc%20client-v0.2.0--rc3-blue)](https://chepherd.org)
 
-> A TUI supervisor for parallel AI coding agents.
+> A multi-agent runtime + dashboard for parallel AI coding agents.
 
-`chepherd` (pronounced *shepherd*, spelled with a `c` — intentional) is a daemon + interactive terminal dashboard that watches every Claude Code session you run across all your repos, scores each on goal/velocity/focus/end-state-proximity, and coaches them when they drift — using your own `CLAUDE.md` as the rubric.
+`chepherd` (pronounced *shepherd*, spelled with a `c` — intentional) is a Go daemon + interactive dashboard that watches every Claude Code session you run across all your repos, scores each on goal/velocity/focus/end-state-proximity, and coaches them when they drift — using your own `CLAUDE.md` as the rubric. It also spawns and orchestrates teams of agents that talk to each other (and across hosts) over A2A.
 
 Inspired by the [k9s](https://k9scli.io) experience for Kubernetes operators, but for the parallel-AI-agent operator.
 
-> **Status:** Pre-alpha. The architecture has been [validated in Python](https://github.com/dynolabs-io/workflow) and is being re-implemented in Go for distribution + viral OSS. This repo is the Go rewrite.
+> **Status:** The chepherd **daemon** (this Go binary) is at released tag **v0.9.2**; **v0.9.4** is in active development (QA complete, not yet tagged). The **chepherd-rc clients** (web, iOS, Android, relay) are a separately versioned component line at **v0.2.0-rc3** (pre-release). The two version lines are independent — do not conflate the daemon version with the client version. The original architecture was [validated in Python](https://github.com/dynolabs-io/workflow); this repo is the Go implementation.
 
 ## What it does
 
@@ -83,9 +83,10 @@ chepherd status         # one-shot text status of all sessions
 | State | JSON per session at `~/.local/state/chepherd/sessions/<uuid>.json` |
 | Log | Plain text at `~/.local/state/chepherd/chepherd.log` |
 | Judge | [Anthropic Claude Code SDK](https://docs.anthropic.com/en/docs/agent-sdk) (subprocess shell-out for now; native Go SDK when Anthropic ships one) |
+| A2A mesh | Cross-host agent-to-agent over hub-relayed WebRTC (STUN P2P + TURN relay) via the `signal.openova.io` rendezvous hub |
 | Distribution | [goreleaser](https://goreleaser.com) for cross-platform binaries |
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+See [docs/V0.9.2-ARCHITECTURE.md](docs/V0.9.2-ARCHITECTURE.md) for the full design (v0.9.2 canon; v0.9.4 in development).
 
 ## v0.9.2 ship gate — end-to-end walk
 
@@ -139,11 +140,19 @@ closed"`).
 
 ## Roadmap
 
-- **v0.1** (this repo, current) — Go rewrite of the working Python supervisor + `chepherd status` text output that reads live state
-- **v0.2** — Interactive `tview` TUI dashboard with session-list + detail-pane + filtered log
-- **v0.3** — `chepherd init` wizard for first-time setup, `chepherd start/stop` lifecycle (systemd, launchd, OpenRC)
-- **v0.4** — Adapter abstraction for non-Claude-Code agents (Aider, Cline, Cursor) — only with PRs from those communities
-- **v0.5** — Web dashboard (optional) over a local HTTP port for non-tmux users
+Shipped (daemon):
+
+- **v0.5** — Architectural pivot from tmux supervisor to agent runtime + multi-agent control room (`chepherd run`, MCP control plane, web client scaffold, provider abstraction)
+- **v0.9.0–v0.9.2** — A2A-compliant runtime: runner-as-A2A-endpoint, ES256 JWT auth, credential vault, dashboard backend; **v0.9.2 is the latest released tag**
+
+In development:
+
+- **v0.9.4** — QA-hardening pass + cross-host federation mesh (STUN P2P + TURN relay via `signal.openova.io`); see the `[Unreleased]` section of [CHANGELOG.md](CHANGELOG.md)
+
+Planned:
+
+- Adapter abstraction for non-Claude-Code agents (Aider, Cline, Cursor) — contributions from those communities welcome
+- Hardened TURN relay on Kubernetes (currently STUN-P2P-primary)
 
 ## License
 
@@ -157,4 +166,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-Issues + PRs welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
+Issues + PRs welcome via the [GitHub issue tracker](https://github.com/chepherd/chepherd/issues).

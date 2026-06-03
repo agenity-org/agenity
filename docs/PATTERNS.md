@@ -1,13 +1,15 @@
-# Engineering patterns — distilled from v0.9.4
+# Engineering patterns — distilled from the v0.9.x line
 
-Living document. Each pattern names: the rule, the failure mode it
-prevents, the PR(s) where chepherd learned it, the worker memory
-file where the conversational form lives, and the CLAUDE.md
-principle it derives from.
+**Status:** Living.
+**Audience:** chepherd daemon contributors (Go) + reviewers.
 
-> **Why this file exists.** v0.9.4 shipped ~40 PRs in ~36h. The
-> review + ship cycle generated patterns the next milestone should
-> not re-discover. Whenever a pattern outlives the PR it was
+Each pattern names: the rule, the failure mode it prevents, the PR(s)
+where chepherd learned it, the worker memory file where the
+conversational form lives, and the CLAUDE.md principle it derives from.
+
+> **Why this file exists.** The v0.9.4 development cycle shipped ~40 PRs
+> in ~36h. The review + ship cycle generated patterns subsequent work
+> should not re-discover. Whenever a pattern outlives the PR it was
 > learned in, it lands here. New entries go at the bottom; the
 > existing entries get edited in place if a follow-up PR refines
 > them.
@@ -46,7 +48,7 @@ Streamable HTTP spec has three knobs that fail invisibly:
    server-side tool calls (e.g. `chepherd.send_to_session` from
    one agent to another) get dropped silently.
 
-**PR**: #525 (M2 Wave). **Memory**:
+**PR**: #525. **Memory**:
 `feedback_marshal_config_files_never_sprintf.md` (sibling — the
 .mcp.json case). **Principle**: §4 #2 IaC-first (declarative config
 over hand-formatted strings).
@@ -71,7 +73,7 @@ to put in DNS-SAN, so the cert author skips SANs entirely. Then
 production federation works (real domains in SAN) but the local
 smoke test fails opaquely.
 
-**PR**: #526 (T3 Wave) + #529 (T3.1 Wave). **Memory**:
+**PR**: #526 + #529 (federation mTLS). **Memory**:
 `feedback_mtls_single_host_requires_ip_sans.md`. **Principle**: §7
 Modern Tech Stack — Security defense-in-depth.
 
@@ -97,13 +99,13 @@ be "wire X to the existing Y."
    compresses; the diff is authoritative.
 
 Skipping this check leads to re-implementing existing helpers
-(M2 #525 case: substrate from `internal/mcpserver` was 80%
-shipped already) or building atop a stale assumption (F1/F5
-sequence: the deployment expects the F5 hub binary, not the
-in-process F1 substrate).
+(#525 case: substrate from `internal/mcpserver` was 80%
+shipped already) or building atop a stale assumption (#528 → #495
+sequence: the deployment expects the hub binary, not the
+in-process substrate).
 
-**PR(s)**: #525 (M2), #526 (T3), #528 (F1), #547 (F3). 12+
-confirmations in v0.9.4. **Memory**:
+**PR(s)**: #525, #526, #528, #547. 12+
+confirmations across the v0.9.4 cycle. **Memory**:
 `feedback_worker_validates_architect_premise.md`. **Principle**:
 §4 #1 (NEVER SPECULATE) + §4 #6 (trace end-to-end before fixing).
 
@@ -117,10 +119,10 @@ The chepherd value-add is what the spec doesn't say + what the dep
 can't do for you:
 
 - **Out-of-band trust pins** that pre-empt the spec's discovery
-  (e.g. F1's chepherd-hub well-known URL pinning + ICE candidate
+  (e.g. the chepherd-hub well-known URL pinning + ICE candidate
   whitelisting on top of pion).
 - **Org policy hooks** the spec leaves to "implementation defined"
-  (e.g. T3.1 federation grant-check on top of standard mTLS).
+  (e.g. the federation grant-check on top of standard mTLS).
 - **Side-channel trust** (e.g. JWKS rotation overlap + JWT mint
   rate-limiting on top of stdlib JWT verify).
 
@@ -129,9 +131,9 @@ just because the dispatch phrasing is "add X". For each X, ask:
 "what does pion / coreos / coreutils / stdlib already do for this?"
 The remainder IS the dispatch's actual scope.
 
-**PR(s)**: #487 (T3), #492 (F2), #494 (F4), #495 (F5), #528 (F1),
-#547 (F3). **Memory**:
-`feedback_find_what_dep_already_does.md`. **Principle**: §7 Modern
+**PR(s)**: #487, #492, #494, #495, #528, #547. **Memory**:
+`feedback_find_what_dep_already_does_then_add_what_it_cant.md`.
+**Principle**: §7 Modern
 Tech Stack (community-adopted; reject bespoke that duplicates
 off-the-shelf).
 
@@ -189,7 +191,7 @@ test scenario was wrong; drop or restructure the assertion. If the
 answer is "production hits this state but rarely," the production
 code has a race the test now exposes — fix the production code.
 
-**PR**: #543 K5 rebase. **Memory**:
+**PR**: #543 (rebase). **Memory**:
 `feedback_deterministic_tests_reveal_latent_drift.md`.
 **Principle**: §3 anti-theater #3 + §4 #1 NEVER SPECULATE.
 
@@ -208,7 +210,7 @@ passes because the bug is invisible to a substring grep — the
 illegal `\` in the value doesn't break the test, only the
 production consumer parsing the file.
 
-**PR**: #525 (M2 Wave). **Memory**:
+**PR**: #525. **Memory**:
 `feedback_marshal_config_files_never_sprintf.md`. **Principle**:
 §4 #6 trace requirements end-to-end (test the bytes a real
 consumer sees, not just the substring presence).
@@ -237,7 +239,7 @@ gets confused.
 When B is opened, set the GitHub PR's base to A's branch (not
 main). Once A merges, GitHub auto-retargets B's base to main.
 
-**PR(s)**: every K-series + AU-series PR in v0.9.4. **Memory**:
+**PR(s)**: every stacked-PR series in the v0.9.4 cycle. **Memory**:
 `feedback_pr_conflict_resolution.md`. **Principle**: §6 GitHub
 disciplines (conventional commit history, no force-push to main).
 
@@ -266,8 +268,8 @@ revert). **Memory**: `feedback_real_fixtures_not_minimal_repro.md`.
 
 ## §9 — Substrate-vs-production split discipline
 
-When a Wave's scope is too big to land in one reviewable PR (e.g.
-T3 + T3.1: federation mTLS), split via:
+When a feature's scope is too big to land in one reviewable PR (e.g.
+the federation mTLS work: #526 + #529), split via:
 
 1. **PR-N** ships the substrate: types, helpers, unit tests,
    smoke-mode wiring. NO production deployment changes.
@@ -281,7 +283,7 @@ Anti-pattern: trying to land both in PR-N. The big diff becomes
 unreviewable; integration bugs land alongside scaffolding bugs +
 both look like the same regression.
 
-**PR(s)**: #526 → #529 (T3 → T3.1), #492 → #495 (F2 → F5).
+**PR(s)**: #526 → #529 (federation mTLS), #492 → #495 (hub bridge).
 **Memory**: `feedback_credential_pipeline_chain_discipline.md`.
 **Principle**: §3 anti-theater #5 (too-big-to-review-carefully =
 split before merging).
