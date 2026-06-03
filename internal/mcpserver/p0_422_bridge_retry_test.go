@@ -50,11 +50,21 @@ func TestP0_422_Bridge_RetriesUntilServerReady(t *testing.T) {
 	var connected atomic.Bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp/ws", func(w http.ResponseWriter, r *http.Request) {
+		// #699 — Store BEFORE Upgrade writes the 101: the client's Dial
+		// returns only after READING that response, so dial-success
+		// happens-after the Store by TCP causality and the assertion
+		// below can never observe connected=false after a successful
+		// dial. Pre-fix the Store sat after Upgrade; under CI load the
+		// handler goroutine could be descheduled between the two while
+		// the bridge (stdin=/dev/null → instant EOF) sprinted to
+		// returning nil → flaky "gave up before server came up
+		// (err=<nil>)" with the dial having SUCCEEDED. Same
+		// causal-ordering family as the #688 stats fix.
+		connected.Store(true)
 		c, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
-		connected.Store(true)
 		_, _, _ = c.ReadMessage()
 		c.Close()
 	})
