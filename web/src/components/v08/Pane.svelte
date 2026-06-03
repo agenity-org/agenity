@@ -25,6 +25,7 @@
   import WidgetMCPLog from './widgets/WidgetMCPLog.svelte';
   import WidgetKanban from './widgets/WidgetKanban.svelte';
   import WidgetInspector from './widgets/WidgetInspector.svelte';
+  import { agentIdentity } from '../../lib/agentIdentity.js';
 
   let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, focusTerminal = () => {}, terminalClosed = () => {}, changeWidget, splitPane, removePane, refresh, focusedPaneID = '', setFocusedPane = () => {}, saveLayout = () => {} } = $props();
 
@@ -375,15 +376,19 @@
       <div class="ph-tabs" role="tablist" aria-label="pane tabs">
         {#each (node.tabs || [{ widget: node.widget, config: node.config || {} }]) as t, i (i)}
           {@const isActive = i === (node.activeTab || 0)}
+          {@const tabAgent = t.widget === 'terminal' && t.config?.agent ? (sessions || []).find(x => x.name === t.config.agent) : null}
+          {@const tabIdent = tabAgent ? agentIdentity(tabAgent) : null}
           <button
             role="tab"
             class="ph-tab"
             class:active={isActive}
             class:empty={!t.widget}
+            style={tabIdent && isActive ? `border-bottom-color: ${tabIdent.color}` : ''}
             on:click={() => switchTab(i)}
             on:contextmenu={(e) => onTabContext(e, i)}
             title="left-click: switch · right-click: change widget/agent · Ctrl+Alt+Tab cycles"
           >
+            {#if tabIdent}<span class="ph-tab-ident" style="color: {tabIdent.color}">{tabIdent.icon}</span>{/if}
             <span class="ph-tab-label">{tabLabel(t)}</span>
             {#if (node.tabs?.length || 0) > 1}
               <span class="ph-tab-close" on:click={(e) => closeTab(i, e)} title="close tab">×</span>
@@ -604,6 +609,7 @@
   .ph-tab:hover { background: var(--bg-elev); color: var(--fg); }
   .ph-tab.active { color: var(--fg); border-bottom-color: var(--accent, #87ceeb); }
   .ph-tab-label { overflow: hidden; text-overflow: ellipsis; }
+  .ph-tab-ident { margin-right: 0.25rem; } /* #694 identity chip */
   .ph-tab-close { color: var(--fg-faint); padding: 0 0.1rem; font-size: 0.88rem; line-height: 1; border-radius: 3px; opacity: 0.55; }
   .ph-tab:hover .ph-tab-close { opacity: 1; }
   .ph-tab-close:hover { background: rgba(231,76,60,0.18); color: #e74c3c; }

@@ -4,6 +4,7 @@
 -->
 <script>
   import WidgetSessionBoard from './WidgetSessionBoard.svelte';
+  import { agentIdentity } from '../../../lib/agentIdentity.js';
 
   let { sessions, teams, memberships, selectedAgent, selectAgent } = $props();
   const API = '/api-v08/v1';
@@ -473,9 +474,10 @@
                 onclick={(ev) => handleAgentClick(ev, agent.name)}
                 oncontextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
                 title="Click to select. Ctrl+click to toggle. Shift+click for range. Right-click for full menu (move team, change role, pause, stop). Hover for × to delete.">
-              <!-- #692 — hub/external peers get the mesh glyph so the rail
-                   subsumes the old federation pane's peer list. -->
-              <span class="icon" class:shepherd={m.role === 'shepherd'} class:mesh={agent.agent === 'external-a2a' || agent.external}>{agent.agent === 'external-a2a' || agent.external ? '⇄' : (m.role === 'shepherd' ? '✻' : '●')}</span>
+              <!-- #694 — identity chip from the shared util: same color +
+                   icon as terminal tabs / transcript / inspector. (#692's
+                   ⇄ mesh glyph is the util's external default.) -->
+              <span class="icon ident" style="color: {agentIdentity({ ...agent, role: agent.role || m.role }).color}">{agentIdentity({ ...agent, role: agent.role || m.role }).icon}</span>
               <span class="name">{agent.name}</span>
               {#if agent.live === false}<span class="orphan-tag" title="Not running — orphan row">orphan</span>{/if}
               {#if score != null}<span class="score">{score.toFixed(1)}</span>{/if}
@@ -507,6 +509,15 @@
     <div class="ctx-menu" style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;" onclick={(e) => e.stopPropagation()}>
       <div class="ctx-head">{ctxMenu.agent} <small>· {ctxMenu.currentTeam} / {ctxMenu.currentRole}</small></div>
       <button onclick={() => { window.dispatchEvent(new CustomEvent('chepherd-open-agent-settings', { detail: { agentName: ctxMenu.agent } })); closeContext(); }}>⚙ Settings…</button>
+      <button onclick={async () => {
+        // #694 — operator icon override; empty input clears back to the role default.
+        const cur = (sessions || []).find(x => x.name === ctxMenu.agent)?.icon || '';
+        const icon = prompt('Icon for ' + ctxMenu.agent + ' (emoji; empty = role default):', cur);
+        if (icon !== null) {
+          await fetch(`/api/v1/sessions/${ctxMenu.agent}/icon`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ icon: icon.trim() }) });
+        }
+        closeContext();
+      }}>✱ Change icon…</button>
       <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: true }) }); closeContext(); }}>⏸ Pause</button>
       <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: false }) }); closeContext(); }}>▶ Resume</button>
       <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/restart`, { method: 'POST' }); closeContext(); }}>↻ Restart</button>
@@ -522,6 +533,7 @@
   .view-toggle button { background: none; border: 1px solid transparent; border-radius: 4px; color: var(--fg-muted, #888); cursor: pointer; font-size: 0.8rem; padding: 0.05rem 0.35rem; }
   .view-toggle button.active { color: var(--fg, #ddd); border-color: var(--border, #2a2a2a); }
   .icon.mesh { color: var(--accent-2, #87ceeb); }
+  .icon.ident { font-style: normal; }
   /* #393 P1 — list header with orphan-count + Clean up orphans button */
   .list-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); background: var(--bg-elev); font-size: 0.8rem; }
   .orphan-count { color: var(--warn, #d99); font-weight: 600; }

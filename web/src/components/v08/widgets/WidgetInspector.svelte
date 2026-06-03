@@ -17,6 +17,7 @@
   can compare two agents — the unpinned inspector keeps following focus.
 -->
 <script>
+  import { agentIdentity } from '../../../lib/agentIdentity.js';
   import WidgetAgentIdentity from './WidgetAgentIdentity.svelte';
   import WidgetAgentRuntime from './WidgetAgentRuntime.svelte';
   import WidgetSpider from './WidgetSpider.svelte';
@@ -82,6 +83,10 @@
 
 <div class="inspector" data-testid="inspector">
   <header class="insp-head">
+    {#if agent}
+      {@const ident = agentIdentity(agent)}
+      <span class="ident-chip" style="color: {ident.color}">{ident.icon}</span>
+    {/if}
     <span class="who" data-testid="inspector-agent">{shownName || '—'}</span>
     {#if agent?.team}<span class="team">· {agent.team}</span>{/if}
     {#if pinned}<span class="pin-tag" data-testid="inspector-pinned">pinned</span>{/if}
@@ -128,6 +133,7 @@
   .inspector { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .insp-head { display: flex; align-items: center; gap: 0.45rem; padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--border, #2a2a2a); }
   .who { font-weight: 700; font-size: 0.95rem; }
+  .ident-chip { font-size: 0.95rem; }
   .team { color: var(--fg-muted, #888); font-size: 0.85rem; }
   .pin-tag { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-2, #87ceeb); border: 1px solid var(--accent-2, #87ceeb); border-radius: 3px; padding: 0 0.3rem; }
   .pin { margin-left: auto; background: none; border: none; cursor: pointer; opacity: 0.45; font-size: 0.9rem; }
