@@ -60,6 +60,7 @@
     ev.preventDefault();
     const t = (node.tabs || [])[i] || { widget: '' };
     const level = t.widget === 'terminal' ? 'agent' : 'widget';
+    pickerFilter = ''; // #692 review nit — don't carry stale filter text between picker surfaces
     menu = { tabIdx: i, level };
   }
   function closeMenu() { menu = null; }
