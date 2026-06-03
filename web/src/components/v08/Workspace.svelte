@@ -18,6 +18,7 @@
   import SpawnWizard from './SpawnWizard.svelte';
   import SpawnWizardV9 from '../v09/SpawnWizardV9.svelte';
   import AgentSettings from './AgentSettings.svelte';
+  import SettingsPage from './SettingsPage.svelte';
   import TeamSettings from './TeamSettings.svelte';
 
   // #223 — version label shown in the topbar brand badge. Passed by
@@ -73,6 +74,9 @@
   let theme = $state('dark');
   let showWizard = $state(false);
   let showAgentSettings = $state(false);
+  // #693 — ⚙ Settings page (hash deep-link #settings/<section>) + 👤 menu
+  let showSettings = $state(typeof location !== 'undefined' && location.hash.startsWith('#settings'));
+  let showAccountMenu = $state(false);
   let showTeamSettings = $state(null); // null | { team, members }
   let confirmDialog = $state(null);
 
@@ -728,11 +732,6 @@
         </div>
       {/if}
     </div>
-    <div class="font-knob" title="font size (applies to all widgets)">
-      <button class="icon-btn small" on:click={() => applyFontSize(fontSize - 1)} aria-label="smaller">A-</button>
-      <span class="font-num">{fontSize}px</span>
-      <button class="icon-btn small" on:click={() => applyFontSize(fontSize + 1)} aria-label="larger">A+</button>
-    </div>
     {#if selectedAgent}
       <div class="agent-menu">
         <button class="secondary" on:click={() => (showAgentMenu = !showAgentMenu)} title="agent actions">{selectedAgent} ▾</button>
@@ -770,18 +769,37 @@
             aria-label="keyboard shortcuts state">
       ⌨{captureMode ? '' : '✕'}
     </button>
-    <button class="icon-btn" on:click={() => { showShortcutHelp = !showShortcutHelp; }} title="Keyboard shortcuts cheatsheet (press ?)" aria-label="Keyboard cheatsheet">?</button>
-    <button class="icon-btn" on:click={toggleTheme} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
-    <button class="icon-btn" on:click={dispatchLogout} title="Sign out — clear stored token + return to login screen" aria-label="Sign out">⎋</button>
-    <button class="save-layout-btn" on:click={() => (showSaveAs = true)} title="Save current layout as a named view">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M13 14H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h8l2 2v9a1 1 0 0 1-1 1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-        <rect x="5" y="9" width="6" height="5" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
-        <rect x="5" y="2" width="4" height="3" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
-      </svg>
-    </button>
+    <!-- #693 — mesh health (from the sessions wire; external = hub peers) -->
+    {#if sessions.filter(s => s.agent === 'external-a2a' || s.external).length}
+      <span class="mesh-health" title="hub mesh peers discovered">⇄ {sessions.filter(s => s.agent === 'external-a2a' || s.external).length}</span>
+    {/if}
     <button class="primary spawn-btn" on:click={() => (showWizard = true)} title="Spawn a single agent or apply a team template">+ new</button>
+    <button class="icon-btn" on:click={() => { showSettings = true; try { location.hash = '#settings/accounts'; } catch {} }} title="Settings — accounts, roles & skills, team, mesh, developer" aria-label="Settings" data-testid="open-settings">⚙</button>
+    <!-- #693 — 👤 account menu absorbs theme / font / cheatsheet / save-view / sign-out -->
+    <div class="account-menu-wrap" use:clickOutside={() => (showAccountMenu = false)}>
+      <button class="icon-btn" on:click={() => (showAccountMenu = !showAccountMenu)} title="Account & appearance" aria-label="Account menu" data-testid="account-menu">👤</button>
+      {#if showAccountMenu}
+        <div class="view-dropdown account-dropdown" role="menu" data-testid="account-dropdown">
+          <div class="vd-section">signed in as operator</div>
+          <button role="menuitem" on:click={() => { toggleTheme(); }}>{theme === 'dark' ? '☀ Light theme' : '☾ Dark theme'}</button>
+          <div class="vd-row">
+            <span>font</span>
+            <button class="icon-btn small" on:click={() => applyFontSize(fontSize - 1)} aria-label="smaller">A-</button>
+            <span class="font-num">{fontSize}px</span>
+            <button class="icon-btn small" on:click={() => applyFontSize(fontSize + 1)} aria-label="larger">A+</button>
+          </div>
+          <button role="menuitem" on:click={() => { showShortcutHelp = true; showAccountMenu = false; }}>? Keyboard cheatsheet</button>
+          <button role="menuitem" on:click={() => { showSaveAs = true; showAccountMenu = false; }}>💾 Save layout as view…</button>
+          <div class="vd-divider"></div>
+          <button role="menuitem" on:click={dispatchLogout}>⎋ Sign out</button>
+        </div>
+      {/if}
+    </div>
   </header>
+
+  {#if showSettings}
+    <SettingsPage {teams} {events} onclose={() => (showSettings = false)} />
+  {/if}
 
   <div class="canvas">
     <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} setFocusedPane={(id) => focusedPaneID = id} saveLayout={() => saveLayout()} />
@@ -1062,4 +1080,9 @@
   .modal-saveas input { width: 100%; padding: 0.5rem 0.7rem; background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; font-family: ui-monospace, monospace; }
   .modal-saveas .hint { color: var(--fg-muted); font-size: 0.78rem; margin: 0.5rem 0 1rem 0; }
   .modal-saveas footer { display: flex; justify-content: flex-end; gap: 0.6rem; }
+  /* #693 — topbar slim-down */
+  .mesh-health { color: var(--accent-2, #87ceeb); font-size: 0.8rem; white-space: nowrap; }
+  .account-menu-wrap { position: relative; }
+  .account-dropdown { right: 0; left: auto; min-width: 200px; }
+  .account-dropdown .vd-row { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.8rem; color: var(--fg-muted, #999); font-size: 0.82rem; }
 </style>
