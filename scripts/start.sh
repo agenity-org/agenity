@@ -215,6 +215,10 @@ exec podman run \
   -e CHEPHERD_MCP_LISTEN=0.0.0.0:9090 \
   -e CHEPHERD_CLEANUP_ORPHANS_ON_START=${CHEPHERD_CLEANUP_ORPHANS_ON_START:-true} \
   ${CHEPHERD_FEDERATION_REGISTRY_URL:+-e CHEPHERD_FEDERATION_REGISTRY_URL="${CHEPHERD_FEDERATION_REGISTRY_URL}"} \
+  `# #676 — join the hub-relayed federation mesh so the dashboard's Federation/Multi-host` \
+  `# panes show hub-discovered peers. Set CHEPHERD_HUB_URL + CHEPHERD_ORG_ID to enable.` \
+  ${CHEPHERD_HUB_URL:+-e CHEPHERD_HUB_URL="${CHEPHERD_HUB_URL}"} \
+  ${CHEPHERD_ORG_ID:+-e CHEPHERD_ORG_ID="${CHEPHERD_ORG_ID}"} \
   "${IMAGE}" \
   run \
     --headless \
