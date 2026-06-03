@@ -338,6 +338,12 @@ type Runtime struct {
 	teamEvents  chan teamEvent
 	regenTimers map[string]*time.Timer
 	regenMu     sync.Mutex
+	// #684 — lifecycle for the team-event fan-out goroutine so tests
+	// using a t.TempDir() state dir can stop it (and wait for in-flight
+	// team-canon writes) before the dir is removed. eventsClosed +
+	// teamEvents are guarded by r.mu; eventWG tracks the loop goroutine.
+	eventWG      sync.WaitGroup
+	eventsClosed bool
 
 	// Per-axis review records (v0.6-C council pattern). Keyed by target
 	// agent name; inner map keyed by axis (G|V|F|E|D|custom).

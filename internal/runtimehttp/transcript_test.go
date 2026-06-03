@@ -141,6 +141,11 @@ func TestResolveTeamLead(t *testing.T) {
 			if err != nil {
 				t.Fatalf("runtime.New: %v", err)
 			}
+			// #684 — quiesce the team-event fan-out before t.TempDir's
+			// RemoveAll runs, so async materializeTeamCanon writes don't
+			// race the cleanup ("directory not empty"). Registered after
+			// New so it runs first (cleanups are LIFO).
+			t.Cleanup(rt.Close)
 			for n, r := range tc.members {
 				rt.UpsertSessionInfoForTest(&runtime.SessionInfo{
 					ID: "sid-" + n, Name: n, Team: tc.team, Role: runtime.Role(r),
@@ -149,7 +154,12 @@ func TestResolveTeamLead(t *testing.T) {
 					t.Fatalf("JoinTeam: %v", err)
 				}
 			}
-			s := New(rt)
+			// #684 — resolveTeamLead only reads s.rt (ListMemberships +
+			// List), so use a minimal Server. New(rt) would spin up the
+			// stores' background goroutines, which keep writing under
+			// t.TempDir() after the test body returns → RemoveAll cleanup
+			// races them ("directory not empty"), flaking under -race.
+			s := &Server{rt: rt}
 			got := s.resolveTeamLead(tc.team)
 			if got != tc.want {
 				t.Errorf("resolveTeamLead(%q) = %q, want %q", tc.team, got, tc.want)
@@ -164,7 +174,8 @@ func TestResolveTeamLead_EmptyTeamFallsBackToOperator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime.New: %v", err)
 	}
-	s := New(rt)
+	t.Cleanup(rt.Close) // #684 — drain team-event fan-out before tempdir cleanup
+	s := &Server{rt: rt} // #684 — minimal Server; resolveTeamLead reads only s.rt (avoids New()'s goroutines racing t.TempDir cleanup)
 	if got := s.resolveTeamLead("empty"); got != "operator" {
 		t.Errorf("resolveTeamLead(empty) = %q, want operator", got)
 	}
