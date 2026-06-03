@@ -23,3 +23,7 @@ walk-evidence/
 
 # Spreadsheets
 *.xlsx
+
+# Curated UAT acceptance evidence (exception to the *.png ban above)
+!docs/ledger/evidence/
+!docs/ledger/evidence/*.png
