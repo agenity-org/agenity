@@ -1521,6 +1521,30 @@ func (s *Server) sessionByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #694 — identity icon PATCH must work for any KNOWN agent, not just
+	// live-PTY ones: external/hub peers have no PTY session (sess==nil
+	// below would 404 them) but absolutely have an identity to decorate.
+	if sub == "icon" && r.Method == http.MethodPatch {
+		var req struct {
+			Icon string `json:"icon"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		// Sanity-cap: an icon is a short glyph/emoji, not free text.
+		if len(req.Icon) > 16 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "icon too long (max 16 bytes)"})
+			return
+		}
+		if err := s.rt.SetIcon(name, req.Icon); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "icon": req.Icon})
+		return
+	}
+
 	var (
 		sess *session.Session
 		info *runtime.SessionInfo

@@ -62,6 +62,12 @@ type SessionInfo struct {
 	CreatedAt time.Time `json:"created_at"`
 	Paused    bool      `json:"paused"`
 
+	// #694 — operator-set identity icon (emoji) shown across the
+	// dashboard (rail row, terminal tab, transcript chip, inspector
+	// header). Empty → the UI derives a default from Role. Set via
+	// PATCH /api/v1/sessions/{name}/icon; persists across restarts.
+	Icon string `json:"icon,omitempty"`
+
 	// Set non-empty only when Role == RoleShepherd. Teams this shepherd oversees.
 	Shepherding []string `json:"shepherding,omitempty"`
 
@@ -1791,6 +1797,23 @@ func (r *Runtime) Pause(name string, paused bool) error {
 		return fmt.Errorf("runtime.Pause: unknown session %q", name)
 	}
 	r.info[id].Paused = paused
+	_ = r.persistInfoLocked(r.info[id])
+	r.cond.Broadcast()
+	return nil
+}
+
+// SetIcon sets the operator-chosen identity icon for a session (#694).
+// Empty icon clears the override (UI falls back to the role default).
+// Persisted like Pause so it survives restarts and reaches every
+// dashboard viewer on the next List().
+func (r *Runtime) SetIcon(name, icon string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byName[name]
+	if !ok {
+		return fmt.Errorf("runtime.SetIcon: unknown session %q", name)
+	}
+	r.info[id].Icon = icon
 	_ = r.persistInfoLocked(r.info[id])
 	r.cond.Broadcast()
 	return nil
