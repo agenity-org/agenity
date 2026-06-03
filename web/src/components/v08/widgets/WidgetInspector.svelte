@@ -27,6 +27,7 @@
 
   let tab = $state('overview');
 
+
   const pinned = $derived(node?.config?.pinnedAgent || null);
   const shownName = $derived(pinned || selectedAgent);
   const agent = $derived((sessions || []).find(s => s.name === shownName) || null);
@@ -36,6 +37,36 @@
   // the agent still show.
   const agentEvents = $derived((events || []).filter(e =>
     !shownName || e.actor === shownName || (e.body || '').includes(shownName)));
+
+  // #692 — mesh detail for hub/external peers (subsumes the deleted
+  // federation + multi-host panes). Fetched lazily, only while an
+  // external agent is shown; refreshed with the peer-list cadence.
+  let meshPeers = $state([]);
+  let meshTimer = null;
+  const isExternal = $derived(agent && (agent.agent === 'external-a2a' || agent.external));
+  const meshPeer = $derived((meshPeers || []).find(p => (p.name || p.sid) === shownName) || null);
+  async function fetchPeers() {
+    try {
+      const r = await fetch('/api/v1/peers');
+      if (!r.ok) return;
+      meshPeers = (await r.json()).peers || [];
+    } catch {}
+  }
+  $effect(() => {
+    if (isExternal) {
+      fetchPeers();
+      meshTimer = setInterval(fetchPeers, 10000);
+      return () => { if (meshTimer) clearInterval(meshTimer); };
+    }
+  });
+  function syncedAgo(p) {
+    const t = p?.syncedAt; // /api/v1/peers wire shape (was WidgetFederation's relTime source)
+    if (!t) return '—';
+    const s = Math.max(0, Math.round((Date.now() - new Date(t).getTime()) / 1000));
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ago`;
+  }
 
   function togglePin() {
     if (!node) return;
@@ -66,6 +97,15 @@
     {#if !agent}
       <p class="hint">No agent focused — click a session row or a terminal tab.</p>
     {:else if tab === 'overview'}
+      {#if isExternal}
+        <!-- #692 — mesh detail (replaces the federation + multi-host panes) -->
+        <div class="mesh" data-testid="inspector-mesh">
+          <div class="mesh-row"><span class="k">peer</span><span class="v">⇄ {shownName}</span></div>
+          <div class="mesh-row"><span class="k">reachability</span><span class="v">{meshPeer?.card?.url?.startsWith?.('hub://') ? 'via hub mesh (no inbound)' : (meshPeer?.card?.url || 'direct')}</span></div>
+          <div class="mesh-row"><span class="k">synced</span><span class="v">{syncedAgo(meshPeer)}</span></div>
+          {#if meshPeer?.card?.name}<div class="mesh-row"><span class="k">card</span><span class="v">{meshPeer.card.name}</span></div>{/if}
+        </div>
+      {/if}
       <WidgetAgentIdentity {agent} />
       <WidgetAgentRuntime {agent} />
       {#if myMems.length}
@@ -98,5 +138,9 @@
   .insp-body { flex: 1; overflow: auto; min-height: 0; }
   .hint { color: var(--fg-muted, #888); padding: 0.8rem; font-size: 0.85rem; }
   .mems { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.5rem 0.7rem; }
+  .mesh { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border, #2a2a2a); }
+  .mesh-row { display: flex; gap: 0.6rem; font-size: 0.82rem; padding: 0.1rem 0; }
+  .mesh-row .k { color: var(--fg-muted, #888); min-width: 6.5rem; }
+  .mesh-row .v { color: var(--fg, #ddd); }
   .mem { font-size: 0.75rem; color: var(--fg-muted, #999); border: 1px solid var(--border, #2a2a2a); border-radius: 3px; padding: 0.05rem 0.35rem; }
 </style>

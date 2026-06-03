@@ -84,6 +84,10 @@
     // enough horizontal room on the right (≥ 280px in typical widths)
     // so the dense KV rows don't wrap. Left session-list 16%, terminal
     // column 56%, details column 28% — totals 100%.
+    // #692 — the #690 target shell: rail | terminal+transcript | inspector.
+    // Federation/multi-host panes are gone (the rail's MESH rows + the
+    // Inspector's mesh detail subsume them); the right column is ONE
+    // Inspector (#691) over the team transcript.
     return {
       kind: 'h',
       ratio: 0.16,
@@ -91,38 +95,38 @@
       b: {
         kind: 'h', ratio: 0.68,
         a: {
-          kind: 'v', ratio: 0.62,
-          // #361 — center column: terminal up top, then a 3-way
-          // horizontal band of federation / a2a-inbox / multi-host
-          // BELOW it so the v0.9.3 cross-instance surfaces are
-          // operator-visible on fresh /v0.9.3/ load.
+          kind: 'v', ratio: 0.7,
           a: { kind: 'pane', id: 'p2', widget: 'terminal', config: {} },
-          b: {
-            kind: 'h', ratio: 0.5,
-            a: { kind: 'pane', id: 'p_transcript', widget: 'team-transcript', config: { team: 'default' } },
-            b: {
-              kind: 'h', ratio: 0.5,
-              // #666 — A2A inbox + user inbox removed; Team Transcript
-              // subsumes both. Bottom band collapses to federation +
-              // multi-host (the remaining v0.9.3 cross-instance surfaces).
-              a: { kind: 'pane', id: 'p_fed', widget: 'federation', config: {} },
-              b: { kind: 'pane', id: 'p_mh', widget: 'multi-host', config: {} },
-            },
-          },
+          b: { kind: 'pane', id: 'p_transcript', widget: 'team-transcript', config: { team: 'default' } },
         },
         b: {
-          kind: 'v', ratio: 0.5,
-          a: { kind: 'pane', id: 'p4', widget: 'agent-details', config: {} },
-          b: {
-            kind: 'v', ratio: 0.55,
-            a: { kind: 'pane', id: 'p5', widget: 'shepherd-assessment-card', config: {} },
-            // #666 — was 'inbox' (user inbox) widget; Team Transcript
-            // subsumes h↔a + a↔a + multi-recipient in one view.
-            b: { kind: 'pane', id: 'p6', widget: 'team-transcript', config: { team: 'default' } },
-          },
+          kind: 'v', ratio: 0.55,
+          a: { kind: 'pane', id: 'p4', widget: 'inspector', config: {} },
+          b: { kind: 'pane', id: 'p6', widget: 'team-transcript', config: { team: 'default' } },
         },
       },
     };
+  }
+
+  // #692 — saved layouts may still reference the deleted federation /
+  // multi-host widgets; migrate them to the Inspector (which carries
+  // their peer/reachability detail for focused hub peers) so loaded
+  // workspaces never hit an unknown-widget branch.
+  const MIGRATED_WIDGETS = { 'federation': 'inspector', 'multi-host': 'inspector' };
+  function migrateLayout(node) {
+    if (!node) return node;
+    if (node.kind === 'pane') {
+      if (MIGRATED_WIDGETS[node.widget]) node.widget = MIGRATED_WIDGETS[node.widget];
+      if (Array.isArray(node.tabs)) {
+        for (const t of node.tabs) {
+          if (MIGRATED_WIDGETS[t.widget]) t.widget = MIGRATED_WIDGETS[t.widget];
+        }
+      }
+      return node;
+    }
+    node.a = migrateLayout(node.a);
+    node.b = migrateLayout(node.b);
+    return node;
   }
 
   // --- API ---
@@ -344,8 +348,8 @@
       if (!r.ok) return;
       const d = await r.json();
       // New envelope format: { layout, cwd }. Legacy: bare layout tree.
-      if (d.layout) { layout = d.layout; if (d.cwd) projectCwd = d.cwd; }
-      else layout = d;
+      if (d.layout) { layout = migrateLayout(d.layout); if (d.cwd) projectCwd = d.cwd; }
+      else layout = migrateLayout(d);
     } catch {}
   }
 
@@ -467,7 +471,7 @@
   function doSplit(node, id, direction) {
     if (node.kind === 'pane' && node.id === id) {
       const newId = 'p' + Date.now();
-      const newPane = { kind: 'pane', id: newId, widget: 'agent-details', config: {} };
+      const newPane = { kind: 'pane', id: newId, widget: 'inspector', config: {} }; // #692 — splits default to the Inspector
       return { kind: direction, ratio: 0.5, a: node, b: newPane };
     }
     if (node.kind !== 'pane') {

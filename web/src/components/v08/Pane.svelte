@@ -11,9 +11,7 @@
   import WidgetSessionList from './widgets/WidgetSessionList.svelte';
   import WidgetSessionBoard from './widgets/WidgetSessionBoard.svelte';
   import WidgetCard from './widgets/WidgetCard.svelte';
-  import WidgetFederation from './widgets/WidgetFederation.svelte';
   import TeamTranscript from '../TeamTranscript.svelte';
-  import WidgetMultiHostWorkspace from './widgets/WidgetMultiHostWorkspace.svelte';
   import WidgetEvents from './widgets/WidgetEvents.svelte';
   import WidgetSpider from './widgets/WidgetSpider.svelte';
   import WidgetAgentPrompt from './widgets/WidgetAgentPrompt.svelte';
@@ -268,11 +266,37 @@
     'kanban': '⊞ kanban',
     'accounts': '⚓ accounts',
     'role-matrix': '🎮 roles',
-    'federation': '⇄ federation',
-    'multi-host': '⛓ multi-host',
     'team-transcript': '💬 team transcript',
     'inspector': 'ⓘ inspector',
   };
+
+  // #692 — the picker no longer offers every renderable widget. Monitor-
+  // mode surfaces are first-class; configure-mode widgets remain
+  // reachable here ONLY until the Settings page (#693) absorbs them.
+  // Legacy context widgets (identity/runtime/details/scorecard/prompt/
+  // mcp-log/events/board) still RENDER for saved layouts but are no
+  // longer pickable — the Inspector (#691) replaced them.
+  const PICKER_GROUPS = [
+    { label: 'monitor', items: [
+      { id: 'terminal',        desc: 'live PTY for an agent' },
+      { id: 'team-transcript', desc: 'team conversation' },
+      { id: 'kanban',          desc: 'work board' },
+      { id: 'inspector',       desc: 'focused-agent context (identity · scorecard · debug)' },
+    ]},
+    { label: 'configure — moving to ⚙ settings', items: [
+      { id: 'accounts',     desc: 'Claude accounts + git providers' },
+      { id: 'role-matrix',  desc: 'role × skill matrix' },
+      { id: 'agent-skills', desc: 'skill library' },
+      { id: 'canon-viewer', desc: 'team canon docs' },
+    ]},
+  ];
+  let pickerFilter = $state('');
+  function pickerMatches(item) {
+    const f = pickerFilter.trim().toLowerCase();
+    if (!f) return true;
+    const label = (WIDGET_LABELS[item.id] || item.id).toLowerCase();
+    return label.includes(f) || item.desc.toLowerCase().includes(f) || item.id.includes(f);
+  }
 
   // Per-pane derived agent for the terminal widget header chips.
   let paneAgent = $derived(() => {
@@ -301,7 +325,6 @@
     node.config.agent = ev.target.value;
   }
 
-  const WIDGETS = Object.keys(WIDGET_LABELS);
 
   let fullscreen = $state(false);
   function toggleFullscreen() { fullscreen = !fullscreen; }
@@ -402,16 +425,28 @@
       {#if !node.widget}
         <!-- Empty tab — operator 2026-05-29: 'when user opens a new tab,
              let the center of the pane show the options in card view'. -->
-        <div class="pane-picker center">
-          <h4 class="pp-title">Pick a widget</h4>
-          <div class="pp-grid">
-            {#each WIDGETS as w}
-              <button class="pp-card" on:click={() => setTabWidget(node.activeTab || 0, w)}>
-                <span class="pp-icon">{(WIDGET_LABELS[w] || w).split(' ')[0]}</span>
-                <span class="pp-name">{(WIDGET_LABELS[w] || w).replace(/^[^a-zA-Z]+\s*/, '')}</span>
-              </button>
-            {/each}
-          </div>
+        <!-- #692 — compact filterable LIST (operator 2026-06-04: 'current
+             way of selecting the panes is terrible the large icons etc,
+             lets make a reasonable list view'). -->
+        <div class="pane-picker center" data-testid="pane-picker">
+          <input class="pp-filter" type="text" placeholder="filter…" bind:value={pickerFilter} />
+          {#each PICKER_GROUPS as g}
+            {@const items = g.items.filter(pickerMatches)}
+            {#if items.length}
+              <div class="pp-group-label">{g.label}</div>
+              <ul class="pp-list">
+                {#each items as item}
+                  <li>
+                    <button class="pp-row" on:click={() => { pickerFilter = ''; setTabWidget(node.activeTab || 0, item.id); }}>
+                      <span class="pp-row-icon">{(WIDGET_LABELS[item.id] || item.id).split(' ')[0]}</span>
+                      <span class="pp-row-name">{(WIDGET_LABELS[item.id] || item.id).replace(/^[^a-zA-Z]+\s*/, '')}</span>
+                      <span class="pp-row-desc">{item.desc}</span>
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          {/each}
         </div>
       {:else if node.widget === 'terminal' && !node.config?.agent}
         <!-- Terminal cascade — operator 2026-05-29: 'since terminal has
@@ -465,12 +500,8 @@
         <WidgetKanban agent={selectedAgentObject()} {sessions} />
       {:else if node.widget === 'accounts'}
         <WidgetAccounts />
-      {:else if node.widget === 'federation'}
-        <WidgetFederation />
       {:else if node.widget === 'team-transcript'}
         <TeamTranscript team={node.config?.team || 'default'} />
-      {:else if node.widget === 'multi-host'}
-        <WidgetMultiHostWorkspace />
       {:else if node.widget === 'role-matrix'}
         <WidgetRoleMatrix />
       {:else if node.widget === 'inbox' || node.widget === 'a2a-inbox'}
@@ -501,14 +532,25 @@
               <button class="pp-close" on:click={closeMenu} title="close">×</button>
             </header>
             {#if menu.level === 'widget'}
-              <div class="pp-grid">
-                {#each WIDGETS as w}
-                  <button class="pp-card" on:click={() => { setTabWidget(menu.tabIdx, w); if (w !== 'terminal') closeMenu(); else menu = { ...menu, level: 'agent' }; }}>
-                    <span class="pp-icon">{(WIDGET_LABELS[w] || w).split(' ')[0]}</span>
-                    <span class="pp-name">{(WIDGET_LABELS[w] || w).replace(/^[^a-zA-Z]+\s*/, '')}</span>
-                  </button>
-                {/each}
-              </div>
+              <!-- #692 — same compact list as the empty-tab picker. -->
+              <input class="pp-filter" type="text" placeholder="filter…" bind:value={pickerFilter} />
+              {#each PICKER_GROUPS as g}
+                {@const items = g.items.filter(pickerMatches)}
+                {#if items.length}
+                  <div class="pp-group-label">{g.label}</div>
+                  <ul class="pp-list">
+                    {#each items as item}
+                      <li>
+                        <button class="pp-row" on:click={() => { pickerFilter = ''; setTabWidget(menu.tabIdx, item.id); if (item.id !== 'terminal') closeMenu(); else menu = { ...menu, level: 'agent' }; }}>
+                          <span class="pp-row-icon">{(WIDGET_LABELS[item.id] || item.id).split(' ')[0]}</span>
+                          <span class="pp-row-name">{(WIDGET_LABELS[item.id] || item.id).replace(/^[^a-zA-Z]+\s*/, '')}</span>
+                          <span class="pp-row-desc">{item.desc}</span>
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              {/each}
             {:else}
               <div class="pp-grid agents">
                 {#each (sessions || []) as s}
@@ -671,6 +713,15 @@
   .pp-card:hover { border-color: var(--accent-2, #87ceeb); background: rgba(135,206,235,0.06); }
   .pp-card.agent { flex-direction: row; align-items: center; justify-content: flex-start; gap: 0.55rem; text-align: left; padding: 0.5rem 0.65rem; }
   .pp-icon { font-size: 1.25rem; line-height: 1; color: var(--accent-2, #87ceeb); }
+  /* #692 — compact list picker */
+  .pp-filter { width: 100%; max-width: 360px; margin: 0 auto 0.5rem; display: block; background: var(--bg, #111); border: 1px solid var(--border, #2a2a2a); border-radius: 5px; color: var(--fg, #ddd); padding: 0.3rem 0.55rem; font-size: 0.85rem; }
+  .pp-group-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-muted, #777); margin: 0.5rem auto 0.15rem; max-width: 360px; text-align: left; }
+  .pp-list { list-style: none; margin: 0 auto; padding: 0; max-width: 360px; text-align: left; }
+  .pp-row { display: flex; align-items: baseline; gap: 0.5rem; width: 100%; background: none; border: none; border-radius: 5px; padding: 0.3rem 0.45rem; cursor: pointer; color: var(--fg, #ddd); font-size: 0.85rem; }
+  .pp-row:hover, .pp-row:focus { background: var(--bg-elevated, #1d1d1d); outline: none; }
+  .pp-row-icon { width: 1.3rem; text-align: center; color: var(--accent-2, #87ceeb); flex-shrink: 0; }
+  .pp-row-name { font-weight: 600; white-space: nowrap; }
+  .pp-row-desc { color: var(--fg-muted, #888); font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pp-role-icon { color: var(--accent-2, #87ceeb); line-height: 0; flex-shrink: 0; }
   .pp-name { font-size: 0.82rem; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pp-meta { font-size: 0.7rem; color: var(--fg-muted); }
