@@ -1118,6 +1118,17 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd, cloneURL string) (s
 		}
 		return fallbackCwd, nil
 	}
+	// #682 — the built-in sandbox is a VIRTUAL provider: the wizard's
+	// pickBuiltin() sends provider_id "embedded" with no clone_url and
+	// NEVER persists a git-providers.json record (it needs no token).
+	// The persisted-record loop below therefore can't find it and used
+	// to fall through to the "provider not registered" error at the
+	// bottom. Short-circuit it here to the same embedded ensure+clone
+	// path, deriving the repo name from the wizard's cwd basename
+	// (cwd is /home/chepherd/repos/<owner>/<repo> → <repo>).
+	if providerID == string(runtime.GitProviderEmbedded) {
+		return s.resolveEmbeddedCwd(repoNameFromCwd(fallbackCwd), fallbackCwd)
+	}
 	providers, err := runtime.LoadGitProviders(s.rt.StateDir())
 	if err != nil {
 		return fallbackCwd, err
@@ -1129,23 +1140,7 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd, cloneURL string) (s
 		if p.Kind == runtime.GitProviderEmbedded {
 			// Embedded Gitea (#137) — ensure the sidecar container is
 			// running, then clone the workspace repo into the state dir.
-			repoName := p.DisplayName
-			if repoName == "" {
-				repoName = "workspace"
-			}
-			info, err := runtime.EnsureEmbeddedGitea(s.rt.StateDir(), repoName)
-			if err != nil {
-				return fallbackCwd, fmt.Errorf("embedded gitea: %w", err)
-			}
-			dir := filepath.Join(s.rt.StateDir(), "workspaces", "embedded-"+sanitizeID(repoName))
-			if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
-				_ = os.MkdirAll(dir, 0o755)
-				cmd := exec.Command("git", "clone", "--depth=1", info.CloneURLForRepo(repoName), dir)
-				if out, err := cmd.CombinedOutput(); err != nil {
-					return dir, fmt.Errorf("embedded git clone: %w (%s)", err, strings.TrimSpace(string(out)))
-				}
-			}
-			return dir, nil
+			return s.resolveEmbeddedCwd(p.DisplayName, fallbackCwd)
 		}
 		// External provider — clone if needed, return clone path.
 		// #138 fix: never embed the PAT in the clone URL (would persist
@@ -1207,6 +1202,45 @@ func (s *Server) resolveProviderCwd(providerID, fallbackCwd, cloneURL string) (s
 		fallbackCwd, _ = os.UserHomeDir()
 	}
 	return fallbackCwd, fmt.Errorf("provider %q not registered", providerID)
+}
+
+// ensureEmbeddedGiteaFn is the embedded-Gitea boot call, indirected through
+// a package var so tests can stub it without booting a real container (the
+// #682 routing regression is pinned this way — see the embedded-spawn test).
+var ensureEmbeddedGiteaFn = runtime.EnsureEmbeddedGitea
+
+// resolveEmbeddedCwd ensures the embedded Gitea sidecar is up, clones the
+// named repo into the state dir, and returns the clone path. Shared by the
+// virtual built-in-sandbox path (#682) and the persisted embedded-provider
+// path. An empty repoName falls back to "workspace".
+func (s *Server) resolveEmbeddedCwd(repoName, fallbackCwd string) (string, error) {
+	if repoName == "" {
+		repoName = "workspace"
+	}
+	info, err := ensureEmbeddedGiteaFn(s.rt.StateDir(), repoName)
+	if err != nil {
+		return fallbackCwd, fmt.Errorf("embedded gitea: %w", err)
+	}
+	dir := filepath.Join(s.rt.StateDir(), "workspaces", "embedded-"+sanitizeID(repoName))
+	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+		_ = os.MkdirAll(dir, 0o755)
+		cmd := exec.Command("git", "clone", "--depth=1", info.CloneURLForRepo(repoName), dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return dir, fmt.Errorf("embedded git clone: %w (%s)", err, strings.TrimSpace(string(out)))
+		}
+	}
+	return dir, nil
+}
+
+// repoNameFromCwd extracts the repo name from a wizard-supplied cwd of the
+// form .../repos/<owner>/<repo>, returning the trailing path segment. Empty
+// when cwd has no usable basename. Used to name the embedded sandbox repo
+// when the built-in provider sends no clone_url (#682).
+func repoNameFromCwd(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	return filepath.Base(strings.TrimRight(cwd, "/"))
 }
 
 // writeAskpassHelper creates a chmod-0700 shell script that prints token,

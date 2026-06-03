@@ -299,7 +299,12 @@
           type="text"
           bind:value={newSandboxName}
           placeholder="my-repo"
-          onblur={() => {
+          oninput={() => {
+            // #682 — commit as soon as the name is valid so the hint
+            // ("valid name auto-commits") is true and Next enables live.
+            // Previously this only fired on blur/Enter, so a mouse user's
+            // first Next click merely blurred the field (Next still
+            // disabled) and a confusing second click was needed.
             const v = newSandboxName.trim();
             if (/^[a-z0-9-]{3,40}$/.test(v)) pickBuiltin(v);
           }}
