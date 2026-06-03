@@ -11,8 +11,8 @@ historically drifted from the binaries that ship to operators
 | File | Capture command | Binary version |
 |---|---|---|
 | `claude_code_print_json_endturn.json` | `claude --print --output-format json "say only the word 'ack' and nothing else"` | claude-code 2.1.148 (captured 2026-05-31 on this build host) |
-| `qwen_code_prompt_idle.txt` | (synthesized — no live qwen-code binary on this build host; documented prompt shape per qwen-code README) | (to-be-recaptured by R4 fresh-bytes phase) |
-| `aider_prompt_idle.txt` | (synthesized — no live aider binary on this build host; documented prompt shape per aider docs) | (to-be-recaptured by R4 fresh-bytes phase) |
+| `qwen_code_prompt_idle.txt` | (synthesized — no live qwen-code binary on this build host; documented prompt shape per qwen-code README) | (to-be-recaptured once a live binary is available on a build host) |
+| `aider_prompt_idle.txt` | (synthesized — no live aider binary on this build host; documented prompt shape per aider docs) | (to-be-recaptured once a live binary is available on a build host) |
 
 ## When to regenerate
 

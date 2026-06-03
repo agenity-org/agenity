@@ -4,9 +4,46 @@ All notable changes to chepherd. Format based on [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+Work toward **v0.9.4** (QA complete, not yet tagged).
+
+### Added
+
+- **Cross-host federation mesh** — independent chepherd parties discover each other via the `chepherd-hub` rendezvous (`/v1/registry/{announce,peers}`) and exchange A2A over hub-relayed WebRTC with zero inbound ports. STUN P2P + TURN relay live at `signal.openova.io` ([#672](https://github.com/chepherd/chepherd/issues/672)). Hub-only peers route through `HubDeliverer` over WebRTC.
+
 ### Deprecated
 
-- `chepherd mcp` stdio bridge subcommand (#479 Wave M3). Use MCP HTTP transport via `/run/chepherd/mcp.sock` per V0.9.2-ARCH §22 (M2 #525) instead. The subcommand stays functional in v0.9.4 but emits a deprecation warning to stderr on every invocation; suppress via `CHEPHERD_MCP_DEPRECATION_SILENT=1`. Slated for removal in a future release.
+- `chepherd mcp` stdio bridge subcommand ([#479](https://github.com/chepherd/chepherd/issues/479)). Use MCP HTTP transport via `/run/chepherd/mcp.sock` per [V0.9.2-ARCHITECTURE.md](docs/V0.9.2-ARCHITECTURE.md) §22 ([#525](https://github.com/chepherd/chepherd/issues/525)) instead. The subcommand stays functional in v0.9.4 but emits a deprecation warning to stderr on every invocation; suppress via `CHEPHERD_MCP_DEPRECATION_SILENT=1`. Slated for removal in a future release.
+
+## [0.9.2] — 2026-05-29
+
+Latest released daemon tag. A2A-compliant runtime: the runner becomes its own process and IS an A2A endpoint.
+
+### Added
+
+- **Persistence abstraction** — `internal/persistence/` with 13 Repository interfaces; SQLite (`modernc.org/sqlite`) + PostgreSQL (`jackc/pgx`) implementations behind `database/sql`, with a backend-equivalence test framework (testcontainers). One-time migration tool from `~/.local/state/chepherd` JSON → Store ([#208](https://github.com/chepherd/chepherd/issues/208)).
+- **A2A runner** — `runtime.Runner` interface (Process + Pod variants); A2A agent-card + JSON-RPC routes wired into `cmd/run.go`'s HTTP server. `chepherd.send_to_session` MCP shim now routes through A2A `SendMessage`. A2A `contextId` accepts session ID OR @-name.
+- **Spawn credential resolution** — `Runtime.Spawn` propagates `vault.claude-oauth` → `CLAUDE_CODE_OAUTH_TOKEN` for claude-code workers; T+30s liveness gate + walk-script auth preflight ([#218](https://github.com/chepherd/chepherd/issues/218)).
+- **End-to-end walk** — in-process regression test (`go test ./internal/e2e/...`) + operator-walk script (`scripts/v092-e2e-walk.sh`) closing epic [#208](https://github.com/chepherd/chepherd/issues/208).
+
+### Changed
+
+- `internal/shepherd` replaces the retired algorithmic-judge loop; `shepherd.Run` tick loop wired via `cmd/run.go`.
+
+### Removed
+
+- Retired the legacy Python-era `cmd/daemon` + `cmd/shadow` CLI verbs and `internal/messagebus`.
+
+## [0.9.1] — 2026-05-28
+
+### Added
+
+- **Runtime TUI polish** — per-pane workspace tabs, `Ctrl+Arrow` pane focus, empty-tab center card picker, right-click cascade, role-logo agent cards, uniform-width member cards ([#114](https://github.com/chepherd/chepherd/issues/114), [#179](https://github.com/chepherd/chepherd/issues/179), [#180](https://github.com/chepherd/chepherd/issues/180)).
+
+## [0.9.0] — 2026-05-27
+
+### Added
+
+- **Skill library + templates** — skill registry, agent templates, and team/role bootstrapping; openova-MCP integration substrate.
 
 ## [0.5.0] — 2026-05-24
 
@@ -46,7 +83,7 @@ The architectural pivot release. chepherd transforms from "tmux supervisor for C
 - `chepherd.*` MCP namespace claimed; `gitea.*`, `sandbox.db.*`, `k8s.*`, `marketplace.*`, `sandbox.deploy.*`, `sandbox.stripe.*` reserved for openova-MCP
 - bp-chepherd preserves the 3-PVC StatefulSet shape so Sandbox's "close laptop, open phone later" semantics survive
 - Auth chain: catalyst-api session cookie → Cilium Gateway → `X-Catalyst-User` header → chepherd WS upgrade
-- openova-side commits: Wave 5.55 (#2310/#2334), Wave 5.57 chain (5.57a–e), Wave 5.59 (#2308), Wave 5.60 (#2312), Wave 5.61 (#2313), Wave 5.65b, Wave 5.67, Wave 5.68 (#2365) all shipped on the substrate-pivot vector. Wave 5.69 (consoleUI.sidebarEntry CRD field) + Wave 5.70 (brand-kit) + `docs/INTEGRATION-OPENOVA-MCP.md` queued openova-side.
+- openova-side integration commits (`openova-io/openova` #2310/#2334, #2308, #2312, #2313, #2365) all shipped on the substrate-pivot vector. The `consoleUI.sidebarEntry` CRD field, brand-kit, and `docs/INTEGRATION-OPENOVA-MCP.md` were queued openova-side.
 
 ### Issues closed this milestone
 

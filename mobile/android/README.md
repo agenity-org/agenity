@@ -1,5 +1,9 @@
 # chepherd-rc-android
 
+> **Status:** Living · pre-release **v0.2.0-rc3** · Play Store submission pending
+> **Component line:** chepherd-rc client (versioned independently from the chepherd daemon, which is at v0.9.2)
+> **Audience:** Android contributors building/sideloading the chepherd-rc mobile client
+
 Native Android client for chepherd-rc. Kotlin 2.0+, Jetpack Compose, Material 3.
 
 **Privacy by default** — pairs to your bastion daemon over WebRTC DataChannel. Relay only sees the signaling handshake. Your data is your data.
@@ -92,12 +96,11 @@ Mirrors `chepherd/docs/DESIGN-SYSTEM.md`. The Kotlin palette tokens live in `cor
 
 ## Status
 
-**v0.2.0-rc3** — buildable Android app with full sign-in (AppAuth
-custom-tab + EncryptedSharedPreferences TokenStore backed by Android
-Keystore) + WSTransport relayed-mode session list + Material 3
-Compose dashboard mirroring the chepherd TUI palette. WebRTC P2P
-mode + Wear OS companion + Play Store metadata are the Wave 8+
-follow-ups.
+**v0.2.0-rc3** (chepherd-rc client line) — buildable Android app with full
+sign-in (AppAuth custom-tab + EncryptedSharedPreferences TokenStore backed by
+Android Keystore) + WSTransport relayed-mode session list + Material 3
+Compose dashboard mirroring the chepherd TUI palette. WebRTC P2P mode +
+Wear OS companion + Play Store metadata are the next follow-ups.
 
 Play Store submission pending:
   - App icon (XML + density buckets)

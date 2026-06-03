@@ -1,6 +1,10 @@
 # chepherd.io edge infrastructure
 
-Hosted services that local chepherd installs reach for mobile-device pairing. **Powered by OpenOva** — runs as workloads in a public OpenOva Sovereign at `chepherd.io`.
+Status: Living
+Authority: subproject README (hosted edge deployment). Daemon contract is canon in [docs/V0.9.2-ARCHITECTURE.md](../docs/V0.9.2-ARCHITECTURE.md); the remote-control protocol is canon in [docs/PROTOCOL.md](../docs/PROTOCOL.md).
+Audience: operators running the hosted chepherd-rc edge services.
+
+Hosted services that local chepherd daemon installs reach for mobile-device pairing, serving the chepherd-rc client line. **Powered by OpenOva** — runs as workloads in a public OpenOva Sovereign at `chepherd.io`.
 
 ## What runs
 
@@ -22,7 +26,7 @@ All three deploy as a single bp-chepherd-edge Blueprint into a public OpenOva So
 | `stun.chepherd.io` | STUN/TURN endpoint (port 3478 UDP + 5349 TLS) |
 | `discovery.chepherd.io` | Discovery service API (HTTPS) |
 
-Sovereign DNS pattern: `stun.chepherd.io → CNAME stun.<sov-fqdn>` via PowerDNS lua-records GSLB (per openova-io/openova#2316 bonus item 1). Single-region for v0.7; geographic spread later as TURN traffic warrants.
+Sovereign DNS pattern: `stun.chepherd.io → CNAME stun.<sov-fqdn>` via PowerDNS lua-records GSLB (per [openova-io/openova#2316](https://github.com/openova-io/openova/issues/2316) bonus item 1). Single-region today; geographic spread later as TURN traffic warrants.
 
 ## Install
 

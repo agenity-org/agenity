@@ -1,6 +1,10 @@
 # chepherd-relay
 
-Signaling + auth + push proxy for the [chepherd-rc](https://chepherd.org) remote-control system.
+Status: Living
+Authority: subproject README (relay implementation). The wire contract is canon in [docs/PROTOCOL.md](../docs/PROTOCOL.md) — protocol changes go via ADR + semver; this implementation conforms to it, not vice-versa.
+Audience: operators self-hosting the chepherd-rc relay.
+
+Signaling + auth + push proxy for the chepherd-rc remote-control client line (web, iOS, Android; currently v0.2.0-rc3, versioned independently of the chepherd daemon).
 
 Hosted in the OpenOva Sovereign instance (`openova-private`) as a Helm-deployed Blueprint `bp-chepherd-relay`. Every OpenOva Sovereign that installs the Blueprint becomes its own chepherd-rc relay endpoint.
 
@@ -36,7 +40,7 @@ Audited quarterly by a third-party pentest (see [audits/](audits/)).
 
 ## Protocol
 
-This relay implements the server side of [chepherd-rc protocol v1](https://github.com/chepherd/chepherd/blob/main/docs/PROTOCOL.md). The protocol doc is authoritative; this repo's implementation is generated against it.
+This relay implements the server side of the chepherd-rc protocol; the canonical spec is [docs/PROTOCOL.md](../docs/PROTOCOL.md). That doc is authoritative — protocol changes land there via ADR + semver, and this implementation conforms to it.
 
 ## Deploy
 

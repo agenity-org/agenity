@@ -1,16 +1,20 @@
 # bp-chepherd — chepherd as an OpenOva Blueprint
 
-This directory packages chepherd v0.5+ as a Helm chart installable into any OpenOva Sovereign.
+Status: Living
+Authority: subproject README (deployment packaging). The chepherd daemon contract is canon in [docs/V0.9.2-ARCHITECTURE.md](../docs/V0.9.2-ARCHITECTURE.md).
+Audience: operators deploying the chepherd daemon into an OpenOva Sovereign.
+
+This directory packages the chepherd daemon (Go runtime; latest released tag v0.9.2, v0.9.4 in development) as a Helm chart installable into any OpenOva Sovereign.
 
 ## What you get
 
 - **chepherd runtime** (pty-host + MCP server + @target relay) running as a StatefulSet
 - **Adam + Chepherd** spawned as the default 2-agent team (or just Adam with `--set runtime.monitored=false`)
 - **3 PVCs per session** (`/repo`, `/.claude-memory`, `/.cache`) — preserves the openova Sandbox "close laptop, open phone later" semantics
-- **openova-MCP sidecar pattern** — bundles the openova-sandbox-mcp binary inside the chepherd image so MCP-via-stdio works (no separate Pod, per openova Wave 0.3.4 EOF lesson)
+- **openova-MCP sidecar pattern** — bundles the openova-sandbox-mcp binary inside the chepherd image so the MCP transport works (no separate Pod)
 - **Cilium Gateway HTTPRoute** at `/apps/bp-chepherd/dashboard`
 - **Auth handshake** via catalyst-api session cookie → `whoami` header injection
-- **Console sidebar entry** via Blueprint CR `consoleUI.sidebarEntry` (gated on openova Wave 5.69)
+- **Console sidebar entry** via Blueprint CR `consoleUI.sidebarEntry`
 
 ## Install
 
@@ -61,8 +65,9 @@ Per the joint EPIC openova-io/openova#2316:
 
 The pty-host portion of chepherd is lifted from `openova-io/openova` at tag `pty-server-handoff-1.0` (commit `c65dbdca`). See `internal/ptyhost/LICENSE-NOTICE` in the chepherd repo.
 
-## Status
+## Version history
 
-- v0.5.0: lift + runtime + MCP server + @target relay + Adam/Chepherd bootstrap + minimal TUI
-- v0.6.0 (next): web client, provider abstraction, first-run wizard, OS keychain
-- v0.7.0: bp-chepherd Blueprint catalog submission, iOS + Android clients, native installers, chepherd.io edge infra
+The daemon and its remote-control clients version independently:
+
+- **chepherd daemon** (this chart): latest released tag v0.9.2; v0.9.4 in active development (QA complete, not yet tagged). Provides the runtime, MCP HTTP server, @target relay, multi-agent control room, and A2A federation mesh (STUN P2P + TURN relay via signal.openova.io). The original v0.5.0 lift from the OpenOva pty-host substrate is recorded in the project [CHANGELOG.md](../CHANGELOG.md).
+- **chepherd-rc clients** (web, iOS, Android, relay): a separate component line versioned independently, currently at v0.2.0-rc3 (pre-release).

@@ -1,8 +1,16 @@
 # chepherd-rc Protocol — v1
 
-**Status:** Draft for v0.2.0 implementation. Authoritative when the spec
-is referenced by a client implementation. Changes go through ADR + bump
-the protocol version label (semver).
+**Status:** Canon. This is the wire protocol for the chepherd-rc client
+line (web, iOS, Android, relay), shipping under chepherd-rc `v0.2.0-rc3`.
+It is versioned independently of the chepherd daemon (Go binary, currently
+v0.9.2 canon / v0.9.4 in development) — the `v1` here is the protocol
+envelope version, NOT a client or daemon release number.
+**Authority:** authoritative for every chepherd-rc client + the daemon's
+rc bridge. Each implementation conforms to this doc; the doc does not
+track the implementations.
+**Governance:** changes go through an ADR and bump the protocol version
+label per semver (see §9). Backwards-incompatible envelope changes are a
+new major (`v2`); new optional fields are not breaking.
 
 **Repo:** `github.com/chepherd/chepherd`
 **Schema:** `https://chepherd.org/schema/v1.json` (JSON Schema, served as
