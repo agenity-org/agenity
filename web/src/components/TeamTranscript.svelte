@@ -206,18 +206,9 @@
   function inlineRecipient(m) {
     const r = m.recipients || [];
     if (!r.length || r.includes('everyone')) return '';
-    if (m.routed_to_default) return ''; // routed-sub line carries it
+    if (m.routed_to_default && m.default_target) return ''; // routed-sub line carries it
     if (r.length === 1) return r[0];
     return r.join(', ');
-  }
-
-  function relTime(ts) {
-    if (!ts) return '';
-    const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
-    if (s < 60) return `${s}s ago`;
-    if (s < 3600) return `${Math.floor(s/60)}m`;
-    if (s < 86400) return `${Math.floor(s/3600)}h`;
-    return `${Math.floor(s/86400)}d`;
   }
 
   // Body rendering: @-mention highlight + #-ticket auto-link.
@@ -265,13 +256,6 @@
         detail: { repo, num },
       }));
     } catch {}
-  }
-
-  function recipientLabel(m) {
-    if (!m.recipients || m.recipients.length === 0) return '(no recipients)';
-    if (m.recipients.includes('everyone')) return '@everyone';
-    if (m.recipients.length === 1) return '@' + m.recipients[0];
-    return m.recipients.map(r => '@' + r).join(', ') + ` (${m.recipients.length})`;
   }
 
   // Truncate long bodies (>2 lines / ~200 chars) — show [show more] toggle.
