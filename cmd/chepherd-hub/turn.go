@@ -162,6 +162,23 @@ func buildTURNRelay(cfg *config) (*turnRelay, error) {
 		},
 	}
 
+	// #675 — bound the relay port range when configured so the deploy only
+	// needs a small, known UDP window reachable on the node (hostNetwork +
+	// firewall) instead of the whole ephemeral range. Zero min/max keeps the
+	// legacy unbounded Static generator (dev / single-host).
+	var relayGen turn.RelayAddressGenerator
+	if cfg.turnRelayMin > 0 && cfg.turnRelayMax >= cfg.turnRelayMin {
+		relayGen = &turn.RelayAddressGeneratorPortRange{
+			RelayAddress: relayIP,
+			Address:      "0.0.0.0",
+			MinPort:      uint16(cfg.turnRelayMin),
+			MaxPort:      uint16(cfg.turnRelayMax),
+		}
+		log.Printf("[chepherd-hub] TURN relay port range bound to %d-%d (relay-ip %s)",
+			cfg.turnRelayMin, cfg.turnRelayMax, relayIP)
+	} else {
+		relayGen = &turn.RelayAddressGeneratorStatic{RelayAddress: relayIP, Address: "0.0.0.0"}
+	}
 	serverCfg := turn.ServerConfig{
 		Realm:         turnRealm(cfg),
 		AuthHandler:   authHandler,
@@ -169,11 +186,8 @@ func buildTURNRelay(cfg *config) (*turnRelay, error) {
 		EventHandler:  events,
 		PacketConnConfigs: []turn.PacketConnConfig{
 			{
-				PacketConn: udpConn,
-				RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{
-					RelayAddress: relayIP,
-					Address:      "0.0.0.0",
-				},
+				PacketConn:            udpConn,
+				RelayAddressGenerator: relayGen,
 			},
 		},
 	}

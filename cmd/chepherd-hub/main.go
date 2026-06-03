@@ -45,6 +45,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -110,6 +111,15 @@ type config struct {
 	// receive in the TURN URI list. When empty the URI uses the
 	// listen address (suitable for local-dev tests).
 	turnPublicHost string
+
+	// turnRelayMin/turnRelayMax bound the UDP port range pion allocates for
+	// TURN relay allocations (#675). When both are >0 and max>=min the
+	// server uses RelayAddressGeneratorPortRange so the deploy only needs a
+	// small, known UDP window opened on the node/firewall instead of the
+	// whole ephemeral range. Zero (default) keeps the legacy unbounded
+	// RelayAddressGeneratorStatic behaviour.
+	turnRelayMin int
+	turnRelayMax int
 
 	// federationTargets is the comma-separated <orgID>=<daemonURL>
 	// pairs registry the hub forwards /v1/federation/auth requests
@@ -207,6 +217,10 @@ func parseFlags(args []string) *config {
 		"#496 Wave F6 — optional TURN-over-TCP listener for UDP-blocked networks (e.g. :443)")
 	fs.StringVar(&cfg.turnPublicHost, "turn-public-host", envOr("CHEPHERD_HUB_TURN_PUBLIC_HOST", ""),
 		"#496 Wave F6 — host:port runners receive in the TURN URI list (default: derive from listen addr)")
+	fs.IntVar(&cfg.turnRelayMin, "turn-relay-min", envOrInt("CHEPHERD_HUB_TURN_RELAY_MIN", 0),
+		"#675 — min UDP relay port pion allocates (0=unbounded legacy RelayAddressGeneratorStatic)")
+	fs.IntVar(&cfg.turnRelayMax, "turn-relay-max", envOrInt("CHEPHERD_HUB_TURN_RELAY_MAX", 0),
+		"#675 — max (inclusive) UDP relay port; must be >= --turn-relay-min to bound the range")
 	fs.StringVar(&cfg.federationTargets, "federation-targets",
 		envOr("CHEPHERD_HUB_FEDERATION_TARGETS", ""),
 		"#498 Wave F8 — comma-separated <orgID>=<daemonURL> pairs the hub relays /v1/federation/auth to (empty disables)")
@@ -219,6 +233,16 @@ func parseFlags(args []string) *config {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+// envOrInt is the int counterpart of envOr (#675 — relay port range).
+func envOrInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }
