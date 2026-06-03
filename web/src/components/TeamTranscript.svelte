@@ -5,6 +5,7 @@
   Enter-sends compose. Single source of truth replacing A2A Inbox + Inbox.
 -->
 <script>
+  import { agentIdentity } from '../lib/agentIdentity.js';
   import { onMount } from 'svelte';
 
   let { team = 'default' } = $props();
@@ -507,7 +508,7 @@
             {#if selectedScope === 'all' && m.team}
               <span class="team-chip" style="background: {teamColor(m.team)}">{m.team}</span>
             {/if}
-            <span class="chip from">@{m.author}</span>
+            <span class="chip from" style="color: {agentIdentity(m.author).color}">@{m.author}</span>
             <span class="arrow">→</span>
             <span class="chip to" title={(m.recipients || []).join(', ')}>{recipientLabel(m)}</span>
             {#if kindLabel(m)}
