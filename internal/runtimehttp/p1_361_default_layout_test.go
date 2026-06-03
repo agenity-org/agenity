@@ -1,9 +1,20 @@
-// internal/runtimehttp/p1_361_default_layout_test.go — pins #361:
-// the v08 default Workspace layout MUST include federation +
-// a2a-inbox + multi-host so fresh-load operator sees v0.9.3
-// cross-instance surfaces without right-click pane-picking.
+// internal/runtimehttp/p1_361_default_layout_test.go — pins the default
+// v08 Workspace layout shape.
 //
-// Refs #361 #225.
+// History: #361 required federation + a2a-inbox + multi-host on fresh
+// load (no right-click pane-picking for cross-instance surfaces). #666
+// removed the a2a-inbox (Team Transcript subsumed it). #692 (the #690
+// UX redesign) removed the federation + multi-host PANES entirely —
+// their content moved into the session rail (⇄ mesh rows) and the
+// Inspector's mesh section — and the default layout became the #690
+// target shell: rail | terminal + transcript | inspector + transcript.
+//
+// The #361 intent ("fresh load shows the cross-instance surfaces with
+// zero pane-picking") still holds: the rail (session-list) carries the
+// mesh peers and the inspector carries reachability/synced detail, both
+// present in the default layout below.
+//
+// Refs #361 #225 #666 #692 #690.
 package runtimehttp
 
 import (
@@ -29,7 +40,7 @@ func findWorkspaceFile(t *testing.T) string {
 	return ""
 }
 
-func TestP1_361_DefaultLayout_IncludesV093Widgets(t *testing.T) {
+func TestP1_361_DefaultLayout_TargetShellWidgets(t *testing.T) {
 	t.Parallel()
 	path := findWorkspaceFile(t)
 	if path == "" {
@@ -40,18 +51,25 @@ func TestP1_361_DefaultLayout_IncludesV093Widgets(t *testing.T) {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	src := string(body)
-	// #666 (2026-06-02) — the standalone A2A Inbox widget was removed
-	// after Team Transcript subsumed agent↔agent comms. The default
-	// layout still surfaces federation + multi-host + team-transcript
-	// (the new home for A2A traffic) so the original intent of #361
-	// (no right-click pane-picking) holds for v0.9.4.
+	// #692 target shell: rail + terminal + transcript + inspector all
+	// present on fresh load with zero pane-picking.
 	for _, want := range []string{
-		"widget: 'federation'",
+		"widget: 'session-list'",
+		"widget: 'terminal'",
 		"widget: 'team-transcript'",
-		"widget: 'multi-host'",
+		"widget: 'inspector'",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("default Workspace layout missing %q", want)
+		}
+	}
+	// The deleted panes must NOT reappear in the default layout.
+	for _, banned := range []string{
+		"widget: 'federation'",
+		"widget: 'multi-host'",
+	} {
+		if strings.Contains(src, banned) {
+			t.Errorf("default Workspace layout still references deleted pane %q (#692 removed it)", banned)
 		}
 	}
 }

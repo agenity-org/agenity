@@ -3,9 +3,20 @@
   Click an agent to select. Group by team with shepherd icon distinct.
 -->
 <script>
+  import WidgetSessionBoard from './WidgetSessionBoard.svelte';
+
   let { sessions, teams, memberships, selectedAgent, selectAgent } = $props();
   const API = '/api-v08/v1';
   let ctxMenu = $state(null); // { x, y, agent, currentTeam, currentRole }
+
+  // #692 — ☰ list / ▤ board presentation toggle. Replaces the standalone
+  // session-board pane (removed from the picker); persisted per browser.
+  let viewMode = $state(
+    (typeof localStorage !== 'undefined' && localStorage.getItem('chepherd-rail-view')) || 'list');
+  function setViewMode(m) {
+    viewMode = m;
+    try { localStorage.setItem('chepherd-rail-view', m); } catch {}
+  }
 
   function openTeamSettings(t, mems) {
     window.dispatchEvent(new CustomEvent('chepherd-open-team-settings', { detail: { team: t, members: mems } }));
@@ -418,6 +429,15 @@
   </div>
 {/if}
 
+<!-- #692 — ☰/▤ view toggle (board pane merged into the rail) -->
+<div class="view-toggle" data-testid="rail-view-toggle">
+  <button type="button" class:active={viewMode === 'list'} onclick={() => setViewMode('list')} title="list view">☰</button>
+  <button type="button" class:active={viewMode === 'board'} onclick={() => setViewMode('board')} title="board view">▤</button>
+</div>
+
+{#if viewMode === 'board'}
+  <WidgetSessionBoard {sessions} {selectedAgent} {selectAgent} />
+{:else}
 <div class="list">
   {#each tree as group (group.team.name)}
     <section class="team" class:orphan-group={group.team.isOrphanGroup}>
@@ -453,7 +473,9 @@
                 onclick={(ev) => handleAgentClick(ev, agent.name)}
                 oncontextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
                 title="Click to select. Ctrl+click to toggle. Shift+click for range. Right-click for full menu (move team, change role, pause, stop). Hover for × to delete.">
-              <span class="icon" class:shepherd={m.role === 'shepherd'}>{m.role === 'shepherd' ? '✻' : '●'}</span>
+              <!-- #692 — hub/external peers get the mesh glyph so the rail
+                   subsumes the old federation pane's peer list. -->
+              <span class="icon" class:shepherd={m.role === 'shepherd'} class:mesh={agent.agent === 'external-a2a' || agent.external}>{agent.agent === 'external-a2a' || agent.external ? '⇄' : (m.role === 'shepherd' ? '✻' : '●')}</span>
               <span class="name">{agent.name}</span>
               {#if agent.live === false}<span class="orphan-tag" title="Not running — orphan row">orphan</span>{/if}
               {#if score != null}<span class="score">{score.toFixed(1)}</span>{/if}
@@ -478,6 +500,7 @@
     <p class="empty">No agents running — hit <strong>+ new</strong> to spawn one.</p>
   {/if}
 </div>
+{/if}
 
 {#if ctxMenu}
   <div class="ctx-backdrop" onclick={closeContext}>
@@ -494,6 +517,11 @@
 
 <style>
   .list { padding: 0.5rem 0.5rem; height: 100%; overflow-y: auto; background: var(--bg); }
+  /* #692 — ☰/▤ toggle + mesh glyph */
+  .view-toggle { display: flex; gap: 0.15rem; justify-content: flex-end; padding: 0.25rem 0.5rem 0; background: var(--bg); }
+  .view-toggle button { background: none; border: 1px solid transparent; border-radius: 4px; color: var(--fg-muted, #888); cursor: pointer; font-size: 0.8rem; padding: 0.05rem 0.35rem; }
+  .view-toggle button.active { color: var(--fg, #ddd); border-color: var(--border, #2a2a2a); }
+  .icon.mesh { color: var(--accent-2, #87ceeb); }
   /* #393 P1 — list header with orphan-count + Clean up orphans button */
   .list-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); background: var(--bg-elev); font-size: 0.8rem; }
   .orphan-count { color: var(--warn, #d99); font-weight: 600; }
