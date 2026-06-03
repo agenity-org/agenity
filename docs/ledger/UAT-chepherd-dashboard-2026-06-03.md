@@ -47,7 +47,7 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 
 | # | Screen you're on | What you do | What you must see | Result | Evidence |
 |---|---|---|---|---|---|
-| 1 | [`/v0.9.4/`](http://localhost:8083/v0.9.4/) | Open the page | A **"🔑 chepherd login"** dialog: *"Paste the bootstrap token chepherd printed at startup."* | ✅ | (login dialog) |
+| 1 | [`/v0.9.4/`](http://localhost:8083/v0.9.4/) | Open the page | A **"🔑 chepherd login"** dialog: *"Paste the bootstrap token chepherd printed at startup."* | ✅ | [📷 tc01-0-login-dialog](evidence/tc01-0-login-dialog.png) |
 | 2 | chepherd login | Paste the token, click **Sign in** | Dialog closes; the **workspace** loads — header shows *"N agent · M teams · K memberships"* and the pane grid (sessions · terminal · team transcript · federation · multi-host · agent-details · scorecard) | ✅ | [📷 tc01-1-workspace](evidence/tc01-1-workspace.png) |
 
 - **Journey verdict:** 🟢 **PASS** — token sign-in reaches the workspace.
@@ -101,7 +101,7 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 | 3 | Step 2 *Repo* | Click **Built-in (Embedded sandbox)**, type a repo name `uat-walk-demo`, press **Enter**, click **Next →** | Repo commits and **Next** enables; step 3 *Skills* — *"Who's bringing what?"* skill matrix | ❌ | see note — auto-commit copy defect |
 | 4 | Step 3 *Skills* | Accept defaults, click **Next →** | Step 4 *Agents* — *"Which agents + which models?"* (claude-code · claude-opus-4-7) | ✅ | [📷 tc04-2-wizard-skills](evidence/tc04-2-wizard-skills.png) |
 | 5 | Step 4 *Agents* | Accept defaults, click **Next →** | Step 5 *Accounts* — a saved Claude account auto-selects; *"✓ All 1 agents have an account selected"* | ✅ | [📷 tc04-3-wizard-accounts](evidence/tc04-3-wizard-accounts.png) |
-| 6 | Step 5 *Accounts* | Click **Next →** | Step 6 *Launch* — review table + pre-flight **"✓ All accounts valid · ✓ Embedded Gitea ready · ✓ 1/1 agent slots ready"** | ✅ | [📷 tc04-4-wizard-preflight](evidence/tc04-4-wizard-preflight.png) |
+| 6 | Step 5 *Accounts* | Click **Next →** | Step 6 *Launch* — review table + pre-flight; expanding **▸ Pre-flight ✓ checks passed** shows **"✓ All accounts valid · ✓ Embedded Gitea ready · ✓ 1/1 agent slots ready"** | ✅ | [📷 tc04-4-wizard-preflight](evidence/tc04-4-wizard-preflight.png) |
 | 7 | Step 6 *Launch* | Click **⚡ Launch 1 agents** | A new agent appears in the **sessions** pane with a live **terminal** tab | ❌ | [📷 tc04-5-spawn-failed](evidence/tc04-5-spawn-failed.png) |
 
 - **Journey verdict:** 🔴 **FAIL** — Launch errored on screen: **`⚠ 1 of 1 agents failed` → `provider "embedded" not registered`**, despite the pre-flight (step 6) having shown a **false green** *"✓ Embedded Gitea ready"*. The built-in-sandbox spawn — the simplest, default path — never produces a running agent. Filed **[#682](https://github.com/chepherd/chepherd/issues/682) (P1)**, which also covers the false-green pre-flight (theater) and a P3 copy defect at step 3: *"valid name auto-commits"* is wrong — a valid name does **not** auto-commit; the repo only commits when you press **Enter** (no repo-create request fires otherwise, and **Next** stays disabled). Issue left **open**; the executor does not close it.
