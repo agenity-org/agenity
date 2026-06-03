@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -68,12 +69,26 @@ func (d *HostedRegistryDiscoverer) Run(ctx context.Context, out chan<- PeerAnnou
 	if pollPeriod == 0 {
 		pollPeriod = 30 * time.Second
 	}
+	// #703 — every one-shot goroutine is tracked so Run returns ONLY
+	// after all in-flight polls/announces finish. Federation.Run closes
+	// the shared `out` channel right after its discoverers return
+	// (wg.Wait → close); without this wait an in-flight pollOnce could
+	// send on the just-closed channel → panic ("send on closed
+	// channel", caught by CI on the multi-host walk). Ownership rule:
+	// only code that has provably outlived every sender may close.
+	var wg sync.WaitGroup
+	spawn := func(fn func()) {
+		wg.Add(1)
+		go func() { defer wg.Done(); fn() }()
+	}
+	defer wg.Wait()
+
 	// Single self-announce immediately so the registry knows about us
 	// before peers start polling — saves one announce-period of delay.
-	go d.announceOnce(ctx)
+	spawn(func() { d.announceOnce(ctx) })
 	// Single immediate poll so we get the current peer set on boot
 	// instead of waiting one PollPeriod.
-	go d.pollOnce(ctx, out)
+	spawn(func() { d.pollOnce(ctx, out) })
 
 	announceTick := time.NewTicker(announcePeriod)
 	defer announceTick.Stop()
@@ -84,9 +99,9 @@ func (d *HostedRegistryDiscoverer) Run(ctx context.Context, out chan<- PeerAnnou
 		case <-ctx.Done():
 			return
 		case <-announceTick.C:
-			go d.announceOnce(ctx)
+			spawn(func() { d.announceOnce(ctx) })
 		case <-pollTick.C:
-			go d.pollOnce(ctx, out)
+			spawn(func() { d.pollOnce(ctx, out) })
 		}
 	}
 }
