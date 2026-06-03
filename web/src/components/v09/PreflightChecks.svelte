@@ -39,7 +39,18 @@
         out.push({ kind: 'repo', label: 'Repo accessible', state: 'fail', detail: 'network error' });
       }
     } else if (selection?.repo?.kind === 'builtin') {
-      out.push({ kind: 'repo', label: 'Embedded Gitea ready', state: 'pass' });
+      // #682 — the embedded sandbox is provisioned ON launch (the Gitea
+      // sidecar boots + the repo is created when the first agent spawns).
+      // There's nothing to verify beforehand, so a green "ready" here is
+      // a false green: it used to show pass right before the spawn failed.
+      // Report it honestly as pending ("provisioned on launch") — amber,
+      // not green; launch stays enabled because pending != fail.
+      out.push({
+        kind: 'repo',
+        label: 'Embedded sandbox',
+        state: 'pending',
+        detail: 'provisioned on launch',
+      });
     }
 
     // 3. agent slots — v0.9.1 shape (#194 architect 2026-05-28 FINAL+).

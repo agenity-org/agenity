@@ -126,8 +126,16 @@ func EnsureEmbeddedGitea(stateDir, repoName string) (*EmbeddedGiteaInfo, error) 
 		"--name", giteaContainerName,
 		"--restart", "unless-stopped",
 		"--network", agentNetworkMode(),
-		"-v", dataDir+":/data:rw",
-		"-v", configDir+":/etc/gitea:rw",
+		// #682 — gitea runs as a SIBLING container spawned via the host
+		// podman socket, so the bind-mount SOURCE must be the host path,
+		// not chepherd's in-container path. Without toHostPath the host
+		// podman statfs'd /home/chepherd/.local/state/... (which doesn't
+		// exist on the host) and the run failed with exit 125. The dirs
+		// were just MkdirAll'd at the in-container path, which the state
+		// bind-mount mirrors onto the host, so the translated source
+		// exists. No-op on host-direct (env vars unset → path unchanged).
+		"-v", toHostPath(dataDir)+":/data:rw",
+		"-v", toHostPath(configDir)+":/etc/gitea:rw",
 		// Default install-mode env per the Gitea image.
 		"-e", "USER_UID=1000",
 		"-e", "USER_GID=1000",
