@@ -76,6 +76,35 @@ func TestP2_686_RoundTrip_TimesOutWhenRunnerSilent(t *testing.T) {
 	}
 }
 
+// Tunnel closes WHILE a round-trip is awaiting its response (runner WS
+// drop, same-org eviction, hub shutdown). close() closes every pending
+// channel; receiving from a closed channel yields nil — roundTrip must
+// surface an error, NOT return (nil, nil) (which made the relay handler
+// nil-deref the response: per-request panic, pre-existing, found by the
+// #686 independent review).
+func TestP2_686_RoundTrip_CloseDuringAwait_ErrorsNotNilNil(t *testing.T) {
+	tn := &tunnel{
+		orgID:   "bob.example",
+		pending: map[string]chan *relayFrame{},
+	}
+	// Runner never replies; the tunnel closes shortly after send.
+	tn.sendFn = func(f *relayFrame) error { return nil }
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		tn.close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := tn.roundTrip(ctx, &relayFrame{RequestID: "req-close", Direction: "to-runner"})
+	if err == nil {
+		t.Fatalf("roundTrip = (%+v, nil) — want error when tunnel closes mid-await (nil resp would panic the handler)", resp)
+	}
+	if resp != nil {
+		t.Fatalf("resp = %+v, want nil alongside the error", resp)
+	}
+}
+
 func TestP2_686_RoundTrip_ClosedTunnelErrors(t *testing.T) {
 	tn := &tunnel{
 		orgID:   "bob.example",

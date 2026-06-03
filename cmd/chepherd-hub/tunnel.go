@@ -133,7 +133,15 @@ func (t *tunnel) roundTrip(ctx context.Context, frame *relayFrame) (*relayFrame,
 		return nil, err
 	}
 	select {
-	case f := <-ch:
+	case f, ok := <-ch:
+		if !ok {
+			// close() closed every pending channel — receiving from a
+			// closed channel yields nil. Without this check roundTrip
+			// returned (nil, nil) and the relay handler nil-deref'd the
+			// response (per-request panic). Pre-existing in the old
+			// awaitResponse; caught by the #686 independent review.
+			return nil, errors.New("tunnel closed while awaiting response")
+		}
 		return f, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -167,7 +175,9 @@ func (t *tunnel) close() {
 	pending := t.pending
 	t.pending = nil
 	t.mu.Unlock()
-	_ = t.conn.Close()
+	if t.conn != nil { // nil in unit fixtures that never dial a real WS
+		_ = t.conn.Close()
+	}
 	for _, ch := range pending {
 		close(ch)
 	}
