@@ -51,8 +51,8 @@ type teamCanonMemberBrief struct {
 //
 // #404 P0.3.
 func (r *Runtime) emitTeamEvent(ev teamEvent) {
-	if r.teamEvents == nil {
-		return
+	if r.teamEvents == nil || r.eventsClosed {
+		return // #684 — never send on a closed channel after Close()
 	}
 	select {
 	case r.teamEvents <- ev:
@@ -71,7 +71,36 @@ func (r *Runtime) emitTeamEvent(ev teamEvent) {
 func (r *Runtime) startTeamEventLoop() {
 	r.teamEvents = make(chan teamEvent, 64)
 	r.regenTimers = make(map[string]*time.Timer)
-	go r.teamEventLoop()
+	r.eventWG.Add(1)
+	go func() {
+		defer r.eventWG.Done()
+		r.teamEventLoop()
+	}()
+}
+
+// Close stops the team-event fan-out goroutine and waits for any
+// in-flight team-canon writes to finish, then cancels pending debounced
+// briefing regens. It exists so tests using a t.TempDir() state dir can
+// quiesce the runtime BEFORE the dir is removed — otherwise the async
+// fan-out (materializeTeamCanon) can write under the dir while
+// t.Cleanup's RemoveAll walks it, failing with "directory not empty"
+// (#684). The production daemon runs to process exit and need not call
+// this. Idempotent + safe to call with no events ever emitted.
+func (r *Runtime) Close() {
+	r.mu.Lock()
+	if r.teamEvents != nil && !r.eventsClosed {
+		r.eventsClosed = true
+		close(r.teamEvents) // teamEventLoop drains buffered events, then exits
+	}
+	r.mu.Unlock()
+	r.eventWG.Wait() // block until all in-flight canon writes complete
+
+	r.regenMu.Lock()
+	for _, t := range r.regenTimers {
+		t.Stop()
+	}
+	r.regenTimers = map[string]*time.Timer{}
+	r.regenMu.Unlock()
 }
 
 // teamEventLoop is the single fan-out goroutine. For each event:
