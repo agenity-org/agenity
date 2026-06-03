@@ -182,6 +182,12 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// the agent registry (and incrementally other state) is read/written
 	// through the Repository contract from PR #209 rather than file-on-disk.
 	// Store stays open for the lifetime of the chepherd process.
+	// #674 — auto-create the state dir so sqlite can open chepherd.db on a
+	// fresh host/dir instead of dying with "unable to open database file
+	// (14)". MkdirAll is a no-op when the dir already exists.
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return fmt.Errorf("runtime: create state dir %q: %w", stateDir, err)
+	}
 	persistDB := filepath.Join(stateDir, "chepherd.db")
 	store, err := sqlite.NewStore(context.Background(), persistDB)
 	if err != nil {

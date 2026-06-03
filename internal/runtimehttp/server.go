@@ -1273,6 +1273,20 @@ func (s *Server) listSessionsMerged(ctx context.Context) []map[string]any {
 			liveIDs[info.ID] = struct{}{} // key by ID to match SessionStore.List()
 			out = append(out, infoToMap(info, true))
 		}
+		// #671 — surface #669/#672 externally-registered + hub-discovered
+		// peers here too, so the dashboard /api/v1/sessions matches what the
+		// MCP chepherd.list tool returns (parity; see mcpserver/server.go
+		// case "list"). external=true distinguishes them from PTY sessions.
+		if s.rt.Peers() != nil {
+			for _, p := range s.rt.Peers().List() {
+				out = append(out, map[string]any{
+					"name": p.Name, "id": p.Name, "team": p.Team,
+					"agent": "external-a2a", "role": "",
+					"live": true, "external": true,
+					"agent_card_url": p.AgentCardURL, "created_at": p.JoinedAt,
+				})
+			}
+		}
 	}
 	if s.SessionStore == nil {
 		return out

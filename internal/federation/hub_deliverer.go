@@ -115,19 +115,60 @@ func (d *HubDeliverer) hubPeerOrg(ctx context.Context, sid string) (string, bool
 	return org, true
 }
 
+// hubDialMaxAttempts bounds how many times deliverOverHub re-dials on a
+// TRANSPORT failure. #673: the first cold dial to a freshly-(re)started
+// answerer can exceed the dial deadline (answerer warmup + ICE gather)
+// and there is no ICE trickle to recover within the same attempt; a fresh
+// re-dial reliably succeeds. Application-level peer rpc errors (e.g. a
+// recipient's "session not found") are NOT retried — they are a completed
+// round-trip with a definitive answer.
+const hubDialMaxAttempts = 3
+
 // deliverOverHub dials the hub peer, ships a message/send JSON-RPC over
-// the DataChannel, and returns the embedded Task.
+// the DataChannel, and returns the embedded Task. Transport failures
+// (dial timeout, SendRPC error, decode error) are retried up to
+// hubDialMaxAttempts with a fresh re-dial each time (#673); a peer-
+// returned rpc error is surfaced immediately (no retry).
 func (d *HubDeliverer) deliverOverHub(ctx context.Context, hubOrg string, msg a2a.Message) (*a2a.Task, error) {
 	if d.PCStore == nil {
 		return nil, errors.New("HubDeliverer: nil PCStore")
 	}
+	peerURL := webrtcrtc.HubPeerScheme + hubOrg
+	var lastErr error
+	for attempt := 1; attempt <= hubDialMaxAttempts; attempt++ {
+		task, err, retryable := d.attemptOverHub(ctx, peerURL, msg)
+		if err == nil {
+			return task, nil
+		}
+		lastErr = err
+		if !retryable {
+			return nil, err
+		}
+		// Drop any cached/half-dead PC so the next attempt renegotiates
+		// from scratch (cold dial + ICE gather).
+		_ = d.PCStore.Close(peerURL)
+		if attempt < hubDialMaxAttempts {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			}
+		}
+	}
+	return nil, fmt.Errorf("hub-relay to %s failed after %d attempts: %w", hubOrg, hubDialMaxAttempts, lastErr)
+}
+
+// attemptOverHub is one dial+send try. The bool reports whether the error
+// (if any) is a TRANSPORT failure worth retrying (true) vs a definitive
+// application response / non-retryable condition (false).
+func (d *HubDeliverer) attemptOverHub(ctx context.Context, peerURL string, msg a2a.Message) (*a2a.Task, error, bool) {
 	dialTimeout := d.DialTimeout
 	if dialTimeout <= 0 {
-		dialTimeout = 12 * time.Second
+		dialTimeout = 15 * time.Second // #673: cold hub path + ICE gather runs longer than the direct-HTTP default
 	}
-	pc, err := d.PCStore.GetOrDial(ctx, webrtcrtc.HubPeerScheme+hubOrg, dialTimeout)
+	pc, err := d.PCStore.GetOrDial(ctx, peerURL, dialTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
+		return nil, fmt.Errorf("dial: %w", err), true
 	}
 	client := webrtcrtc.NewJSONRPCClient(pc)
 	defer client.Close()
@@ -140,7 +181,7 @@ func (d *HubDeliverer) deliverOverHub(ctx context.Context, hubOrg string, msg a2
 	}
 	reqBytes, err := json.Marshal(envelope)
 	if err != nil {
-		return nil, fmt.Errorf("marshal envelope: %w", err)
+		return nil, fmt.Errorf("marshal envelope: %w", err), false
 	}
 	sendTimeout := d.SendTimeout
 	if sendTimeout <= 0 {
@@ -150,7 +191,9 @@ func (d *HubDeliverer) deliverOverHub(ctx context.Context, hubOrg string, msg a2
 	defer cancel()
 	respBytes, err := client.SendRPC(sendCtx, reqBytes)
 	if err != nil {
-		return nil, fmt.Errorf("SendRPC: %w", err)
+		// Channel went away mid-send (stale cached PC, peer restart) —
+		// transport, retryable with a fresh dial.
+		return nil, fmt.Errorf("SendRPC: %w", err), true
 	}
 	var rpc struct {
 		Result *struct {
@@ -162,15 +205,17 @@ func (d *HubDeliverer) deliverOverHub(ctx context.Context, hubOrg string, msg a2
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(respBytes, &rpc); err != nil {
-		return nil, fmt.Errorf("decode peer response: %w", err)
+		return nil, fmt.Errorf("decode peer response: %w", err), true
 	}
 	if rpc.Error != nil {
-		return nil, fmt.Errorf("peer rpc error %d: %s", rpc.Error.Code, rpc.Error.Message)
+		// A completed round-trip with a definitive peer answer — NOT a
+		// transport failure; do not retry.
+		return nil, fmt.Errorf("peer rpc error %d: %s", rpc.Error.Code, rpc.Error.Message), false
 	}
 	if rpc.Result == nil || rpc.Result.Task == nil {
-		return nil, errors.New("peer response missing result.task")
+		return nil, errors.New("peer response missing result.task"), false
 	}
-	return rpc.Result.Task, nil
+	return rpc.Result.Task, nil, false
 }
 
 // failedTask builds a failed-state Task mirroring FederatedDeliverer.failed
