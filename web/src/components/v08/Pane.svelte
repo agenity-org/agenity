@@ -272,10 +272,9 @@
     'inspector': 'ⓘ inspector',
   };
 
-  // #692 — the picker no longer offers every renderable widget. Monitor-
-  // mode surfaces are first-class; configure-mode widgets remain
-  // reachable here ONLY until the Settings page (#693) absorbs them.
-  // Legacy context widgets (identity/runtime/details/scorecard/prompt/
+  // #692/#693 — the picker offers ONLY monitor-mode surfaces. Configure
+  // widgets (accounts/roles/skills/canon) live in ⚙ Settings (#693);
+  // legacy context widgets (identity/runtime/details/scorecard/prompt/
   // mcp-log/events/board) still RENDER for saved layouts but are no
   // longer pickable — the Inspector (#691) replaced them.
   const PICKER_GROUPS = [
@@ -284,12 +283,6 @@
       { id: 'team-transcript', desc: 'team conversation' },
       { id: 'kanban',          desc: 'work board' },
       { id: 'inspector',       desc: 'focused-agent context (identity · scorecard · debug)' },
-    ]},
-    { label: 'configure — moving to ⚙ settings', items: [
-      { id: 'accounts',     desc: 'Claude accounts + git providers' },
-      { id: 'role-matrix',  desc: 'role × skill matrix' },
-      { id: 'agent-skills', desc: 'skill library' },
-      { id: 'canon-viewer', desc: 'team canon docs' },
     ]},
   ];
   let pickerFilter = $state('');
