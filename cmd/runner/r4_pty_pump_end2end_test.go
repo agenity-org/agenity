@@ -47,14 +47,22 @@ import (
 // on the silence-finalize timer.
 func waitFor(t *testing.T, what string, check func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	// #705 — 15s, not 2s. Every caller drives its outcome through a
+	// DETERMINISTIC trigger (#550 SilenceFire et al.), so the awaited
+	// state flip is causally guaranteed; this budget covers ONLY
+	// goroutine scheduling + sqlite write latency on loaded CI runners,
+	// where 2s was occasionally beaten (K5 flake on PR #704's run).
+	// This is NOT timing-widening of a nondeterministic trigger — a
+	// genuinely broken seam still fails, just without scheduler noise
+	// as a false cause. Passing runs return in milliseconds either way.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if check() {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("waitFor %q: timed out after 2s", what)
+	t.Fatalf("waitFor %q: timed out after 15s", what)
 }
 
 // TestR4_PTYToBroker_Chunked_EndToEnd verifies (a) + (b) by pushing
