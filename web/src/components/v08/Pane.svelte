@@ -26,8 +26,9 @@
   import WidgetCanon from './widgets/WidgetCanon.svelte';
   import WidgetMCPLog from './widgets/WidgetMCPLog.svelte';
   import WidgetKanban from './widgets/WidgetKanban.svelte';
+  import WidgetInspector from './widgets/WidgetInspector.svelte';
 
-  let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, changeWidget, splitPane, removePane, refresh, focusedPaneID = '', setFocusedPane = () => {}, saveLayout = () => {} } = $props();
+  let { node, sessions, teams, memberships, inbox, events, selectedAgent, selectAgent, focusTerminal = () => {}, terminalClosed = () => {}, changeWidget, splitPane, removePane, refresh, focusedPaneID = '', setFocusedPane = () => {}, saveLayout = () => {} } = $props();
 
   // --- Tabs (operator 2026-05-29: any pane can have multiple tabs;
   // each tab carries a widget + config snapshot; the active tab's
@@ -113,6 +114,9 @@
     if (i === node.activeTab) return;
     snapshotActive();
     applyTab(i);
+    // #691 rule 2 — selecting a terminal tab moves the global focus to
+    // its agent (inspector follows terminal selection, nothing else).
+    if (node.widget === 'terminal' && node.config?.agent) focusTerminal(node.config.agent);
     saveLayout();
   }
   function addTab() {
@@ -147,6 +151,9 @@
       node.config = cfg;
     }
     menu = null;
+    // #691 rule 2 — binding a terminal to an agent is a terminal
+    // selection: focus follows.
+    if (tabIdx === node.activeTab) focusTerminal(agentName);
     saveLayout();
   }
   // Reset a tab back to the widget-cards view (used by the "← change
@@ -165,6 +172,7 @@
     ensureTabs();
     if (node.tabs.length <= 1) return; // last tab — keep it
     const wasActive = i === node.activeTab;
+    const removed = node.tabs[i];
     node.tabs = node.tabs.filter((_, idx) => idx !== i);
     if (wasActive) {
       const next = Math.min(i, node.tabs.length - 1);
@@ -172,6 +180,13 @@
     } else if (i < node.activeTab) {
       node.activeTab = node.activeTab - 1;
     }
+    // #691 rule 3 — closing a terminal tab: the focus engine falls back
+    // to the previously focused live agent (MRU) so the inspector keeps
+    // showing "the last terminal" instead of a stale/blank agent.
+    if (removed?.widget === 'terminal' && removed.config?.agent) terminalClosed(removed.config.agent);
+    // The tab that replaced the active slot may itself be a terminal —
+    // that's a terminal selection too (rule 2).
+    if (wasActive && node.widget === 'terminal' && node.config?.agent) focusTerminal(node.config.agent);
     saveLayout();
   }
   function cycleTab(direction) {
@@ -256,6 +271,7 @@
     'federation': '⇄ federation',
     'multi-host': '⛓ multi-host',
     'team-transcript': '💬 team transcript',
+    'inspector': 'ⓘ inspector',
   };
 
   // Per-pane derived agent for the terminal widget header chips.
@@ -294,21 +310,21 @@
 {#if node.kind === 'h'}
   <div class="hsplit" bind:this={containerEl}>
     <div class="hcell" style="width: {node.ratio * 100}%;">
-      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
+      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
     </div>
     <div class="hdivider" on:mousedown={startDrag}></div>
     <div class="hcell" style="width: {(1 - node.ratio) * 100}%;">
-      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
+      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
     </div>
   </div>
 {:else if node.kind === 'v'}
   <div class="vsplit" bind:this={containerEl}>
     <div class="vcell" style="height: {node.ratio * 100}%;">
-      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
+      <Self node={node.a} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
     </div>
     <div class="vdivider" on:mousedown={startDrag}></div>
     <div class="vcell" style="height: {(1 - node.ratio) * 100}%;">
-      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
+      <Self node={node.b} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} {setFocusedPane} {saveLayout} />
     </div>
   </div>
 {:else}
@@ -318,7 +334,12 @@
     class:fullscreen
     class:is-focused={focusedPaneID === node.id}
     data-pane-id={node.id}
-    on:mousedown={() => setFocusedPane(node.id)}
+    on:mousedown={() => {
+      setFocusedPane(node.id);
+      // #691 rule 2 — clicking into a terminal pane selects that
+      // terminal: global focus moves to its agent.
+      if (node.widget === 'terminal' && node.config?.agent) focusTerminal(node.config.agent);
+    }}
   >
     <header class="pane-header">
       <!-- Tabs integrated INTO the existing header (operator 2026-05-29:
@@ -420,6 +441,8 @@
         <WidgetSessionList {sessions} {teams} {memberships} {selectedAgent} {selectAgent} />
       {:else if node.widget === 'session-board'}
         <WidgetSessionBoard {sessions} {selectedAgent} {selectAgent} />
+      {:else if node.widget === 'inspector'}
+        <WidgetInspector {sessions} {memberships} {events} {selectedAgent} {node} {saveLayout} />
       {:else if node.widget === 'agent-details'}
         <WidgetAgentDetails agent={(sessions || []).find(s => s.name === selectedAgent) || null} />
       {:else if node.widget === 'agent-identity'}
