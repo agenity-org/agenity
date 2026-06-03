@@ -42,7 +42,7 @@
     <span class="count">({peers.length})</span>
   </h4>
   {#if peers.length === 0}
-    <p class="hint">No peers. Configure <code>--federation-registry-url</code> to discover other chepherd instances.</p>
+    <p class="hint">No peers. Start the daemon with <code>--hub-url</code> + <code>--org-id</code> to join the hub-relayed mesh (or <code>--federation-registry-url</code> for a hosted registry) to discover other chepherd instances.</p>
   {/if}
   <ul>
     {#each peers as p (p.sid)}

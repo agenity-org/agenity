@@ -35,6 +35,13 @@
     if (!peer || !peer.card || !peer.card.url) {
       return { sid: peer.sid, name: peer.name || peer.sid, sessions: [], error: 'no public URL on agent-card' };
     }
+    // #679 — a hub-relayed peer's url is `hub://<org>` (not a directly-
+    // dialable HTTP endpoint). Don't attempt a cross-host fetch (it would
+    // surface a red "Failed to fetch"); it is reachable via the local
+    // daemon's hub relay, so present it as a hub peer instead of an error.
+    if (peer.card.url.startsWith('hub://')) {
+      return { sid: peer.sid, name: peer.name || peer.sid, sessions: [], error: '', viaHub: true };
+    }
     // Strip the trailing /jsonrpc to get the peer's base URL
     const base = peer.card.url.replace(/\/jsonrpc\/?$/, '');
     try {
@@ -138,7 +145,9 @@
             <span class="when">{s.agent || '?'} · {relTime(s.created_at)}</span>
           </li>
         {/each}
-        {#if peer.sessions.length === 0 && !peer.error}
+        {#if peer.viaHub}
+          <li class="empty">Reachable via hub mesh — sessions not fetched cross-host.</li>
+        {:else if peer.sessions.length === 0 && !peer.error}
           <li class="empty">No sessions on this peer.</li>
         {/if}
       </ul>
@@ -146,7 +155,7 @@
   {/each}
 
   {#if peersWithSessions.length === 0}
-    <p class="hint">No peers cached yet. Configure <code>--federation-registry-url</code> to discover other chepherd instances.</p>
+    <p class="hint">No peers yet. Start the daemon with <code>--hub-url</code> + <code>--org-id</code> to join the hub-relayed mesh, or <code>--federation-registry-url</code> for a hosted registry, to discover other chepherd instances.</p>
   {/if}
 
   {#if lastError}

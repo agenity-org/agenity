@@ -129,20 +129,23 @@
     resizeObs = new ResizeObserver(tryFit);
     resizeObs.observe(termContainer);
 
-    // #357 P0: refuse to open the WS if the runtime says live=false.
-    // Without this, persisted-but-not-running sessions in the cached
-    // sessions list cause an infinite 5s 404-reconnect loop.
+    // #357 / #677: refuse to open the WS unless the session is live AND
+    // present in the runtime list. The original guard only caught
+    // live===false; a session that has dropped OUT of the list entirely
+    // (a stale saved-layout pane pointing at a gone agent, e.g.
+    // "code-reviewer") left `sess` undefined → the guard passed → an
+    // infinite 5s 404-reconnect loop. Reset `attached` so a later
+    // sessions update (Resume / spawn) re-fires attachTo and dials cleanly.
     const sess = (sessions || []).find(s => s.name === name);
-    if (sess && sess.live === false) {
-      // Don't dial. Operator clicks 'Resume' on agent-details to
-      // spawn the session, which flips live=true + triggers a
-      // fresh attachTo via the $effect reactivity.
+    if (!sess || sess.live === false) {
+      attached = null;
       return;
     }
 
     // #151 — auto-reconnect on transient WebSocket close. Exponential
     // backoff capped at 5s, gives up after 8 attempts (~30s).
     let wsReconnectAttempts = 0;
+    let everOpened = false;
     const openWS = () => {
       let wsTok = '';
       try { wsTok = localStorage.getItem('chepherd-token') || ''; } catch {}
@@ -158,11 +161,23 @@
         }
       };
       ws.addEventListener('open', () => {
+        everOpened = true;
         wsReconnectAttempts = 0;
         setTimeout(sendResize, 200);
       });
       ws.addEventListener('close', () => {
         if (attached !== name) return; // user switched agent — don't reconnect
+        // #677 — a close WITHOUT the socket ever opening is a handshake
+        // failure (e.g. HTTP 404 — the session no longer exists), which is
+        // PERMANENT: never retry it (that was the 404 reconnect loop). Only
+        // auto-reconnect a connection that had successfully opened (a real
+        // transient drop) AND only while the session is still live-listed.
+        if (!everOpened) {
+          if (term) { try { term.write('\r\n\x1b[90m[session unavailable — it is no longer running]\x1b[0m\r\n'); } catch {} }
+          return;
+        }
+        const stillLive = (sessions || []).some(s => s.name === name && s.live !== false);
+        if (!stillLive) return;
         wsReconnectAttempts++;
         if (wsReconnectAttempts > 8) return;
         const delay = Math.min(5000, 250 * 2 ** wsReconnectAttempts);
