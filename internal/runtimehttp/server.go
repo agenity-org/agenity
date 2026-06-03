@@ -96,6 +96,13 @@ type Server struct {
 	// construct Server without persistence.
 	KeyStore *auth.KeyStore
 
+	// HubURL is the central chepherd-hub the daemon is connected to
+	// (#672); empty when hub mesh is disabled. Surfaced in /healthz so
+	// the dashboard's Settings ▸ Mesh shows the REAL connection state
+	// instead of a false-negative "start with --hub-url" hint (#693
+	// review catch).
+	HubURL string
+
 	// OrgID identifies this daemon's organization. Surfaced as the
 	// iss claim in cross-org JWTs minted via /api/v1/federation/jwt
 	// (#557 Wave F8.1). When empty, the cross-org mint endpoint
@@ -977,6 +984,11 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 		"ok":       true,
 		"sessions": len(s.rt.List()),
 		"ts":       time.Now().UTC(),
+	}
+	// #693 — surface hub-mesh connection state so Settings ▸ Mesh can
+	// show the real hub/org instead of guessing from absence.
+	if s.HubURL != "" || s.OrgID != "" {
+		resp["federation"] = map[string]string{"hub_url": s.HubURL, "org_id": s.OrgID}
 	}
 	// #383 P0 — surface the ACTUAL container runtime in use ("podman" |
 	// "docker" | "bare"). The `profile.spawner` field below is
