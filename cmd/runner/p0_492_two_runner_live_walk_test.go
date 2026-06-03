@@ -29,6 +29,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 	"time"
 
@@ -105,7 +106,8 @@ func TestV094Walk_F2_DataChannel_BeatsHTTPBaseline(t *testing.T) {
 	const trials = 10
 	req := []byte(`{"jsonrpc":"2.0","id":"f2-walk","method":"message/send","params":{}}`)
 
-	var dcTotal, httpTotal time.Duration
+	dcTimes := make([]time.Duration, 0, trials)
+	httpTimes := make([]time.Duration, 0, trials)
 	for i := 0; i < trials; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, elapsed, err := client.MeasuredSendRPC(ctx, req)
@@ -113,7 +115,7 @@ func TestV094Walk_F2_DataChannel_BeatsHTTPBaseline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("trial %d DC SendRPC: %v", i, err)
 		}
-		dcTotal += elapsed
+		dcTimes = append(dcTimes, elapsed)
 
 		start := time.Now()
 		resp, err := http.Post(srv.URL+"/jsonrpc", "application/json", bytes.NewReader(req))
@@ -122,22 +124,30 @@ func TestV094Walk_F2_DataChannel_BeatsHTTPBaseline(t *testing.T) {
 			t.Fatalf("trial %d HTTP: %v", i, err)
 		}
 		resp.Body.Close()
-		httpTotal += httpElapsed
+		httpTimes = append(httpTimes, httpElapsed)
 	}
-	dcMean := dcTotal / trials
-	httpMean := httpTotal / trials
-	t.Logf("F2 DataChannel mean (n=%d): %v", trials, dcMean)
-	t.Logf("HTTP baseline mean (n=%d):  %v", trials, httpMean)
-	if dcMean > 0 {
-		t.Logf("F2 speedup vs HTTP:         %.2fx", float64(httpMean)/float64(dcMean))
+	median := func(ds []time.Duration) time.Duration {
+		s := append([]time.Duration(nil), ds...)
+		sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+		return s[len(s)/2]
+	}
+	dcMedian := median(dcTimes)
+	httpMedian := median(httpTimes)
+	t.Logf("F2 DataChannel median (n=%d): %v (all: %v)", trials, dcMedian, dcTimes)
+	t.Logf("HTTP baseline median (n=%d):  %v (all: %v)", trials, httpMedian, httpTimes)
+	if dcMedian > 0 {
+		t.Logf("F2 speedup vs HTTP (median):  %.2fx", float64(httpMedian)/float64(dcMedian))
 	}
 
-	// Dispatch success criterion: DC latency < HTTP baseline. Allow
-	// a 2x margin for noisy CI hosts (still proves the transport
-	// works + is competitive).
-	if dcMean > 2*httpMean {
-		t.Errorf("F2 dispatch criterion violated: DC mean (%v) > 2x HTTP mean (%v)",
-			dcMean, httpMean)
+	// Dispatch success criterion: DC latency < HTTP baseline. MEDIAN,
+	// not mean — #589: a single GC/scheduler outlier among 10 trials
+	// blew the mean criterion ~weekly on loaded CI runners while the
+	// median sat stably at ~1.76× faster (B.6 replay analysis). The
+	// 2x margin stays: median-DC worse than double median-HTTP still
+	// means the transport is genuinely broken, not noisy.
+	if dcMedian > 2*httpMedian {
+		t.Errorf("F2 dispatch criterion violated: DC median (%v) > 2x HTTP median (%v)",
+			dcMedian, httpMedian)
 	}
 }
 
