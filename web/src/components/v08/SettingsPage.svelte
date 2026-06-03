@@ -38,6 +38,16 @@
     return m && SECTIONS.some(s => s.id === m[1]) ? m[1] : 'accounts';
   }
   let section = $state(sectionFromHash());
+  // #693 review (b) — keep section in sync with Back/Forward; close when
+  // the hash leaves #settings entirely.
+  $effect(() => {
+    const onHash = () => {
+      if (!location.hash.startsWith('#settings')) { onclose(); return; }
+      section = sectionFromHash();
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  });
   function switchSection(id) {
     section = id;
     try { location.hash = '#settings/' + id; } catch {}
@@ -56,7 +66,7 @@
     (async () => {
       try {
         const [pr, hr] = await Promise.all([
-          fetch('/api/v1/peers'), fetch('/api/v1/healthz'),
+          fetch('/api/v1/peers'), fetch('/healthz'),
         ]);
         if (stop) return;
         if (pr.ok) peers = (await pr.json()).peers || [];
@@ -97,8 +107,8 @@
       {:else if section === 'mesh'}
         <h2>Hub mesh</h2>
         <dl class="mesh-status">
-          <dt>hub</dt><dd>{health?.federation?.hub_url || health?.hub_url || '— (start daemon with --hub-url / CHEPHERD_HUB_URL)'}</dd>
-          <dt>org</dt><dd>{health?.federation?.org_id || health?.org_id || '—'}</dd>
+          <dt>hub</dt><dd data-testid="mesh-hub-url">{health?.federation?.hub_url || '— (start daemon with --hub-url / CHEPHERD_HUB_URL)'}</dd>
+          <dt>org</dt><dd>{health?.federation?.org_id || '—'}</dd>
           <dt>peers</dt><dd>{peers.length}</dd>
         </dl>
         <ul class="mesh-peers">

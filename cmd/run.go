@@ -351,6 +351,7 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 		// --federation-org-id flag (T3 #487) so a single org identifier
 		// drives both the mTLS cert CN AND the JWT issuer. Empty
 		// disables the federation mint endpoint (returns 503).
+		rs.HubURL = runFlagHubURL // #693 — surfaced in /healthz federation block
 		rs.OrgID = runFlagFederationOrgID
 		if rs.OrgID == "" {
 			rs.OrgID = os.Getenv("CHEPHERD_ORG_ID")
