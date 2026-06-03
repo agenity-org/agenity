@@ -188,13 +188,27 @@
     return [...groups.entries()];
   });
 
-  function relTime(ts) {
+  // #695 — compact one-line rendering helpers.
+  // timeHM: right-aligned muted HH:MM; full date on hover (title).
+  function timeHM(ts) {
     if (!ts) return '';
-    const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
-    if (s < 60) return `${s}s ago`;
-    if (s < 3600) return `${Math.floor(s/60)}m`;
-    if (s < 86400) return `${Math.floor(s/3600)}h`;
-    return `${Math.floor(s/86400)}d`;
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  // Consecutive same-author messages within 3 min group under one chip.
+  function isGrouped(msgs, i) {
+    if (i === 0) return false;
+    const prev = msgs[i - 1], cur = msgs[i];
+    if (!prev || prev.author !== cur.author) return false;
+    return (new Date(cur.created_at) - new Date(prev.created_at)) < 180000;
+  }
+  // Recipient shown inline ONLY when it isn't a broadcast.
+  function inlineRecipient(m) {
+    const r = m.recipients || [];
+    if (!r.length || r.includes('everyone')) return '';
+    if (m.routed_to_default && m.default_target) return ''; // routed-sub line carries it
+    if (r.length === 1) return r[0];
+    return r.join(', ');
   }
 
   // Body rendering: @-mention highlight + #-ticket auto-link.
@@ -213,7 +227,9 @@
     // escape minimal HTML
     html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     // @mention
-    html = html.replace(/@([a-zA-Z][a-zA-Z0-9_-]*)/g, '<span class="mention">@$1</span>');
+    // #695 — @mentions render in the mentioned member's identity color.
+    html = html.replace(/@([a-zA-Z][a-zA-Z0-9_-]*)/g, (_mm, nm) =>
+      `<span class="mention" style="color: ${agentIdentity(nm).color}">@${nm}</span>`);
     // #ticket — link to GitHub. Use data-ticket attrs so the click
     // handler can intercept and dispatch chepherd-ticket-focus (#665)
     // alongside the GitHub navigation.
@@ -240,13 +256,6 @@
         detail: { repo, num },
       }));
     } catch {}
-  }
-
-  function recipientLabel(m) {
-    if (!m.recipients || m.recipients.length === 0) return '(no recipients)';
-    if (m.recipients.includes('everyone')) return '@everyone';
-    if (m.recipients.length === 1) return '@' + m.recipients[0];
-    return m.recipients.map(r => '@' + r).join(', ') + ` (${m.recipients.length})`;
   }
 
   // Truncate long bodies (>2 lines / ~200 chars) — show [show more] toggle.
@@ -486,7 +495,13 @@
         {#if selectedScope === 'all'}
           Member of: {teams.join(' · ') || '(no teams)'}
         {:else}
-          members: {(transcript.channel?.members || []).map(m => '@' + m).join(' ') || '(none)'}
+          {#each (transcript.channel?.members || []).slice(0, 8) as mem}
+            <span class="member-chip" style="color: {agentIdentity(mem).color}">{agentIdentity(mem).icon} {mem}</span>
+          {/each}
+          {#if (transcript.channel?.members || []).length > 8}
+            <span class="member-chip muted">+{(transcript.channel?.members || []).length - 8}</span>
+          {/if}
+          {#if !(transcript.channel?.members || []).length}(none){/if}
         {/if}
       </div>
     </div>
@@ -502,39 +517,45 @@
   <div class="messages" bind:this={messagesEl} onscroll={onScroll} onclick={onMessagesClick}>
     {#each groupedMessages as [day, msgs]}
       <div class="day-divider">── {day} ──</div>
-      {#each msgs as m (m.id)}
-        <article class="msg {kindClass(m)}" data-testid="transcript-row" data-kind={m.kind || 'message'}>
-          <div class="row1">
+      {#each msgs as m, mi (m.id)}
+        <!-- #695 — one-line compact rows: [identity chip | inline content | HH:MM].
+             Consecutive same-author messages (3-min window) suppress the chip;
+             recipient appears inline (▸ name) ONLY when not a broadcast. -->
+        <article class="msg compact {kindClass(m)}" class:grouped={isGrouped(msgs, mi)} data-testid="transcript-row" data-kind={m.kind || 'message'}>
+          <span class="chip-col">
+            {#if !isGrouped(msgs, mi)}
+              <span class="chip from" style="color: {agentIdentity(m.author).color}" title={'@' + m.author}>{agentIdentity(m.author).icon} {m.author}</span>
+            {/if}
+          </span>
+          <span class="content-col">
             {#if selectedScope === 'all' && m.team}
               <span class="team-chip" style="background: {teamColor(m.team)}">{m.team}</span>
             {/if}
-            <span class="chip from" style="color: {agentIdentity(m.author).color}">@{m.author}</span>
-            <span class="arrow">→</span>
-            <span class="chip to" title={(m.recipients || []).join(', ')}>{recipientLabel(m)}</span>
+            {#if inlineRecipient(m)}
+              <span class="chip to" title={(m.recipients || []).join(', ')}>▸ {inlineRecipient(m)}</span>
+            {/if}
             {#if kindLabel(m)}
               <span class="kind-label kind-{(m.kind || '').replace('alert:', '')}">{kindLabel(m)}</span>
             {/if}
-            <span class="ts">{relTime(m.created_at)}</span>
             {#if m.recipients && m.recipients.length > 1}
               <span class="badge multi">multi ({m.recipients.length})</span>
             {/if}
-          </div>
           {#if m.routed_to_default && m.default_target}
-            <div class="routed-sub" data-testid="routed-sub">
-              ↪ routed to <span class="mention">@{m.default_target}</span> <span class="muted">(lead)</span>
-            </div>
+            <span class="routed-sub" data-testid="routed-sub">↪ <span class="mention" style="color: {agentIdentity(m.default_target).color}">@{m.default_target}</span> <span class="muted">(lead)</span></span>
           {/if}
           {#if isLong(m.body) && !expanded[m.id]}
-            <div class="body">
+            <span class="body">
               {@html renderBody({ body: preview(m.body), team_github_url: m.team_github_url })}
-              <button class="expand" onclick={() => expanded = { ...expanded, [m.id]: true }}>▾ show more</button>
-            </div>
+              <button class="expand" onclick={() => expanded = { ...expanded, [m.id]: true }}>▾ more</button>
+            </span>
           {:else}
-            <div class="body">{@html renderBody(m)}</div>
+            <span class="body">{@html renderBody(m)}</span>
             {#if isLong(m.body) && expanded[m.id]}
-              <button class="expand" onclick={() => expanded = { ...expanded, [m.id]: false }}>▴ show less</button>
+              <button class="expand" onclick={() => expanded = { ...expanded, [m.id]: false }}>▴ less</button>
             {/if}
           {/if}
+          </span>
+          <span class="ts" title={new Date(m.created_at).toLocaleString()}>{timeHM(m.created_at)}</span>
         </article>
       {/each}
     {/each}
@@ -581,8 +602,7 @@
         </span>
       {:else if defaultTarget}
         <span class="cost-preview" data-testid="default-target-hint">
-          → default: <strong>@{defaultTarget}</strong>
-          <span class="muted">(no @-mention — will route to team lead)</span>
+          <span class="muted">→ @{defaultTarget}</span>
         </span>
       {:else}
         <span class="cost-preview muted">No @-mentions — will be posted to transcript only (no agent wake).</span>
@@ -687,4 +707,16 @@
   .cost-preview .muted { color: var(--fg-muted, #666); margin-left: 0.3rem; }
   .primary { background: var(--accent-2, #87ceeb); border: 0; color: #0a0a0a; padding: 0.4rem 1rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
   .primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* #695 — compact one-line transcript rows */
+  .msg.compact { display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) max-content; width: 100%; box-sizing: border-box; gap: 0 0.5rem; align-items: baseline; padding: 0.1rem 0.2rem; margin-bottom: 0.15rem; }
+  .msg.compact.grouped { padding-top: 0; }
+  .msg.compact .chip-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg.compact .chip.from { font-weight: 600; font-size: 0.82rem; }
+  .msg.compact .content-col { min-width: 0; overflow-wrap: anywhere; font-size: 0.85rem; }
+  .msg.compact .chip.to { color: var(--fg-muted, #999); font-size: 0.78rem; margin-right: 0.3rem; }
+  .msg.compact .body { display: inline; }
+  .msg.compact .ts { color: var(--fg-muted, #666); font-size: 0.72rem; white-space: nowrap; }
+  .msg.compact .routed-sub { display: inline; font-size: 0.78rem; color: var(--fg-muted, #999); margin-right: 0.3rem; }
+  .member-chip { font-size: 0.74rem; margin-right: 0.4rem; white-space: nowrap; }
+  .member-chip.muted { color: var(--fg-muted, #888); }
 </style>
