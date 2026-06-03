@@ -89,33 +89,59 @@ type tunnel struct {
 	pending map[string]chan *relayFrame
 	closed  bool
 	openedAt time.Time
+
+	// sendFn overrides the WS write in tests so a unit test can make a
+	// runner "respond" synchronously inside send — exercising the
+	// register-before-send ordering deterministically. nil → real WS.
+	sendFn func(*relayFrame) error
 }
 
 func (t *tunnel) send(frame *relayFrame) error {
+	if t.sendFn != nil {
+		return t.sendFn(frame)
+	}
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
 	return t.conn.WriteJSON(frame)
 }
 
-// awaitResponse registers a correlation slot + waits for the
-// matching response frame (or timeout). The runner side replies
-// with the same RequestID so the lookup succeeds.
-func (t *tunnel) awaitResponse(ctx context.Context, reqID string) (*relayFrame, error) {
+// roundTrip registers the response correlation slot, THEN sends the
+// frame, THEN waits for the matching response (or timeout/close).
+//
+// #686 — the slot MUST be registered before send(): the runner can
+// reply so fast that its response frame reaches dispatch() before this
+// goroutine would otherwise register the waiter, in which case dispatch
+// drops it as unsolicited and the caller blocks until relayRequestTimeout
+// (a spurious 504, flaky under CI load). Registering first closes that
+// window.
+func (t *tunnel) roundTrip(ctx context.Context, frame *relayFrame) (*relayFrame, error) {
 	ch := make(chan *relayFrame, 1)
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
 		return nil, errors.New("tunnel closed")
 	}
-	t.pending[reqID] = ch
+	t.pending[frame.RequestID] = ch
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
-		delete(t.pending, reqID)
+		delete(t.pending, frame.RequestID)
 		t.mu.Unlock()
 	}()
+
+	if err := t.send(frame); err != nil {
+		return nil, err
+	}
 	select {
-	case f := <-ch:
+	case f, ok := <-ch:
+		if !ok {
+			// close() closed every pending channel — receiving from a
+			// closed channel yields nil. Without this check roundTrip
+			// returned (nil, nil) and the relay handler nil-deref'd the
+			// response (per-request panic). Pre-existing in the old
+			// awaitResponse; caught by the #686 independent review.
+			return nil, errors.New("tunnel closed while awaiting response")
+		}
 		return f, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -149,7 +175,9 @@ func (t *tunnel) close() {
 	pending := t.pending
 	t.pending = nil
 	t.mu.Unlock()
-	_ = t.conn.Close()
+	if t.conn != nil { // nil in unit fixtures that never dial a real WS
+		_ = t.conn.Close()
+	}
 	for _, ch := range pending {
 		close(ch)
 	}
@@ -356,17 +384,20 @@ func (s *server) handleRelayInbound(w http.ResponseWriter, r *http.Request) {
 		Headers:   headers,
 		Body:      body,
 	}
-	if err := t.send(frame); err != nil {
-		writeJSON(w, http.StatusBadGateway,
-			map[string]string{"error": "tunnel send: " + err.Error()})
-		return
-	}
+	// #686 — roundTrip registers the response waiter BEFORE sending, so a
+	// fast runner reply can't race past dispatch() and strand us on the
+	// 30s timeout (spurious 504).
 	ctx, cancel := context.WithTimeout(r.Context(), relayRequestTimeout)
 	defer cancel()
-	resp, err := t.awaitResponse(ctx, frame.RequestID)
+	resp, err := t.roundTrip(ctx, frame)
 	if err != nil {
-		writeJSON(w, http.StatusGatewayTimeout,
-			map[string]string{"error": "tunnel response: " + err.Error()})
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			writeJSON(w, http.StatusGatewayTimeout,
+				map[string]string{"error": "tunnel response: " + err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway,
+			map[string]string{"error": "tunnel send: " + err.Error()})
 		return
 	}
 	for k, v := range resp.Headers {
