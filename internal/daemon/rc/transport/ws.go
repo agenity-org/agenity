@@ -84,6 +84,18 @@ func (t *WSTransport) writeLoop() {
 			if !ok {
 				return
 			}
+			// #688 — bump the send counters BEFORE the write so stats are
+			// causally consistent: an echoed receive can never be observed
+			// while its own send's counter still reads 0. With the bump
+			// AFTER the write, the peer could echo + a Stats() reader run
+			// while this goroutine sat descheduled between Write returning
+			// and the Add (CI flake: FramesSent:0 despite FramesReceived:1
+			// — a state that misleads production dashboards the same way).
+			// On write error the transport closes immediately, so the
+			// one-frame overcount on the final failed write is moot.
+			t.framesSent.Add(1)
+			t.bytesSent.Add(uint64(len(frame)))
+			t.lastActivity.Store(time.Now().UnixNano())
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			err := t.conn.Write(ctx, websocket.MessageText, frame)
 			cancel()
@@ -91,9 +103,6 @@ func (t *WSTransport) writeLoop() {
 				_ = t.Close()
 				return
 			}
-			t.framesSent.Add(1)
-			t.bytesSent.Add(uint64(len(frame)))
-			t.lastActivity.Store(time.Now().UnixNano())
 		}
 	}
 }
