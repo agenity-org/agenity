@@ -142,7 +142,11 @@
       inbox = ib.inbox || [];
       events = ev.events || [];
       if (selectedAgent && !sessions.find(s => s.name === selectedAgent)) {
-        selectedAgent = null;
+        // #691 rule 3 — focused agent vanished: fall back to the most
+        // recently focused still-live agent before giving up.
+        const fb = mruFocus.find(n =>
+          n !== selectedAgent && sessions.find(s => s.name === n && !s.exited));
+        selectedAgent = fb || null;
       }
       // Auto-pick first non-shepherd worker when nothing is selected — so
       // AgentDetails / terminal / prompt / skills widgets render real
@@ -345,9 +349,104 @@
     } catch {}
   }
 
-  // --- pane operations ---
+  // --- focus engine (#691) ---
+  // selectedAgent is the SINGLE global focus; every contextual surface
+  // (inspector, terminal header chips) renders it. mruFocus remembers
+  // recently-focused agents so closing the focused terminal falls back
+  // to "the last terminal" instead of blanking the inspector (rule 3).
+  let mruFocus = $state([]);
+  function pushMRU(name) {
+    mruFocus = [name, ...mruFocus.filter(n => n !== name)].slice(0, 12);
+  }
+  function walkPanes(node, fn) {
+    if (!node) return;
+    if (node.kind === 'pane') { fn(node); return; }
+    walkPanes(node.a, fn);
+    walkPanes(node.b, fn);
+  }
+  function paneTabs(p) {
+    return Array.isArray(p.tabs) && p.tabs.length
+      ? p.tabs
+      : [{ widget: p.widget, config: p.config || {} }];
+  }
+  // Any pane+tab already showing a terminal bound to `name`?
+  function findTerminalTab(name) {
+    let hit = null;
+    walkPanes(layout, p => {
+      if (hit) return;
+      paneTabs(p).forEach((t, i) => {
+        if (!hit && t.widget === 'terminal' && t.config?.agent === name) hit = { pane: p, tabIdx: i };
+      });
+    });
+    return hit;
+  }
+  // The terminal pane a session-click should rebind: the focused pane
+  // when it's a terminal, else the first terminal pane in the tree.
+  function findRebindTarget() {
+    let focused = null, first = null;
+    walkPanes(layout, p => {
+      if (p.widget !== 'terminal') return;
+      if (p.id === focusedPaneID) focused = p;
+      if (!first) first = p;
+    });
+    return focused || first;
+  }
+  function activatePaneTab(pane, i) {
+    if (!Array.isArray(pane.tabs) || !pane.tabs[i]) return;
+    // Snapshot the outgoing active tab (mirrors Pane.snapshotActive so
+    // Workspace-driven activation doesn't lose unsaved tab state).
+    if (typeof pane.activeTab === 'number' && pane.tabs[pane.activeTab]) {
+      pane.tabs[pane.activeTab] = { widget: pane.widget, config: pane.config || {} };
+    }
+    pane.activeTab = i;
+    pane.widget = pane.tabs[i].widget;
+    pane.config = pane.tabs[i].config || {};
+  }
+
+  // Rule 1 — session click. Focus the agent AND bring its terminal
+  // forward: activate an existing terminal tab for it, else REBIND the
+  // active terminal pane (swap content — never spawn a new pane).
+  // Hub/external peers (no PTY) focus the inspector only; the terminal
+  // keeps showing the last PTY agent (rule 1c).
   function selectAgent(name) {
     selectedAgent = name;
+    const sess = (sessions || []).find(s => s.name === name);
+    if (sess && (sess.agent === 'external-a2a' || sess.external)) return;
+    pushMRU(name);
+    const hit = findTerminalTab(name);
+    if (hit) {
+      activatePaneTab(hit.pane, hit.tabIdx);
+      focusedPaneID = hit.pane.id;
+      saveLayout();
+      return;
+    }
+    const target = findRebindTarget();
+    if (target) {
+      const i = typeof target.activeTab === 'number' ? target.activeTab : 0;
+      if (Array.isArray(target.tabs) && target.tabs[i]) {
+        target.tabs[i] = { widget: 'terminal', config: { agent: name } };
+      }
+      target.widget = 'terminal';
+      target.config = { agent: name };
+      focusedPaneID = target.id;
+      saveLayout();
+    }
+  }
+  // Rule 2 — selecting a terminal (tab click / pane click / agent pick)
+  // moves focus to its agent.
+  function focusTerminal(name) {
+    if (!name) return;
+    selectedAgent = name;
+    pushMRU(name);
+  }
+  // Rule 3 — the focused terminal closed: fall back to the most recent
+  // still-live focused agent so the inspector keeps showing "the last
+  // terminal" rather than going blank.
+  function terminalClosed(name) {
+    if (name !== selectedAgent) return;
+    const fallback = mruFocus.find(n =>
+      n !== name && (sessions || []).find(s => s.name === n && !s.exited));
+    if (fallback) selectedAgent = fallback;
   }
 
   function changeWidget(paneId, newWidget) {
@@ -681,7 +780,7 @@
   </header>
 
   <div class="canvas">
-    <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} setFocusedPane={(id) => focusedPaneID = id} saveLayout={() => saveLayout()} />
+    <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} setFocusedPane={(id) => focusedPaneID = id} saveLayout={() => saveLayout()} />
   </div>
 </div>
 
