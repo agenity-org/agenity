@@ -16,7 +16,7 @@
 | **Surface** | Responsive **web** (desktop browser) |
 | **Tester** | `@p0-474-lonely` (UAT executor) — driven with Playwright |
 | **Walk date** | 2026-06-03 |
-| **Overall verdict** | ⚠️ **CONDITIONAL** — sign-in, federated-peer discovery, and cross-host messaging **PASS**; the local **Built-in-sandbox spawn** journey **FAILS** ([#682](https://github.com/chepherd/chepherd/issues/682), P1 go-live blocker for local spawn). See roll-up. |
+| **Overall verdict** | 🟢 **PASS (after fixes)** — all four walked journeys pass on screen; TC-02 and TC-04 each failed on the first walk, were fixed ([#676](https://github.com/chepherd/chepherd/issues/676)–[#679](https://github.com/chepherd/chepherd/issues/679), [#682](https://github.com/chepherd/chepherd/issues/682)) and **re-walked** before acceptance. See roll-up. |
 
 ---
 
@@ -98,13 +98,14 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 |---|---|---|---|---|---|
 | 1 | Workspace header | Click **+ new** | The **"+ Spawn workspace"** wizard opens on step 1 *Shape* (Solo / Pair / Trio / Scrum Team / Squad / Custom) | ✅ | [📷 tc04-1-wizard-shape](evidence/tc04-1-wizard-shape.png) |
 | 2 | Step 1 *Shape* | Keep **Solo** selected, click **Next →** | Step 2 *Repo* — *"Where's the code?"* with providers (Built-in / GitHub / GitLab / Bitbucket / Gitea / On-prem) | ✅ | [📷 tc04-1-wizard-shape](evidence/tc04-1-wizard-shape.png) |
-| 3 | Step 2 *Repo* | Click **Built-in (Embedded sandbox)**, type a repo name `uat-walk-demo`, press **Enter**, click **Next →** | Repo commits and **Next** enables; step 3 *Skills* — *"Who's bringing what?"* skill matrix | ❌ | see note — auto-commit copy defect |
+| 3 | Step 2 *Repo* | Click **Built-in (Embedded sandbox)**, type a repo name (e.g. `verify-682`), click **Next →** | Typing a valid name auto-commits — **Next** enables with no Enter needed; step 3 *Skills* — *"Who's bringing what?"* skill matrix | ✅ | re-walked after [#682](https://github.com/chepherd/chepherd/issues/682) fix — see journey verdict |
 | 4 | Step 3 *Skills* | Accept defaults, click **Next →** | Step 4 *Agents* — *"Which agents + which models?"* (claude-code · claude-opus-4-7) | ✅ | [📷 tc04-2-wizard-skills](evidence/tc04-2-wizard-skills.png) |
 | 5 | Step 4 *Agents* | Accept defaults, click **Next →** | Step 5 *Accounts* — a saved Claude account auto-selects; *"✓ All 1 agents have an account selected"* | ✅ | [📷 tc04-3-wizard-accounts](evidence/tc04-3-wizard-accounts.png) |
-| 6 | Step 5 *Accounts* | Click **Next →** | Step 6 *Launch* — review table + pre-flight; expanding **▸ Pre-flight ✓ checks passed** shows **"✓ All accounts valid · ✓ Embedded Gitea ready · ✓ 1/1 agent slots ready"** | ✅ | [📷 tc04-4-wizard-preflight](evidence/tc04-4-wizard-preflight.png) |
-| 7 | Step 6 *Launch* | Click **⚡ Launch 1 agents** | A new agent appears in the **sessions** pane with a live **terminal** tab | ❌ | [📷 tc04-5-spawn-failed](evidence/tc04-5-spawn-failed.png) |
+| 6 | Step 5 *Accounts* | Click **Next →** | Step 6 *Launch* — review table + pre-flight; the embedded sandbox is reported honestly as **"⏳ Embedded sandbox — provisioned on launch"** (amber, not a green it can't verify), alongside *"✓ All accounts valid · ✓ 1/1 agent slots ready"* | ✅ | [📷 tc04-4-wizard-preflight](evidence/tc04-4-wizard-preflight.png) *(pre-fix frame; post-fix copy verified on the re-walk)* |
+| 7 | Step 6 *Launch* | Click **⚡ Launch 1 agents** | The wizard closes; the header agent count increments (1 → **2 agents · 1 team · 1 membership**) and the new **`generalist`** agent appears live in the **sessions** pane | ✅ | [📷 tc04-682-fixed-agent-live](evidence/tc04-682-fixed-agent-live.png) |
+| 8 | Workspace → **sessions** pane | Click the new **generalist** | **agent-details** shows the spawned agent: agent `claude-code`, role `worker`, team `solo`, repo **`chepherd-admin/verify-682`** (the embedded sandbox repo, cloned) | ✅ | [📷 tc04-682-generalist-details](evidence/tc04-682-generalist-details.png) |
 
-- **Journey verdict:** 🔴 **FAIL** — Launch errored on screen: **`⚠ 1 of 1 agents failed` → `provider "embedded" not registered`**, despite the pre-flight (step 6) having shown a **false green** *"✓ Embedded Gitea ready"*. The built-in-sandbox spawn — the simplest, default path — never produces a running agent. Filed **[#682](https://github.com/chepherd/chepherd/issues/682) (P1)**, which also covers the false-green pre-flight (theater) and a P3 copy defect at step 3: *"valid name auto-commits"* is wrong — a valid name does **not** auto-commit; the repo only commits when you press **Enter** (no repo-create request fires otherwise, and **Next** stays disabled). Issue left **open**; the executor does not close it.
+- **Journey verdict:** 🟢 **PASS (after fixes)** — On the **first** walk this journey **FAILED**: Launch errored **`⚠ 1 of 1 agents failed` → `provider "embedded" not registered`** ([📷 before](evidence/tc04-5-spawn-failed.png)) right after a **false-green** pre-flight (*"✓ Embedded Gitea ready"*), and the repo step's *"valid name auto-commits"* hint was untrue (commit only fired on Enter). All three were filed as **[#682](https://github.com/chepherd/chepherd/issues/682) (P1)**; the fix ([PR #683](https://github.com/chepherd/chepherd/pull/683)) also caught a latent second failure the dead-end had been hiding (the embedded Gitea sidecar's bind-mounts used the wrong path namespace). After the fixes were deployed, the **full journey was re-walked live**: name auto-commits on input, the pre-flight is honest amber, and Launch produced a real running agent with the embedded repo cloned — as recorded above.
 
 ---
 
@@ -115,10 +116,10 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 | TC-01 | web | Sign in → workspace | 2 | 2 | 2 | 0 | 0 | 🟢 PASS |
 | TC-02 | web | Discover federated peer | 3 | 3 | 3 | 0 | 0 | 🟢 PASS *(after fixes)* |
 | TC-03 | web | Send cross-host message | 2 | 2 | 2 | 0 | 0 | 🟢 PASS |
-| TC-04 | web | Spawn local agent (built-in) | 7 | 7 | 5 | 2 | 0 | 🔴 FAIL |
-| | | **Total** | **14** | **14** | **12** | **2** | **0** | |
+| TC-04 | web | Spawn local agent (built-in) | 8 | 8 | 8 | 0 | 0 | 🟢 PASS *(after fixes)* |
+| | | **Total** | **15** | **15** | **15** | **0** | **0** | |
 
-**Overall verdict:** ⚠️ **CONDITIONAL.** The federation-mesh journeys an operator goes live for — sign-in, discovering an independent party through the central hub, and messaging it cross-host — all **PASS** on screen. The local **Built-in-sandbox spawn** journey **FAILS** ([#682](https://github.com/chepherd/chepherd/issues/682), P1): the default Solo + Built-in spawn cannot create a running agent, and the Launch pre-flight gives a false green before it. That is a go-live blocker for the "spawn a local agent from scratch" capability and must be fixed + re-walked before this journey is accepted. Spawning onto an **external** git provider (GitHub/GitLab/…) was **not walked** (needs a connected account) — its verdict is unknown, not assumed.
+**Overall verdict:** 🟢 **PASS (after fixes).** Every walked journey passes on screen: sign-in, discovering an independent party through the central hub, messaging it cross-host, and spawning a local agent from scratch on the built-in sandbox. Two journeys initially **FAILED** and were fixed + **re-walked** before acceptance: TC-02 ([#676](https://github.com/chepherd/chepherd/issues/676)/[#678](https://github.com/chepherd/chepherd/issues/678)/[#679](https://github.com/chepherd/chepherd/issues/679)) and TC-04 ([#682](https://github.com/chepherd/chepherd/issues/682)). One caveat: spawning onto an **external** git provider (GitHub/GitLab/…) was **not walked** (needs a connected account) — its verdict is unknown, not assumed.
 
 ---
 
@@ -128,9 +129,9 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 
 | Defect | Step | What the user saw | Severity | Ticket |
 |---|---|---|---|---|
-| Built-in-sandbox spawn fails | TC-04.7 | *"⚠ 1 of 1 agents failed — provider 'embedded' not registered"* | P1 | [#682](https://github.com/chepherd/chepherd/issues/682) |
-| Launch pre-flight false green | TC-04.6 | *"✓ Embedded Gitea ready"* immediately before the spawn fails on the embedded provider | P2 | [#682](https://github.com/chepherd/chepherd/issues/682) |
-| Repo "auto-commit" copy is wrong | TC-04.3 | *"valid name auto-commits"* but a valid name doesn't commit; **Next** stays disabled until you press **Enter** | P3 | [#682](https://github.com/chepherd/chepherd/issues/682) |
+| Built-in-sandbox spawn fails | TC-04.7 | *"⚠ 1 of 1 agents failed — provider 'embedded' not registered"* | P1 | [#682](https://github.com/chepherd/chepherd/issues/682) ✅ fixed + re-walked |
+| Launch pre-flight false green | TC-04.6 | *"✓ Embedded Gitea ready"* immediately before the spawn fails on the embedded provider | P2 | [#682](https://github.com/chepherd/chepherd/issues/682) ✅ fixed (now honest amber) |
+| Repo "auto-commit" copy is wrong | TC-04.3 | *"valid name auto-commits"* but a valid name doesn't commit; **Next** stays disabled until you press **Enter** | P3 | [#682](https://github.com/chepherd/chepherd/issues/682) ✅ fixed (commits on input) |
 | Federation pane empty (launcher didn't pass `--hub-url`) | TC-02.1 | *"Federation (0) — configure --federation-registry-url"* despite a live mesh | P1 | [#676](https://github.com/chepherd/chepherd/issues/676) ✅ fixed |
 | Terminal retried a dead session's WebSocket → 404 loop | dashboard load | Repeating `…/attach` 404 errors every ~5s | P2 | [#677](https://github.com/chepherd/chepherd/issues/677) ✅ fixed |
 | Empty-state copy pointed at the wrong flag | TC-02.1 | *"configure --federation-registry-url"* (older mechanism, not the hub mesh) | P3 | [#678](https://github.com/chepherd/chepherd/issues/678) ✅ fixed |
