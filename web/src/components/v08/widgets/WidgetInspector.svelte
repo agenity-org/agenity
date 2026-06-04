@@ -90,7 +90,12 @@
     <span class="who" data-testid="inspector-agent">{shownName || '—'}</span>
     {#if agent?.team}<span class="team">· {agent.team}</span>{/if}
     {#if pinned}<span class="pin-tag" data-testid="inspector-pinned">pinned</span>{/if}
-    <button class="pin" class:on={!!pinned} title={pinned ? 'unpin — follow focus again' : 'pin this agent (compare mode)'} onclick={togglePin}>📌</button>
+    {#if node}
+      <!-- #709.S1.1 — pin only exists on PANE-hosted instances (compare
+           mode); the fixed-chrome instance always follows focus, so a
+           silent no-op pin button would be dead chrome. -->
+      <button class="pin" class:on={!!pinned} title={pinned ? 'unpin — follow focus again' : 'pin this agent (compare mode)'} onclick={togglePin}>📌</button>
+    {/if}
   </header>
   <nav class="insp-tabs" data-testid="inspector-tabs">
     {#each ['overview', 'scorecard', 'debug'] as t}
