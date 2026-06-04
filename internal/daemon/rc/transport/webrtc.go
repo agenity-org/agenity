@@ -19,13 +19,13 @@ import (
 // through the chepherd-relay's REST endpoints, but once the DataChannel
 // is open the relay is OUT of the data path entirely.
 type WebRTCTransport struct {
-	pc          *webrtc.PeerConnection
-	dc          *webrtc.DataChannel
-	mode        Mode
-	peerID      string
-	recvBuffer  chan []byte
-	closeOnce   sync.Once
-	closed      chan struct{}
+	pc         *webrtc.PeerConnection
+	dc         *webrtc.DataChannel
+	mode       Mode
+	peerID     string
+	recvBuffer chan []byte
+	closeOnce  sync.Once
+	closed     chan struct{}
 
 	// observability
 	framesSent     atomic.Uint64
@@ -59,16 +59,7 @@ func NewWebRTCTransport(pc *webrtc.PeerConnection, dc *webrtc.DataChannel, peerI
 		if !msg.IsString {
 			return
 		}
-		t.framesReceived.Add(1)
-		t.bytesReceived.Add(uint64(len(msg.Data)))
-		t.lastActivity.Store(time.Now().UnixNano())
-		select {
-		case t.recvBuffer <- msg.Data:
-		default:
-			// drop: receiver too slow; surface via stats (sendBufferDepth-like
-			// counter not added here but the user-visible symptom is missing
-			// log lines, which is the §7-acceptable behavior)
-		}
+		t.enqueueRecv(msg.Data)
 	})
 
 	dc.OnClose(func() {
@@ -114,6 +105,29 @@ func (t *WebRTCTransport) Send(ctx context.Context, frame []byte) error {
 }
 
 // Recv pulls the next frame from the inbound queue.
+// enqueueRecv buffers one inbound frame from pion's OnMessage callback.
+// Non-blocking (drop on full buffer — slow receiver). #717: it does NOT
+// require recvBuffer to stay open; Close no longer closes recvBuffer, so
+// this send can never race a close → no "send on closed channel" panic
+// even though pion fires OnMessage on its own goroutine concurrent with
+// Close. Guard on t.closed first so we stop buffering promptly after
+// teardown (a frame slipping through pre-close is harmless — GC'd).
+func (t *WebRTCTransport) enqueueRecv(data []byte) {
+	select {
+	case <-t.closed:
+		return
+	default:
+	}
+	t.framesReceived.Add(1)
+	t.bytesReceived.Add(uint64(len(data)))
+	t.lastActivity.Store(time.Now().UnixNano())
+	select {
+	case t.recvBuffer <- data:
+	default:
+		// drop: receiver too slow (§7-acceptable — symptom is missing log lines)
+	}
+}
+
 func (t *WebRTCTransport) Recv(ctx context.Context) ([]byte, error) {
 	select {
 	case <-t.closed:
@@ -139,7 +153,10 @@ func (t *WebRTCTransport) Close() error {
 		if t.pc != nil {
 			closeErr = t.pc.Close()
 		}
-		close(t.recvBuffer)
+		// #717 — do NOT close(recvBuffer). pion's OnMessage callback can
+		// be mid-send on its own goroutine; closing here would panic it.
+		// Recv() already terminates on <-t.closed, so the close was
+		// unnecessary (matches the WS transport's never-closed sendBuffer).
 	})
 	return closeErr
 }
