@@ -63,6 +63,12 @@ func (b *transcriptBroadcaster) subscribe(team string) (<-chan struct{}, func())
 	}
 }
 
+// notify wakes every subscriber on the team. SAFE by the #715/#717
+// rule ONLY because subscriber tick channels are NEVER closed (unsub
+// merely deletes from the map). DO NOT add close(ch) to subscribe()'s
+// unsub — the snapshot-then-send-outside-lock below would then become
+// the literal send-on-closed-channel bug. Subscribers terminate via
+// their own ctx (the SSE handler's <-ctx.Done()), not via close.
 func (b *transcriptBroadcaster) notify(team string) {
 	b.mu.Lock()
 	set := b.subs[team]
