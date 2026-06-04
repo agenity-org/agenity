@@ -461,10 +461,30 @@
     return `${icon} ${bare}`;
   }
 
+  // #660 — live push via SSE. The per-team /stream endpoint ticks the
+  // instant the transcript changes (operator post OR agent activity);
+  // we refetch on tick (~50ms) instead of busy-polling every 5s. A slow
+  // 15s safety poll remains for the 'all' scope (no merged stream) and
+  // to survive a dropped SSE.
+  let evtSource = null;
+  function subscribeStream() {
+    if (evtSource) { evtSource.close(); evtSource = null; }
+    if (selectedScope === 'all') return; // multi-team merge has no stream; safety poll covers it
+    let tok = '';
+    try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
+    const q = tok ? ('?token=' + encodeURIComponent(tok)) : '';
+    try {
+      evtSource = new EventSource(`${API}/teams/${encodeURIComponent(selectedScope)}/stream${q}`);
+      evtSource.addEventListener('tick', () => refresh());
+      // onerror: EventSource auto-reconnects; the safety poll bridges any gap.
+    } catch { evtSource = null; }
+  }
+
   onMount(() => {
     loadTeams();
     refresh();
-    const id = setInterval(refresh, 5000);
+    subscribeStream();
+    const id = setInterval(refresh, 15000); // #660 — slow safety net, not the primary path
 
     // Listen for kanban → transcript filter requests (#665).
     const onFilter = (ev) => {
@@ -476,15 +496,17 @@
 
     return () => {
       clearInterval(id);
+      if (evtSource) { evtSource.close(); evtSource = null; }
       window.removeEventListener('chepherd-transcript-filter', onFilter);
     };
   });
 
-  // When the user changes scope via the dropdown, refresh immediately
-  // and fetch the default target for the lead-hint (#662).
+  // When the user changes scope via the dropdown, refresh immediately,
+  // re-point the live stream at the new team, and fetch the lead-hint.
   $effect(() => {
     selectedScope;
     refresh();
+    subscribeStream();
     ensureLead(selectedScope);
   });
 </script>
