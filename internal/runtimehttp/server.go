@@ -39,22 +39,22 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/federation"
-	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/canon"
 	"github.com/chepherd/chepherd/internal/catalog"
 	"github.com/chepherd/chepherd/internal/discovery"
+	"github.com/chepherd/chepherd/internal/federation"
+	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/profile"
 	"github.com/chepherd/chepherd/internal/prompts"
 	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 	"github.com/chepherd/chepherd/internal/roles"
 	"github.com/chepherd/chepherd/internal/runtime"
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
 	"github.com/chepherd/chepherd/internal/skills"
 	"github.com/chepherd/chepherd/internal/templateregistry"
 	"github.com/chepherd/chepherd/internal/vault"
+	"github.com/chepherd/chepherd/internal/webrtcrtc"
 )
 
 // Server hosts chepherd runtime endpoints. Caller is responsible for
@@ -209,6 +209,9 @@ type Server struct {
 	// has registered yet.
 	runnerRegMu    sync.Mutex
 	runnerRegistry *runnerRegistry
+
+	// #660 — live Team Transcript push (poll→SSE). Per-team tick fan-out.
+	transcripts *transcriptBroadcaster
 }
 
 // New constructs a Server bound to the runtime.
@@ -219,8 +222,10 @@ func New(rt *runtime.Runtime) *Server {
 	disc.RegisterProvider(discovery.NewGitLabProvider())
 	disc.RegisterProvider(discovery.NewBitbucketProvider())
 	s := &Server{
-		rt:        rt,
-		discovery: disc,
+		rt:          rt,
+		discovery:   disc,
+		transcripts: newTranscriptBroadcaster(), // #660
+
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -1292,7 +1297,6 @@ func sanitizeID(id string) string {
 	return b.String()
 }
 
-
 // listSessionsMerged combines live runtime sessions with persisted
 // session records from SessionStore so the dashboard sees the full
 // available-session set. Each entry includes a `live` boolean —
@@ -1384,14 +1388,14 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var req struct {
 			Name, Agent, Team, Role, Cwd, SystemPrompt string
-			ProviderID                                 string                 `json:"provider_id"`
+			ProviderID                                 string `json:"provider_id"`
 			// CloneURL is the specific repo URL selected in Stage 2 (#651).
-			CloneURL     string                 `json:"clone_url"`
-			AgentArgs    []string               `json:"agent_args"`
-			ResumeUUID   string                 `json:"resume_uuid"`
-			UseDefaultPrompt bool               `json:"use_default_prompt"`
-			StatSheet    runtime.AgentStatSheet `json:"stat_sheet"`
-			ClaudeTokenID string                `json:"claude_token_id"`
+			CloneURL         string                 `json:"clone_url"`
+			AgentArgs        []string               `json:"agent_args"`
+			ResumeUUID       string                 `json:"resume_uuid"`
+			UseDefaultPrompt bool                   `json:"use_default_prompt"`
+			StatSheet        runtime.AgentStatSheet `json:"stat_sheet"`
+			ClaudeTokenID    string                 `json:"claude_token_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -2132,6 +2136,12 @@ func (s *Server) teamByName(w http.ResponseWriter, r *http.Request) {
 		s.ticketMentionsHandler(w, r, name)
 		return
 	}
+	// Sub-resource: /api/v1/teams/{name}/stream — live transcript SSE
+	// (#660). Replaces the dashboard's 5s poll.
+	if sub == "stream" {
+		s.teamTranscriptStream(w, r, name)
+		return
+	}
 	// Sub-resource: /api/v1/teams/{name}/lead — resolved lead @-handle
 	// for the team (#662 default-route compose hint). Frontend calls this
 	// lazily on team-picker change so the compose box can render
@@ -2471,9 +2481,9 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 	}
 	templateName := parts[0]
 	var req struct {
-		Team            string
-		Cwd             string
-		ProviderID      string `json:"provider_id"`
+		Team       string
+		Cwd        string
+		ProviderID string `json:"provider_id"`
 		// CloneURL is the specific repo URL from Stage 2 (#651) — must be
 		// threaded into resolveProviderCwd so the team apply path clones
 		// the right repo instead of the provider's generic base URL.
@@ -3954,7 +3964,6 @@ func (s *Server) peersList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"peers": out})
 }
 
-
 // webrtcICE accepts ICE candidates trickled from the offering peer.
 // v0.9.3 scaffold: parses the candidate + returns 200; full plumbing
 // requires session-keyed PeerConnection routing (#311 C5.2 follow-up
@@ -4054,13 +4063,13 @@ func (s *Server) taskByID(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(t.OutputBlob, &output)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":         t.ID,
-		"runnerSID":  t.RunnerSID,
-		"state":      t.State,
-		"method":     t.Method,
-		"createdAt":  t.CreatedAt,
-		"updatedAt":  t.UpdatedAt,
-		"input":      input,
-		"output":     output,
+		"id":        t.ID,
+		"runnerSID": t.RunnerSID,
+		"state":     t.State,
+		"method":    t.Method,
+		"createdAt": t.CreatedAt,
+		"updatedAt": t.UpdatedAt,
+		"input":     input,
+		"output":    output,
 	})
 }

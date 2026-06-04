@@ -354,17 +354,17 @@ type postMessageRequest struct {
 //     merged multi-team feed; empty in per-team endpoints since the channel
 //     already identifies the team)
 type transcriptRow struct {
-	ID               string    `json:"id"`
-	Author           string    `json:"author"`
-	Body             string    `json:"body"`
-	Mentions         []string  `json:"mentions"`
-	Recipients       []string  `json:"recipients"`
-	CreatedAt        time.Time `json:"created_at"`
-	Kind             string    `json:"kind"`
-	RoutedToDefault  bool      `json:"routed_to_default,omitempty"`
-	DefaultTarget    string    `json:"default_target,omitempty"`
-	Team             string    `json:"team,omitempty"`
-	TeamGitHubURL    string    `json:"team_github_url,omitempty"`
+	ID              string    `json:"id"`
+	Author          string    `json:"author"`
+	Body            string    `json:"body"`
+	Mentions        []string  `json:"mentions"`
+	Recipients      []string  `json:"recipients"`
+	CreatedAt       time.Time `json:"created_at"`
+	Kind            string    `json:"kind"`
+	RoutedToDefault bool      `json:"routed_to_default,omitempty"`
+	DefaultTarget   string    `json:"default_target,omitempty"`
+	Team            string    `json:"team,omitempty"`
+	TeamGitHubURL   string    `json:"team_github_url,omitempty"`
 }
 
 // teamMessagesHandler routes POST/GET to the team transcript endpoints.
@@ -654,6 +654,10 @@ func (s *Server) teamTranscriptPost(w http.ResponseWriter, r *http.Request, ch *
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "save message: " + err.Error()})
 		return
 	}
+	// #660 — wake live-transcript SSE subscribers for this team.
+	if s.transcripts != nil {
+		s.transcripts.notify(team)
+	}
 
 	// Fan out to each named recipient via the A2A Deliverer — same path
 	// chepherd.send_to_session uses. Each delivery becomes a knock
@@ -761,14 +765,16 @@ func (s *Server) teamTranscriptPost(w http.ResponseWriter, r *http.Request, ch *
 // frontend's "all" scope doesn't have to iterate per-team fetches.
 //
 // Query: ?teams=all  → every team the runtime knows about
-//        ?teams=trio,scrum → just those two
-//        (missing/empty teams param → all)
+//
+//	?teams=trio,scrum → just those two
+//	(missing/empty teams param → all)
 //
 // Response shape (per DoD):
-//   {
-//     "teams": ["trio","scrum"],
-//     "messages": [ {…, "team": "trio", …}, … ]
-//   }
+//
+//	{
+//	  "teams": ["trio","scrum"],
+//	  "messages": [ {…, "team": "trio", …}, … ]
+//	}
 //
 // Per-team scope (single-team queries) continues to use the existing
 // /api/v1/teams/{name}/messages endpoint — this multi-team endpoint is
