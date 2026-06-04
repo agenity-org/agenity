@@ -120,14 +120,24 @@
     saveLayout();
   }
   function addTab() {
-    // Operator 2026-05-29: new tabs open EMPTY with a center card picker
-    // — pick a widget; for terminal, cascade to pick an agent.
+    // #709.4 — the "+" opens the picker FIRST; the tab is created only
+    // when a widget is chosen (Esc/click-away = nothing happened).
+    // Pre-#709 this created an empty tab and showed the picker inside
+    // it — abandoning left "+ pick widget ×" zombie tabs.
+    ensureTabs();
+    menu = { tabIdx: -1, level: 'widget', newTab: true };
+  }
+  // Create-and-bind for the new-tab flow: append the tab with the
+  // chosen widget, activate it, return its index (for the terminal
+  // agent cascade).
+  function commitNewTab(w) {
     ensureTabs();
     snapshotActive();
-    node.tabs = [...node.tabs, { widget: '', config: {} }];
+    const cfg = w === 'terminal' ? { agent: '' } : {};
+    node.tabs = [...node.tabs, { widget: w, config: cfg }];
     applyTab(node.tabs.length - 1);
-    menu = null;
     saveLayout();
+    return node.tabs.length - 1;
   }
   // Set the (widget, config) of a tab by index — used by both the
   // center empty-tab picker and the right-click context menu.
@@ -269,7 +279,7 @@
     'accounts': '⚓ accounts',
     'role-matrix': '🎮 roles',
     'team-transcript': '💬 team transcript',
-    'inspector': 'ⓘ inspector',
+    'inspector': 'ⓘ agent details',
   };
 
   // #692/#693 — the picker offers ONLY monitor-mode surfaces. Configure
@@ -282,10 +292,22 @@
       { id: 'terminal',        desc: 'live PTY for an agent' },
       { id: 'team-transcript', desc: 'team conversation' },
       { id: 'kanban',          desc: 'work board' },
-      { id: 'inspector',       desc: 'focused-agent context (identity · scorecard · debug)' },
+      { id: 'inspector',       desc: 'who is focused — identity · scorecard · debug' },
     ]},
   ];
   let pickerFilter = $state('');
+  // #709.13 — ↑/↓/Enter navigate the picker list (keyboard-first for real).
+  function pickerKeyNav(ev) {
+    if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+    ev.preventDefault();
+    const rows = [...ev.currentTarget.closest('.pane-picker-card, .pane-picker')?.querySelectorAll('.pp-row') || []];
+    if (!rows.length) return;
+    const cur = rows.indexOf(document.activeElement);
+    const next = ev.key === 'ArrowDown'
+      ? rows[Math.min(cur + 1, rows.length - 1)] || rows[0]
+      : rows[Math.max(cur - 1, 0)] || rows[0];
+    next.focus();
+  }
   function pickerMatches(item) {
     const f = pickerFilter.trim().toLowerCase();
     if (!f) return true;
@@ -381,8 +403,12 @@
             on:contextmenu={(e) => onTabContext(e, i)}
             title="left-click: switch · right-click: change widget/agent · Ctrl+Alt+Tab cycles"
           >
-            {#if tabIdent}<span class="ph-tab-ident" style="color: {tabIdent.color}">{tabIdent.icon}</span>{/if}
-            <span class="ph-tab-label">{tabLabel(t)}</span>
+            {#key t.widget === 'terminal' ? t.config?.agent : ''}
+              <span class="ph-tab-swap">
+                {#if tabIdent}<span class="ph-tab-ident" style="color: {tabIdent.color}" aria-hidden="true">{tabIdent.icon}</span>{/if}
+                <span class="ph-tab-label">{tabLabel(t)}</span>
+              </span>
+            {/key}
             {#if (node.tabs?.length || 0) > 1}
               <span class="ph-tab-close" on:click={(e) => closeTab(i, e)} title="close tab">×</span>
             {/if}
@@ -428,7 +454,7 @@
              way of selecting the panes is terrible the large icons etc,
              lets make a reasonable list view'). -->
         <div class="pane-picker center" data-testid="pane-picker">
-          <input class="pp-filter" type="text" placeholder="filter…" bind:value={pickerFilter} />
+          <input class="pp-filter" type="text" placeholder="filter…" bind:value={pickerFilter} on:keydown={pickerKeyNav} /><!-- svelte-ignore a11y_autofocus -->
           {#each PICKER_GROUPS as g}
             {@const items = g.items.filter(pickerMatches)}
             {#if items.length}
@@ -436,7 +462,7 @@
               <ul class="pp-list">
                 {#each items as item}
                   <li>
-                    <button class="pp-row" on:click={() => { pickerFilter = ''; setTabWidget(node.activeTab || 0, item.id); }}>
+                    <button class="pp-row" on:keydown={pickerKeyNav} on:click={() => { pickerFilter = ''; setTabWidget(node.activeTab || 0, item.id); }}>
                       <span class="pp-row-icon">{(WIDGET_LABELS[item.id] || item.id).split(' ')[0]}</span>
                       <span class="pp-row-name">{(WIDGET_LABELS[item.id] || item.id).replace(/^[^a-zA-Z]+\s*/, '')}</span>
                       <span class="pp-row-desc">{item.desc}</span>
@@ -532,7 +558,7 @@
             </header>
             {#if menu.level === 'widget'}
               <!-- #692 — same compact list as the empty-tab picker. -->
-              <input class="pp-filter" type="text" placeholder="filter…" bind:value={pickerFilter} />
+              <input class="pp-filter" type="text" placeholder="filter…" bind:value={pickerFilter} on:keydown={pickerKeyNav} /><!-- svelte-ignore a11y_autofocus -->
               {#each PICKER_GROUPS as g}
                 {@const items = g.items.filter(pickerMatches)}
                 {#if items.length}
@@ -540,7 +566,7 @@
                   <ul class="pp-list">
                     {#each items as item}
                       <li>
-                        <button class="pp-row" on:click={() => { pickerFilter = ''; setTabWidget(menu.tabIdx, item.id); if (item.id !== 'terminal') closeMenu(); else menu = { ...menu, level: 'agent' }; }}>
+                        <button class="pp-row" on:keydown={pickerKeyNav} on:click={() => { pickerFilter = ''; const idx = menu.newTab ? commitNewTab(item.id) : (setTabWidget(menu.tabIdx, item.id), menu.tabIdx); if (item.id !== 'terminal') closeMenu(); else menu = { tabIdx: idx, level: 'agent' }; }}>
                           <span class="pp-row-icon">{(WIDGET_LABELS[item.id] || item.id).split(' ')[0]}</span>
                           <span class="pp-row-name">{(WIDGET_LABELS[item.id] || item.id).replace(/^[^a-zA-Z]+\s*/, '')}</span>
                           <span class="pp-row-desc">{item.desc}</span>
@@ -603,6 +629,12 @@
   .ph-tab.active { color: var(--fg); border-bottom-color: var(--accent, #87ceeb); }
   .ph-tab-label { overflow: hidden; text-overflow: ellipsis; }
   .ph-tab-ident { margin-right: 0.25rem; } /* #694 identity chip */
+  /* #709.S1.2 — rebind feedback: the keyed block re-mounts when the
+     bound agent changes, playing a brief highlight so the swap is
+     perceivable instead of silent. */
+  .ph-tab-swap { display: inline-flex; align-items: center; min-width: 0; animation: tab-swap 0.45s ease-out; }
+  .ph-tab-swap .ph-tab-label { overflow: hidden; text-overflow: ellipsis; }
+  @keyframes tab-swap { 0% { background: var(--accent-2, #87ceeb); color: #06222e; border-radius: 3px; } 100% { background: transparent; } }
   .ph-tab-close { color: var(--fg-faint); padding: 0 0.1rem; font-size: 0.88rem; line-height: 1; border-radius: 3px; opacity: 0.55; }
   .ph-tab:hover .ph-tab-close { opacity: 1; }
   .ph-tab-close:hover { background: rgba(231,76,60,0.18); color: #e74c3c; }

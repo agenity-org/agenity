@@ -25,6 +25,7 @@
   let { teams = [], events = [], onclose = () => {} } = $props();
 
   const SECTIONS = [
+    { id: 'appearance', label: '🎨 Appearance' },
     { id: 'accounts',  label: '⚓ Accounts & Providers' },
     { id: 'roles',     label: '🎮 Roles & Skills' },
     { id: 'team',      label: '📜 Team' },
@@ -91,11 +92,20 @@
   <div class="sp-body">
     <nav class="sp-nav" data-testid="settings-nav">
       {#each SECTIONS as s}
-        <button class:active={section === s.id} onclick={() => switchSection(s.id)} data-testid={'settings-nav-' + s.id}>{s.label}</button>
+        <button class:active={section === s.id} aria-current={section === s.id ? 'page' : undefined} onclick={() => switchSection(s.id)} data-testid={'settings-nav-' + s.id}>{s.label}</button>
       {/each}
     </nav>
     <main class="sp-main" data-testid={'settings-section-' + section}>
-      {#if section === 'accounts'}
+      {#if section === 'appearance'}
+        <h2>Theme</h2>
+        <button class="appearance-btn" onclick={() => window.dispatchEvent(new CustomEvent('chepherd-toggle-theme'))}>toggle light / dark</button>
+        <h2>Font size</h2>
+        <div class="appearance-row">
+          <button class="appearance-btn" onclick={() => window.dispatchEvent(new CustomEvent('chepherd-font-delta', { detail: -1 }))}>A-</button>
+          <button class="appearance-btn" onclick={() => window.dispatchEvent(new CustomEvent('chepherd-font-delta', { detail: 1 }))}>A+</button>
+          <span class="muted">applies to all widgets</span>
+        </div>
+      {:else if section === 'accounts'}
         <WidgetAccounts />
       {:else if section === 'roles'}
         <h2>Role × skill matrix</h2>
@@ -145,4 +155,6 @@
   .mesh-peers .glyph { color: var(--accent-2, #87ceeb); }
   .muted { color: var(--fg-muted, #888); }
   .dev-pane { max-height: 40vh; overflow: auto; border: 1px solid var(--border, #2a2a2a); border-radius: 6px; }
+  .appearance-btn { background: var(--bg-elevated, #1d1d1d); border: 1px solid var(--border, #2a2a2a); border-radius: 5px; color: var(--fg, #ddd); padding: 0.3rem 0.7rem; cursor: pointer; margin-right: 0.4rem; }
+  .appearance-row { display: flex; align-items: center; gap: 0.4rem; }
 </style>
