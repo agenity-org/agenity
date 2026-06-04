@@ -15,6 +15,10 @@
   import { onMount } from 'svelte';
   import '@xterm/xterm/css/xterm.css';
   import Pane from './Pane.svelte';
+  import Shell from './Shell.svelte';
+  import WidgetSessionList from './widgets/WidgetSessionList.svelte';
+  import WidgetInspector from './widgets/WidgetInspector.svelte';
+  import TeamTranscript from '../TeamTranscript.svelte';
   import SpawnWizard from './SpawnWizard.svelte';
   import SpawnWizardV9 from '../v09/SpawnWizardV9.svelte';
   import AgentSettings from './AgentSettings.svelte';
@@ -99,32 +103,10 @@
   let layout = $state(defaultFocusLayout());
 
   function defaultFocusLayout() {
-    // Goal: terminal gets generous middle column, agent-details gets
-    // enough horizontal room on the right (≥ 280px in typical widths)
-    // so the dense KV rows don't wrap. Left session-list 16%, terminal
-    // column 56%, details column 28% — totals 100%.
-    // #692 — the #690 target shell: rail | terminal+transcript | inspector.
-    // Federation/multi-host panes are gone (the rail's MESH rows + the
-    // Inspector's mesh detail subsume them); the right column is ONE
-    // Inspector (#691) over the team transcript.
-    return {
-      kind: 'h',
-      ratio: 0.16,
-      a: { kind: 'pane', id: 'p1', widget: 'session-list', config: {} },
-      b: {
-        kind: 'h', ratio: 0.68,
-        a: {
-          kind: 'v', ratio: 0.7,
-          a: { kind: 'pane', id: 'p2', widget: 'terminal', config: {} },
-          b: { kind: 'pane', id: 'p_transcript', widget: 'team-transcript', config: { team: 'default' } },
-        },
-        b: {
-          kind: 'v', ratio: 0.55,
-          a: { kind: 'pane', id: 'p4', widget: 'inspector', config: {} },
-          b: { kind: 'pane', id: 'p6', widget: 'team-transcript', config: { team: 'default' } },
-        },
-      },
-    };
+    // #709.S1.1 — the layout tree describes ONLY the center region now
+    // (rail / agent-details / transcript are fixed Shell chrome). Fresh
+    // load = one terminal pane; splits/tabs grow from here.
+    return { kind: 'pane', id: 'p2', widget: 'terminal', config: {} };
   }
 
   // #692 — saved layouts may still reference the deleted federation /
@@ -132,6 +114,12 @@
   // their peer/reachability detail for focused hub peers) so loaded
   // workspaces never hit an unknown-widget branch.
   const MIGRATED_WIDGETS = { 'federation': 'inspector', 'multi-host': 'inspector' };
+  // #709.S1.1 — widgets that became fixed Shell chrome; saved layouts
+  // containing them as panes get those panes REMOVED from the center
+  // tree (their content lives in the rail / context column now).
+  const CHROME_WIDGETS = new Set(['session-list', 'session-board', 'inspector',
+    'agent-details', 'agent-identity', 'agent-runtime',
+    'shepherd-assessment-card']);
   function migrateLayout(node) {
     if (!node) return node;
     if (node.kind === 'pane') {
@@ -140,12 +128,42 @@
         for (const t of node.tabs) {
           if (MIGRATED_WIDGETS[t.widget]) t.widget = MIGRATED_WIDGETS[t.widget];
         }
+        node.tabs = node.tabs.filter(t => !CHROME_WIDGETS.has(t.widget));
+        if (!node.tabs.length) return null; // pane held only chrome
+        if (node.activeTab >= node.tabs.length) node.activeTab = 0;
+        node.widget = node.tabs[node.activeTab].widget;
+        node.config = node.tabs[node.activeTab].config || {};
+      } else if (CHROME_WIDGETS.has(node.widget)) {
+        return null;
       }
       return node;
     }
     node.a = migrateLayout(node.a);
     node.b = migrateLayout(node.b);
+    if (!node.a && !node.b) return null;
+    if (!node.a) return node.b;
+    if (!node.b) return node.a;
     return node;
+  }
+  // A migrated tree can collapse to nothing (the saved layout was all
+  // chrome) — fall back to the center default.
+  let migrationNotice = $state('');
+  function migrateOrDefault(tree, sourceName = '') {
+    const before = countPanes(tree);
+    const out = migrateLayout(tree) || defaultFocusLayout();
+    const after = countPanes(out);
+    if (before > after) {
+      // #709 review (a) — never silently degrade an operator's saved
+      // view: say what happened and why, transiently.
+      migrationNotice = `${sourceName || 'saved layout'}: ${before - after} pane${before - after === 1 ? '' : 's'} moved into the fixed shell (rail / agent details / transcript)`;
+      setTimeout(() => (migrationNotice = ''), 8000);
+    }
+    return out;
+  }
+  function countPanes(node) {
+    if (!node) return 0;
+    if (node.kind === 'pane') return Array.isArray(node.tabs) ? Math.max(1, node.tabs.length) : 1;
+    return countPanes(node.a) + countPanes(node.b);
   }
 
   // --- API ---
@@ -372,8 +390,8 @@
       if (!r.ok) return;
       const d = await r.json();
       // New envelope format: { layout, cwd }. Legacy: bare layout tree.
-      if (d.layout) { layout = migrateLayout(d.layout); if (d.cwd) projectCwd = d.cwd; }
-      else layout = migrateLayout(d);
+      if (d.layout) { layout = migrateOrDefault(d.layout); if (d.cwd) projectCwd = d.cwd; }
+      else layout = migrateOrDefault(d);
     } catch {}
   }
 
@@ -510,7 +528,7 @@
   function doSplit(node, id, direction) {
     if (node.kind === 'pane' && node.id === id) {
       const newId = 'p' + Date.now();
-      const newPane = { kind: 'pane', id: newId, widget: 'inspector', config: {} }; // #692 — splits default to the Inspector
+      const newPane = { kind: 'pane', id: newId, widget: 'terminal', config: {} }; // #709.S1.1 — center splits default to a terminal (agent picker)
       return { kind: direction, ratio: 0.5, a: node, b: newPane };
     }
     if (node.kind !== 'pane') {
@@ -559,29 +577,24 @@
     else if (v.startsWith('saved:')) loadSaved(v.slice(6));
     ev.target.value = '';
   }
+  // #709.S1.1 review fix (b) — presets describe the CENTER only (rail/
+  // details/transcript are fixed chrome). The old definitions emitted
+  // chrome widgets that rendered once then collapsed on reload.
   function councilLayout() {
     return {
-      kind: 'h', ratio: 0.18,
-      a: { kind: 'pane', id: 'p1', widget: 'session-list', config: {} },
-      b: {
-        kind: 'v', ratio: 0.78,
-        a: { kind: 'pane', id: 'p2', widget: 'session-board', config: {} },
-        b: { kind: 'pane', id: 'p3', widget: 'events', config: {} },
-      },
+      kind: 'h', ratio: 0.6,
+      a: { kind: 'pane', id: 'p1', widget: 'terminal', config: {} },
+      b: { kind: 'pane', id: 'p2', widget: 'kanban', config: {} },
     };
   }
   function boardLayout() {
-    return {
-      kind: 'v', ratio: 0.85,
-      a: { kind: 'pane', id: 'p1', widget: 'session-board', config: {} },
-      b: { kind: 'pane', id: 'p2', widget: 'events', config: {} },
-    };
+    return { kind: 'pane', id: 'p1', widget: 'kanban', config: {} };
   }
   function multiTeamLayout() {
     return {
-      kind: 'h', ratio: 0.22,
-      a: { kind: 'pane', id: 'p1', widget: 'session-list', config: { groupBy: 'team' } },
-      b: { kind: 'pane', id: 'p2', widget: 'terminal', config: {} },
+      kind: 'h', ratio: 0.55,
+      a: { kind: 'pane', id: 'p1', widget: 'terminal', config: {} },
+      b: { kind: 'pane', id: 'p2', widget: 'team-transcript', config: { team: 'all' } },
     };
   }
 
@@ -739,6 +752,7 @@
       {sessions.length} {sessions.length === 1 ? 'agent' : 'agents'} · {teams.length} {teams.length === 1 ? 'team' : 'teams'} · {memberships.length} {memberships.length === 1 ? 'membership' : 'memberships'}
     </div>
     {#if activeWorkspace}<span class="workspace-badge" title="active project workspace">{activeWorkspace}</span>{/if}
+    {#if migrationNotice}<span class="migration-notice" data-testid="migration-notice">{migrationNotice}</span>{/if}
     <div class="view-menu-wrap" use:clickOutside={() => (showViewMenu = false)}>
       <button class="view-btn" on:click={() => (showViewMenu = !showViewMenu)} title="Switch layout">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -834,7 +848,22 @@
   {/if}
 
   <div class="canvas">
-    <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} setFocusedPane={(id) => focusedPaneID = id} saveLayout={() => saveLayout()} />
+    <!-- #709.S1.1 — the fixed shell: rail / center / context are chrome;
+         only the center is the (demoted) pane grid. -->
+    <Shell>
+      {#snippet rail()}
+        <WidgetSessionList {sessions} {teams} {memberships} {selectedAgent} {selectAgent} />
+      {/snippet}
+      {#snippet center()}
+        <Pane node={layout} {sessions} {teams} {memberships} {inbox} {events} {selectedAgent} {selectAgent} {focusTerminal} {terminalClosed} {changeWidget} {splitPane} {removePane} {refresh} {focusedPaneID} setFocusedPane={(id) => focusedPaneID = id} saveLayout={() => saveLayout()} />
+      {/snippet}
+      {#snippet contextTop()}
+        <WidgetInspector {sessions} {memberships} {events} {selectedAgent} node={null} saveLayout={() => {}} />
+      {/snippet}
+      {#snippet contextBottom()}
+        <TeamTranscript team="default" />
+      {/snippet}
+    </Shell>
   </div>
 </div>
 
@@ -1114,6 +1143,7 @@
   .modal-saveas footer { display: flex; justify-content: flex-end; gap: 0.6rem; }
   /* #693 — topbar slim-down */
   .mesh-health { color: var(--accent-2, #87ceeb); font-size: 0.8rem; white-space: nowrap; background: none; border: none; cursor: pointer; padding: 0 0.2rem; }
+  .migration-notice { color: var(--fg-muted, #999); font-size: 0.74rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
   .account-menu-wrap { position: relative; }
   .account-dropdown { right: 0; left: auto; min-width: 200px; }
   .account-dropdown .vd-row { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.8rem; color: var(--fg-muted, #999); font-size: 0.82rem; }

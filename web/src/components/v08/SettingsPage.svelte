@@ -24,6 +24,14 @@
 
   let { teams = [], events = [], onclose = () => {} } = $props();
 
+  const INTROS = {
+    appearance: 'Theme, font size and density for this browser.',
+    accounts: 'Claude accounts and git providers chepherd injects into agents at spawn.',
+    roles: 'Which skills each role brings; tune defaults for every future spawn.',
+    team: 'Team charters (canon) that agents read as shared ground truth.',
+    mesh: 'This daemon\'s hub connection and the peers discovered through it.',
+    developer: 'Raw event and MCP streams — diagnostic surfaces, not daily tools.',
+  };
   const SECTIONS = [
     { id: 'appearance', label: '🎨 Appearance' },
     { id: 'accounts',  label: '⚓ Accounts & Providers' },
@@ -96,6 +104,7 @@
       {/each}
     </nav>
     <main class="sp-main" data-testid={'settings-section-' + section}>
+      <p class="sp-intro">{INTROS[section]}</p>
       {#if section === 'appearance'}
         <h2>Theme</h2>
         <button class="appearance-btn" onclick={() => window.dispatchEvent(new CustomEvent('chepherd-toggle-theme'))}>toggle light / dark</button>
@@ -146,7 +155,11 @@
   .sp-nav { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.8rem 0.5rem; min-width: 200px; border-right: 1px solid var(--border, #2a2a2a); }
   .sp-nav button { text-align: left; background: none; border: none; border-radius: 5px; color: var(--fg-muted, #aaa); padding: 0.42rem 0.65rem; cursor: pointer; font-size: 0.88rem; }
   .sp-nav button.active { color: var(--fg, #eee); background: var(--bg-elevated, #1d1d1d); }
-  .sp-main { flex: 1; overflow: auto; padding: 1rem 1.4rem; min-width: 0; }
+  .sp-main { flex: 1; overflow: auto; padding: 1.1rem 2rem; min-width: 0; }
+  /* #709.S1.5 — settings-grade form layout: constrained content column
+     so re-hosted widgets stop floating in whitespace. */
+  .sp-main > :global(*) { max-width: 760px; }
+  .sp-intro { color: var(--fg-muted, #999); font-size: 0.85rem; margin: 0 0 1rem; }
   .sp-main h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-muted, #888); margin: 1.1rem 0 0.5rem; }
   .sp-main h2:first-child { margin-top: 0; }
   .mesh-status { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.9rem; font-size: 0.88rem; }
