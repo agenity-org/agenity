@@ -118,7 +118,7 @@
   // containing them as panes get those panes REMOVED from the center
   // tree (their content lives in the rail / context column now).
   const CHROME_WIDGETS = new Set(['session-list', 'session-board', 'inspector',
-    'team-transcript', 'agent-details', 'agent-identity', 'agent-runtime',
+    'agent-details', 'agent-identity', 'agent-runtime',
     'shepherd-assessment-card']);
   function migrateLayout(node) {
     if (!node) return node;
@@ -147,8 +147,23 @@
   }
   // A migrated tree can collapse to nothing (the saved layout was all
   // chrome) — fall back to the center default.
-  function migrateOrDefault(tree) {
-    return migrateLayout(tree) || defaultFocusLayout();
+  let migrationNotice = $state('');
+  function migrateOrDefault(tree, sourceName = '') {
+    const before = countPanes(tree);
+    const out = migrateLayout(tree) || defaultFocusLayout();
+    const after = countPanes(out);
+    if (before > after) {
+      // #709 review (a) — never silently degrade an operator's saved
+      // view: say what happened and why, transiently.
+      migrationNotice = `${sourceName || 'saved layout'}: ${before - after} pane${before - after === 1 ? '' : 's'} moved into the fixed shell (rail / agent details / transcript)`;
+      setTimeout(() => (migrationNotice = ''), 8000);
+    }
+    return out;
+  }
+  function countPanes(node) {
+    if (!node) return 0;
+    if (node.kind === 'pane') return Array.isArray(node.tabs) ? Math.max(1, node.tabs.length) : 1;
+    return countPanes(node.a) + countPanes(node.b);
   }
 
   // --- API ---
@@ -513,7 +528,7 @@
   function doSplit(node, id, direction) {
     if (node.kind === 'pane' && node.id === id) {
       const newId = 'p' + Date.now();
-      const newPane = { kind: 'pane', id: newId, widget: 'inspector', config: {} }; // #692 — splits default to the Inspector
+      const newPane = { kind: 'pane', id: newId, widget: 'terminal', config: {} }; // #709.S1.1 — center splits default to a terminal (agent picker)
       return { kind: direction, ratio: 0.5, a: node, b: newPane };
     }
     if (node.kind !== 'pane') {
@@ -562,29 +577,24 @@
     else if (v.startsWith('saved:')) loadSaved(v.slice(6));
     ev.target.value = '';
   }
+  // #709.S1.1 review fix (b) — presets describe the CENTER only (rail/
+  // details/transcript are fixed chrome). The old definitions emitted
+  // chrome widgets that rendered once then collapsed on reload.
   function councilLayout() {
     return {
-      kind: 'h', ratio: 0.18,
-      a: { kind: 'pane', id: 'p1', widget: 'session-list', config: {} },
-      b: {
-        kind: 'v', ratio: 0.78,
-        a: { kind: 'pane', id: 'p2', widget: 'session-board', config: {} },
-        b: { kind: 'pane', id: 'p3', widget: 'events', config: {} },
-      },
+      kind: 'h', ratio: 0.6,
+      a: { kind: 'pane', id: 'p1', widget: 'terminal', config: {} },
+      b: { kind: 'pane', id: 'p2', widget: 'kanban', config: {} },
     };
   }
   function boardLayout() {
-    return {
-      kind: 'v', ratio: 0.85,
-      a: { kind: 'pane', id: 'p1', widget: 'session-board', config: {} },
-      b: { kind: 'pane', id: 'p2', widget: 'events', config: {} },
-    };
+    return { kind: 'pane', id: 'p1', widget: 'kanban', config: {} };
   }
   function multiTeamLayout() {
     return {
-      kind: 'h', ratio: 0.22,
-      a: { kind: 'pane', id: 'p1', widget: 'session-list', config: { groupBy: 'team' } },
-      b: { kind: 'pane', id: 'p2', widget: 'terminal', config: {} },
+      kind: 'h', ratio: 0.55,
+      a: { kind: 'pane', id: 'p1', widget: 'terminal', config: {} },
+      b: { kind: 'pane', id: 'p2', widget: 'team-transcript', config: { team: 'all' } },
     };
   }
 
@@ -742,6 +752,7 @@
       {sessions.length} {sessions.length === 1 ? 'agent' : 'agents'} · {teams.length} {teams.length === 1 ? 'team' : 'teams'} · {memberships.length} {memberships.length === 1 ? 'membership' : 'memberships'}
     </div>
     {#if activeWorkspace}<span class="workspace-badge" title="active project workspace">{activeWorkspace}</span>{/if}
+    {#if migrationNotice}<span class="migration-notice" data-testid="migration-notice">{migrationNotice}</span>{/if}
     <div class="view-menu-wrap" use:clickOutside={() => (showViewMenu = false)}>
       <button class="view-btn" on:click={() => (showViewMenu = !showViewMenu)} title="Switch layout">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1132,6 +1143,7 @@
   .modal-saveas footer { display: flex; justify-content: flex-end; gap: 0.6rem; }
   /* #693 — topbar slim-down */
   .mesh-health { color: var(--accent-2, #87ceeb); font-size: 0.8rem; white-space: nowrap; background: none; border: none; cursor: pointer; padding: 0 0.2rem; }
+  .migration-notice { color: var(--fg-muted, #999); font-size: 0.74rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
   .account-menu-wrap { position: relative; }
   .account-dropdown { right: 0; left: auto; min-width: 200px; }
   .account-dropdown .vd-row { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.8rem; color: var(--fg-muted, #999); font-size: 0.82rem; }

@@ -1,20 +1,16 @@
-// internal/runtimehttp/p1_361_default_layout_test.go — pins the default
-// v08 Workspace layout shape.
+// internal/runtimehttp/p1_361_default_layout_test.go — pins the v08
+// workspace's structural surface.
 //
-// History: #361 required federation + a2a-inbox + multi-host on fresh
-// load (no right-click pane-picking for cross-instance surfaces). #666
-// removed the a2a-inbox (Team Transcript subsumed it). #692 (the #690
-// UX redesign) removed the federation + multi-host PANES entirely —
-// their content moved into the session rail (⇄ mesh rows) and the
-// Inspector's mesh section — and the default layout became the #690
-// target shell: rail | terminal + transcript | inspector + transcript.
+// History: #361 required cross-instance widgets on fresh load; #666
+// removed the a2a-inbox; #692 removed the federation/multi-host panes;
+// #709.S1.1 shipped the REAL fixed shell — rail / agent-details /
+// transcript became fixed chrome (Shell.svelte), the pane grid was
+// demoted to the center region, and the default center is a single
+// terminal pane. The #361 intent (everything important visible on
+// fresh load with zero pane-picking) is now satisfied STRUCTURALLY:
+// the chrome cannot even be closed.
 //
-// The #361 intent ("fresh load shows the cross-instance surfaces with
-// zero pane-picking") still holds: the rail (session-list) carries the
-// mesh peers and the inspector carries reachability/synced detail, both
-// present in the default layout below.
-//
-// Refs #361 #225 #666 #692 #690.
+// Refs #361 #225 #666 #692 #690 #709.
 package runtimehttp
 
 import (
@@ -24,52 +20,58 @@ import (
 	"testing"
 )
 
-// findWorkspaceFile walks up from cwd to find the repo root + returns
-// the path to web/src/components/v08/Workspace.svelte. Lets the test
-// run from any subdir.
-func findWorkspaceFile(t *testing.T) string {
+func repoWebFile(t *testing.T, rel string) string {
 	t.Helper()
 	cwd, _ := os.Getwd()
 	for dir := cwd; dir != "/" && dir != "."; dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, "web", "src", "components", "v08", "Workspace.svelte")
+		candidate := filepath.Join(dir, rel)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
-	t.Skip("Workspace.svelte not found from cwd; skipping (likely running from a different repo root)")
+	t.Skipf("%s not found from cwd; skipping", rel)
 	return ""
 }
 
-func TestP1_361_DefaultLayout_TargetShellWidgets(t *testing.T) {
+func TestP1_361_FixedShell_StructuralSurface(t *testing.T) {
 	t.Parallel()
-	path := findWorkspaceFile(t)
-	if path == "" {
+	wsPath := repoWebFile(t, "web/src/components/v08/Workspace.svelte")
+	shellPath := repoWebFile(t, "web/src/components/v08/Shell.svelte")
+	if wsPath == "" || shellPath == "" {
 		return
 	}
-	body, err := os.ReadFile(path)
+	ws, err := os.ReadFile(wsPath)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatalf("read: %v", err)
 	}
-	src := string(body)
-	// #692 target shell: rail + terminal + transcript + inspector all
-	// present on fresh load with zero pane-picking.
-	for _, want := range []string{
-		"widget: 'session-list'",
-		"widget: 'terminal'",
-		"widget: 'team-transcript'",
-		"widget: 'inspector'",
-	} {
-		if !strings.Contains(src, want) {
-			t.Errorf("default Workspace layout missing %q", want)
+	shell, err := os.ReadFile(shellPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	wsSrc, shellSrc := string(ws), string(shell)
+
+	// The canvas renders the fixed Shell with all four regions.
+	if !strings.Contains(wsSrc, "<Shell>") {
+		t.Errorf("Workspace canvas does not render <Shell> — the fixed chrome is gone (#709.S1.1)")
+	}
+	for _, snippet := range []string{"{#snippet rail()}", "{#snippet center()}", "{#snippet contextTop()}", "{#snippet contextBottom()}"} {
+		if !strings.Contains(wsSrc, snippet) {
+			t.Errorf("Workspace missing Shell region %q", snippet)
 		}
 	}
-	// The deleted panes must NOT reappear in the default layout.
-	for _, banned := range []string{
-		"widget: 'federation'",
-		"widget: 'multi-host'",
-	} {
-		if strings.Contains(src, banned) {
-			t.Errorf("default Workspace layout still references deleted pane %q (#692 removed it)", banned)
+	// Chrome regions exist in Shell and carry no pane controls.
+	for _, marker := range []string{"shell-rail", "shell-center", "shell-context-top", "shell-context-bottom"} {
+		if !strings.Contains(shellSrc, marker) {
+			t.Errorf("Shell missing region marker %q", marker)
+		}
+	}
+	// The default CENTER is a terminal pane and references no chrome widget.
+	if !strings.Contains(wsSrc, "widget: 'terminal'") {
+		t.Errorf("default center layout missing the terminal pane")
+	}
+	for _, banned := range []string{"widget: 'federation'", "widget: 'multi-host'", "widget: 'session-list'", "widget: 'inspector'"} {
+		if strings.Contains(wsSrc, banned) {
+			t.Errorf("layout/preset code still emits chrome/deleted pane %q (#709 made it fixed chrome)", banned)
 		}
 	}
 }
