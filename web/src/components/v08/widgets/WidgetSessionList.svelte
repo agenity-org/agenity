@@ -4,11 +4,14 @@
 -->
 <script>
   import WidgetSessionBoard from './WidgetSessionBoard.svelte';
+  import IconPicker from '../IconPicker.svelte';
   import { agentIdentity } from '../../../lib/agentIdentity.js';
 
   let { sessions, teams, memberships, selectedAgent, selectAgent } = $props();
   const API = '/api-v08/v1';
   let ctxMenu = $state(null); // { x, y, agent, currentTeam, currentRole }
+  // #709.3 — anchored popover replaces the native prompt() (hard-ban).
+  let iconPicker = $state(null); // { agent, current, x, y }
 
   // #692 — ☰ list / ▤ board presentation toggle. Replaces the standalone
   // session-board pane (removed from the picker); persisted per browser.
@@ -468,6 +471,7 @@
           {@const agent = agentByName(m.agent_name)}
           {#if agent}
             {@const score = geomean(agent.scorecard)}
+            {@const ident = agentIdentity({ ...agent, role: agent.role || m.role })}
             <li class:selected={selectedAgents.has(agent.name)}
                 class:deleting={deletingNames.has(agent.name)}
                 class:orphan={agent.live === false}
@@ -477,7 +481,7 @@
               <!-- #694 — identity chip from the shared util: same color +
                    icon as terminal tabs / transcript / inspector. (#692's
                    ⇄ mesh glyph is the util's external default.) -->
-              <span class="icon ident" style="color: {agentIdentity({ ...agent, role: agent.role || m.role }).color}">{agentIdentity({ ...agent, role: agent.role || m.role }).icon}</span>
+              <span class="icon ident" style="color: {ident.color}"><span aria-hidden="true">{ident.icon}</span></span>
               <span class="name">{agent.name}</span>
               {#if agent.live === false}<span class="orphan-tag" title="Not running — orphan row">orphan</span>{/if}
               {#if score != null}<span class="score">{score.toFixed(1)}</span>{/if}
@@ -504,18 +508,29 @@
 </div>
 {/if}
 
+{#if iconPicker}
+  <IconPicker
+    agentName={iconPicker.agent}
+    current={iconPicker.current}
+    x={iconPicker.x}
+    y={iconPicker.y}
+    onpick={async (icon) => {
+      await fetch(`/api/v1/sessions/${iconPicker.agent}/icon`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ icon }) });
+      iconPicker = null;
+    }}
+    oncancel={() => (iconPicker = null)}
+  />
+{/if}
+
 {#if ctxMenu}
   <div class="ctx-backdrop" onclick={closeContext}>
     <div class="ctx-menu" style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;" onclick={(e) => e.stopPropagation()}>
       <div class="ctx-head">{ctxMenu.agent} <small>· {ctxMenu.currentTeam} / {ctxMenu.currentRole}</small></div>
       <button onclick={() => { window.dispatchEvent(new CustomEvent('chepherd-open-agent-settings', { detail: { agentName: ctxMenu.agent } })); closeContext(); }}>⚙ Settings…</button>
-      <button onclick={async () => {
-        // #694 — operator icon override; empty input clears back to the role default.
+      <button onclick={() => {
+        // #709.3 — open the IconPicker popover (replaces prompt()).
         const cur = (sessions || []).find(x => x.name === ctxMenu.agent)?.icon || '';
-        const icon = prompt('Icon for ' + ctxMenu.agent + ' (emoji; empty = role default):', cur);
-        if (icon !== null) {
-          await fetch(`/api/v1/sessions/${ctxMenu.agent}/icon`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ icon: icon.trim() }) });
-        }
+        iconPicker = { agent: ctxMenu.agent, current: cur, x: ctxMenu.x, y: ctxMenu.y };
         closeContext();
       }}>✱ Change icon…</button>
       <button onclick={async () => { await fetch(`${API}/sessions/${ctxMenu.agent}/pause`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused: true }) }); closeContext(); }}>⏸ Pause</button>

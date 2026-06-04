@@ -85,7 +85,7 @@
   <header class="insp-head">
     {#if agent}
       {@const ident = agentIdentity(agent)}
-      <span class="ident-chip" style="color: {ident.color}">{ident.icon}</span>
+      <span class="ident-chip" style="color: {ident.color}" aria-hidden="true">{ident.icon}</span>
     {/if}
     <span class="who" data-testid="inspector-agent">{shownName || '—'}</span>
     {#if agent?.team}<span class="team">· {agent.team}</span>{/if}

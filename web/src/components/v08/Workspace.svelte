@@ -19,6 +19,7 @@
   import SpawnWizardV9 from '../v09/SpawnWizardV9.svelte';
   import AgentSettings from './AgentSettings.svelte';
   import SettingsPage from './SettingsPage.svelte';
+  import { registerRoster } from '../../lib/agentIdentity.js';
   import TeamSettings from './TeamSettings.svelte';
 
   // #223 — version label shown in the topbar brand badge. Passed by
@@ -77,6 +78,12 @@
   // #693 — ⚙ Settings page (hash deep-link #settings/<section>) + 👤 menu
   let showSettings = $state(typeof location !== 'undefined' && location.hash.startsWith('#settings'));
   let showAccountMenu = $state(false);
+  // #709.6 — SettingsPage Appearance section drives theme/font via events
+  // (menus stay commands-only).
+  if (typeof window !== 'undefined') {
+    window.addEventListener('chepherd-toggle-theme', () => toggleTheme());
+    window.addEventListener('chepherd-font-delta', (e) => applyFontSize(fontSize + (e.detail || 0)));
+  }
   let showTeamSettings = $state(null); // null | { team, members }
   let confirmDialog = $state(null);
 
@@ -145,6 +152,11 @@
         fetch(`${API}/events?limit=80`).then(r => r.json()),
       ]);
       sessions = s.sessions || [];
+      // #709.7 — guaranteed-distinct identity colors for the live roster
+      // (stable order: created_at then name; hash only past 8 members).
+      registerRoster([...sessions]
+        .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '') || a.name.localeCompare(b.name))
+        .map(x => x.name));
       teams = t.teams || [];
       memberships = m.memberships || [];
       inbox = ib.inbox || [];
@@ -771,7 +783,8 @@
     </button>
     <!-- #693 — mesh health (from the sessions wire; external = hub peers) -->
     {#if sessions.filter(s => s.agent === 'external-a2a' || s.external).length}
-      <span class="mesh-health" title="hub mesh peers discovered">⇄ {sessions.filter(s => s.agent === 'external-a2a' || s.external).length}</span>
+      <!-- #709.11 — everything in the topbar must DO something: click → Settings ▸ Mesh -->
+      <button class="mesh-health" title="hub mesh peers — click for mesh status" on:click={() => { showSettings = true; try { location.hash = '#settings/mesh'; } catch {} }}>⇄ {sessions.filter(s => s.agent === 'external-a2a' || s.external).length}</button>
     {/if}
     <button class="primary spawn-btn" on:click={() => (showWizard = true)} title="Spawn a single agent or apply a team template">+ new</button>
     <button class="icon-btn" on:click={() => { showSettings = true; try { location.hash = '#settings/accounts'; } catch {} }} title="Settings — accounts, roles & skills, team, mesh, developer" aria-label="Settings" data-testid="open-settings">⚙</button>
@@ -781,13 +794,9 @@
       {#if showAccountMenu}
         <div class="view-dropdown account-dropdown" role="menu" data-testid="account-dropdown">
           <div class="vd-section">signed in as operator</div>
-          <button role="menuitem" on:click={() => { toggleTheme(); }}>{theme === 'dark' ? '☀ Light theme' : '☾ Dark theme'}</button>
-          <div class="vd-row">
-            <span>font</span>
-            <button class="icon-btn small" on:click={() => applyFontSize(fontSize - 1)} aria-label="smaller">A-</button>
-            <span class="font-num">{fontSize}px</span>
-            <button class="icon-btn small" on:click={() => applyFontSize(fontSize + 1)} aria-label="larger">A+</button>
-          </div>
+          <!-- #709.6 — menus carry COMMANDS only; live controls (theme/font)
+               live in Settings ▸ Appearance. -->
+          <button role="menuitem" on:click={() => { showSettings = true; showAccountMenu = false; try { location.hash = '#settings/appearance'; } catch {} }}>🎨 Appearance…</button>
           <button role="menuitem" on:click={() => { showShortcutHelp = true; showAccountMenu = false; }}>? Keyboard cheatsheet</button>
           <button role="menuitem" on:click={() => { showSaveAs = true; showAccountMenu = false; }}>💾 Save layout as view…</button>
           <div class="vd-divider"></div>
@@ -1081,7 +1090,7 @@
   .modal-saveas .hint { color: var(--fg-muted); font-size: 0.78rem; margin: 0.5rem 0 1rem 0; }
   .modal-saveas footer { display: flex; justify-content: flex-end; gap: 0.6rem; }
   /* #693 — topbar slim-down */
-  .mesh-health { color: var(--accent-2, #87ceeb); font-size: 0.8rem; white-space: nowrap; }
+  .mesh-health { color: var(--accent-2, #87ceeb); font-size: 0.8rem; white-space: nowrap; background: none; border: none; cursor: pointer; padding: 0 0.2rem; }
   .account-menu-wrap { position: relative; }
   .account-dropdown { right: 0; left: auto; min-width: 200px; }
   .account-dropdown .vd-row { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.8rem; color: var(--fg-muted, #999); font-size: 0.82rem; }

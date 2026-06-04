@@ -49,6 +49,22 @@ const ROLE_ICONS = {
   'qa-engineer': '◎',
 };
 
+// #709.7 — roster-ordered color assignment. Hashing collides in small
+// teams (~30% for 3 agents over 8 buckets), breaking the operator's
+// literal ask ("different team members in different colors"). Callers
+// with roster knowledge (Workspace refresh) call registerRoster() with
+// a STABLY-ORDERED list (created_at, then name); the first 8 get
+// guaranteed-distinct palette slots. Names beyond 8 — and authors never
+// registered (e.g. historical transcript handles) — fall back to the
+// deterministic hash.
+const rosterColor = new Map();
+export function registerRoster(names) {
+  rosterColor.clear();
+  (names || []).slice(0, IDENTITY_PALETTE.length).forEach((n, i) => {
+    rosterColor.set(n, IDENTITY_PALETTE[i]);
+  });
+}
+
 export function fnv1a(str) {
   let h = 0x811c9dc5;
   for (let i = 0; i < (str || '').length; i++) {
@@ -59,6 +75,8 @@ export function fnv1a(str) {
 }
 
 export function agentColor(name) {
+  const assigned = rosterColor.get(name);
+  if (assigned) return assigned;
   return IDENTITY_PALETTE[fnv1a(name) % IDENTITY_PALETTE.length];
 }
 

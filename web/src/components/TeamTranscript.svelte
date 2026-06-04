@@ -192,15 +192,30 @@
   // timeHM: right-aligned muted HH:MM; full date on hover (title).
   function timeHM(ts) {
     if (!ts) return '';
-    const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // #709.8 — fixed-width 24h (14:02), never locale 12h ("03:25 AM").
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   }
   // Consecutive same-author messages within 3 min group under one chip.
   function isGrouped(msgs, i) {
     if (i === 0) return false;
     const prev = msgs[i - 1], cur = msgs[i];
     if (!prev || prev.author !== cur.author) return false;
-    return (new Date(cur.created_at) - new Date(prev.created_at)) < 180000;
+    if ((new Date(cur.created_at) - new Date(prev.created_at)) >= 180000) return false;
+    // #709.9 — re-chip after 6 consecutive grouped rows so long runs
+    // never orphan their author off-screen.
+    let run = 0;
+    for (let j = i - 1; j >= 0 && msgs[j].author === cur.author; j--) {
+      if (!isGroupedShallow(msgs, j)) break;
+      run++;
+      if (run >= 6) return false;
+    }
+    return true;
+  }
+  function isGroupedShallow(msgs, i) {
+    if (i === 0) return false;
+    const prev = msgs[i - 1], cur = msgs[i];
+    return prev && prev.author === cur.author &&
+      (new Date(cur.created_at) - new Date(prev.created_at)) < 180000;
   }
   // Recipient shown inline ONLY when it isn't a broadcast.
   function inlineRecipient(m) {
@@ -523,9 +538,9 @@
              recipient appears inline (▸ name) ONLY when not a broadcast. -->
         <article class="msg compact {kindClass(m)}" class:grouped={isGrouped(msgs, mi)} data-testid="transcript-row" data-kind={m.kind || 'message'}>
           <span class="chip-col">
-            {#if !isGrouped(msgs, mi)}
-              <span class="chip from" style="color: {agentIdentity(m.author).color}" title={'@' + m.author}>{agentIdentity(m.author).icon} {m.author}</span>
-            {/if}
+            <!-- #709.9 — chip always rendered; grouped rows reveal it on
+                 hover so orphaned runs keep their author reachable. -->
+            <span class="chip from" class:ghost={isGrouped(msgs, mi)} style="color: {agentIdentity(m.author).color}" title={'@' + m.author + ' · ' + new Date(m.created_at).toLocaleString()}><span aria-hidden="true">{agentIdentity(m.author).icon}</span> {m.author}</span>
           </span>
           <span class="content-col">
             {#if selectedScope === 'all' && m.team}
@@ -572,7 +587,7 @@
       <textarea
         bind:this={composeEl}
         bind:value={composeBody}
-        placeholder="Type a message — @-mention to ping specific agents (e.g., @tech-lead) or @everyone for broadcast. Enter sends · Shift+Enter newline."
+        placeholder={defaultTarget ? `Message @${defaultTarget} (team lead) — @-mention to address someone else · Enter sends` : 'Type a message — @-mention an agent or @everyone · Enter sends'}
         onkeydown={handleKeydown}
         oninput={handleInput}
         onclick={handleClickOrSelect}
@@ -709,6 +724,16 @@
   .primary:disabled { opacity: 0.4; cursor: not-allowed; }
   /* #695 — compact one-line transcript rows */
   .msg.compact { display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) max-content; width: 100%; box-sizing: border-box; gap: 0 0.5rem; align-items: baseline; padding: 0.1rem 0.2rem; margin-bottom: 0.15rem; }
+  /* #709.9 — grouped chips ghost until hover */
+  .msg.compact .chip.from.ghost { visibility: hidden; }
+  .msg.compact:hover .chip.from.ghost { visibility: visible; opacity: 0.6; }
+  /* #709.10 — narrow panes STACK instead of squeezing content to ~0 */
+  .messages { container-type: inline-size; }
+  @container (max-width: 360px) {
+    .msg.compact { grid-template-columns: minmax(0, 1fr) max-content; }
+    .msg.compact .chip-col { grid-column: 1 / -1; }
+    .msg.compact .chip.from.ghost { display: none; }
+  }
   .msg.compact.grouped { padding-top: 0; }
   .msg.compact .chip-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .msg.compact .chip.from { font-weight: 600; font-size: 0.82rem; }
