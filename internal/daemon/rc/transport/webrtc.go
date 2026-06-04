@@ -94,6 +94,15 @@ func (t *WebRTCTransport) Send(ctx context.Context, frame []byte) error {
 	if t.dc.BufferedAmount() > 256*1024 {
 		return ErrBackpressure
 	}
+	// #711 review sweep — bump BEFORE SendText (4th member of the
+	// #688/#699/#711 causal-ordering family; #688 fixed the WS sibling
+	// and its review wrongly cleared this one): a concurrent Stats()
+	// reader could observe FramesSent:0 after a peer had already echoed
+	// the frame. On send error the counters overcount by one frame —
+	// display-only (no logic branches on them), same trade-off as #688.
+	t.framesSent.Add(1)
+	t.bytesSent.Add(uint64(len(frame)))
+	t.lastActivity.Store(time.Now().UnixNano())
 	if err := t.dc.SendText(string(frame)); err != nil {
 		if errors.Is(err, webrtc.ErrConnectionClosed) {
 			_ = t.Close()
@@ -101,9 +110,6 @@ func (t *WebRTCTransport) Send(ctx context.Context, frame []byte) error {
 		}
 		return fmt.Errorf("webrtc send: %w", err)
 	}
-	t.framesSent.Add(1)
-	t.bytesSent.Add(uint64(len(frame)))
-	t.lastActivity.Store(time.Now().UnixNano())
 	return nil
 }
 
