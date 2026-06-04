@@ -297,12 +297,18 @@ func (c *relayTunnelClient) handleFrame(frame *relayFrame) {
 			resp.Headers[k] = vs[0]
 		}
 	}
+	// #711 — bump BEFORE the send so the counter is causally consistent:
+	// the requester can only observe its 2xx after these bytes leave,
+	// which now happens-after the Add (the #688/#699 ordering family —
+	// CI saw TotalHandlerOK=0 while the response had demonstrably
+	// arrived). On a failed send the tunnel drops and reconnects, so a
+	// one-frame overcount on the final failed send is moot.
+	if rec.Code >= 200 && rec.Code < 300 {
+		c.totalHandlerOK.Add(1)
+	}
 	if err := c.send(resp); err != nil {
 		// Tunnel must have dropped — readPump will observe + exit.
 		return
-	}
-	if rec.Code >= 200 && rec.Code < 300 {
-		c.totalHandlerOK.Add(1)
 	}
 }
 
