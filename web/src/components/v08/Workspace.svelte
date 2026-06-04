@@ -428,29 +428,44 @@
   // active terminal pane (swap content — never spawn a new pane).
   // Hub/external peers (no PTY) focus the inspector only; the terminal
   // keeps showing the last PTY agent (rule 1c).
-  function selectAgent(name) {
+  // #709.S1.2 — focus-driven terminal swaps are VIEW changes, not
+  // layout changes: they never call saveLayout, so a minute of clicking
+  // around sessions followed by a reload leaves the layout exactly as
+  // the operator last SAVED it (explicit tab/split ops still persist).
+  // opts.newTab (middle-click / Alt-click on a session row) appends a
+  // new terminal tab instead of swapping — the second intent gets its
+  // own gesture instead of silently destroying the current view.
+  function selectAgent(name, opts = {}) {
     selectedAgent = name;
     const sess = (sessions || []).find(s => s.name === name);
     if (sess && (sess.agent === 'external-a2a' || sess.external)) return;
     pushMRU(name);
     const hit = findTerminalTab(name);
-    if (hit) {
+    if (hit && !opts.newTab) {
       activatePaneTab(hit.pane, hit.tabIdx);
       focusedPaneID = hit.pane.id;
-      saveLayout();
       return;
     }
     const target = findRebindTarget();
-    if (target) {
-      const i = typeof target.activeTab === 'number' ? target.activeTab : 0;
-      if (Array.isArray(target.tabs) && target.tabs[i]) {
-        target.tabs[i] = { widget: 'terminal', config: { agent: name } };
+    if (!target) return;
+    if (opts.newTab) {
+      if (!Array.isArray(target.tabs) || !target.tabs.length) {
+        target.tabs = [{ widget: target.widget, config: target.config || {} }];
+        target.activeTab = 0;
       }
-      target.widget = 'terminal';
-      target.config = { agent: name };
+      target.tabs = [...target.tabs, { widget: 'terminal', config: { agent: name } }];
+      activatePaneTab(target, target.tabs.length - 1);
       focusedPaneID = target.id;
-      saveLayout();
+      saveLayout(); // explicit new-tab intent IS a layout change
+      return;
     }
+    const i = typeof target.activeTab === 'number' ? target.activeTab : 0;
+    if (Array.isArray(target.tabs) && target.tabs[i]) {
+      target.tabs[i] = { widget: 'terminal', config: { agent: name } };
+    }
+    target.widget = 'terminal';
+    target.config = { agent: name };
+    focusedPaneID = target.id;
   }
   // Rule 2 — selecting a terminal (tab click / pane click / agent pick)
   // moves focus to its agent.

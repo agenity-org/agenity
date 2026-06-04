@@ -403,8 +403,12 @@
             on:contextmenu={(e) => onTabContext(e, i)}
             title="left-click: switch · right-click: change widget/agent · Ctrl+Alt+Tab cycles"
           >
-            {#if tabIdent}<span class="ph-tab-ident" style="color: {tabIdent.color}" aria-hidden="true">{tabIdent.icon}</span>{/if}
-            <span class="ph-tab-label">{tabLabel(t)}</span>
+            {#key t.widget === 'terminal' ? t.config?.agent : ''}
+              <span class="ph-tab-swap">
+                {#if tabIdent}<span class="ph-tab-ident" style="color: {tabIdent.color}" aria-hidden="true">{tabIdent.icon}</span>{/if}
+                <span class="ph-tab-label">{tabLabel(t)}</span>
+              </span>
+            {/key}
             {#if (node.tabs?.length || 0) > 1}
               <span class="ph-tab-close" on:click={(e) => closeTab(i, e)} title="close tab">×</span>
             {/if}
@@ -625,6 +629,12 @@
   .ph-tab.active { color: var(--fg); border-bottom-color: var(--accent, #87ceeb); }
   .ph-tab-label { overflow: hidden; text-overflow: ellipsis; }
   .ph-tab-ident { margin-right: 0.25rem; } /* #694 identity chip */
+  /* #709.S1.2 — rebind feedback: the keyed block re-mounts when the
+     bound agent changes, playing a brief highlight so the swap is
+     perceivable instead of silent. */
+  .ph-tab-swap { display: inline-flex; align-items: center; min-width: 0; animation: tab-swap 0.45s ease-out; }
+  .ph-tab-swap .ph-tab-label { overflow: hidden; text-overflow: ellipsis; }
+  @keyframes tab-swap { 0% { background: var(--accent-2, #87ceeb); color: #06222e; border-radius: 3px; } 100% { background: transparent; } }
   .ph-tab-close { color: var(--fg-faint); padding: 0 0.1rem; font-size: 0.88rem; line-height: 1; border-radius: 3px; opacity: 0.55; }
   .ph-tab:hover .ph-tab-close { opacity: 1; }
   .ph-tab-close:hover { background: rgba(231,76,60,0.18); color: #e74c3c; }

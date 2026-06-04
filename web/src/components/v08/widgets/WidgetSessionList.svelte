@@ -475,9 +475,10 @@
             <li class:selected={selectedAgents.has(agent.name)}
                 class:deleting={deletingNames.has(agent.name)}
                 class:orphan={agent.live === false}
-                onclick={(ev) => handleAgentClick(ev, agent.name)}
+                onclick={(ev) => { if (ev.altKey) { selectAgent(agent.name, { newTab: true }); return; } handleAgentClick(ev, agent.name); }}
+                onauxclick={(ev) => { if (ev.button === 1) { ev.preventDefault(); selectAgent(agent.name, { newTab: true }); } }}
                 oncontextmenu={(ev) => openContext(ev, agent.name, group.team.name, m.role)}
-                title="Click to select. Ctrl+click to toggle. Shift+click for range. Right-click for full menu (move team, change role, pause, stop). Hover for × to delete.">
+                title="Click: focus (swaps the active terminal view). Middle/Alt+click: open in a NEW terminal tab. Ctrl+click toggle · Shift+click range · right-click menu.">
               <!-- #694 — identity chip from the shared util: same color +
                    icon as terminal tabs / transcript / inspector. (#692's
                    ⇄ mesh glyph is the util's external default.) -->
