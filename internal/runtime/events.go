@@ -47,13 +47,20 @@ func (b *eventBuffer) push(e Event) {
 		e.At = time.Now().UTC()
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.items = append(b.items, e)
 	if len(b.items) > b.max {
 		b.items = b.items[len(b.items)-b.max:]
 	}
-	subs := append([]chan Event(nil), b.subs...)
-	b.mu.Unlock()
-	for _, ch := range subs {
+	// #715 — fan out UNDER the lock. unsub closes subscriber channels
+	// while holding b.mu; if push snapshotted and sent outside the lock
+	// (the prior shape), a concurrent unsub could close a channel
+	// mid-send → panic "send on closed channel" (reproduced under -race;
+	// 5th member of the close-during-send family — #686/#703/#688/#711).
+	// The sends are non-blocking buffered-drop (select/default), so
+	// holding the lock here costs nothing — no blocking I/O, and push is
+	// never called re-entrantly while holding b.mu.
+	for _, ch := range b.subs {
 		select {
 		case ch <- e:
 		default:
