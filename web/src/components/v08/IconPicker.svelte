@@ -25,6 +25,15 @@
   ];
 
   let free = $state(current || '');
+  // #709 review (f) — focus lands in the popover on open so Esc works
+  // immediately; a window-level Esc handler covers focus-outside too.
+  let inputEl = $state(null);
+  $effect(() => {
+    inputEl?.focus();
+    const esc = (e) => { if (e.key === 'Escape') oncancel(); };
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  });
   const preview = $derived((free || '').trim().slice(0, 16));
 
   function pick(icon) { onpick(icon); }
@@ -52,6 +61,7 @@
       <input
         type="text"
         placeholder="any emoji…"
+        bind:this={inputEl}
         bind:value={free}
         onkeydown={onkeydown}
         aria-label="custom icon"

@@ -78,12 +78,20 @@
   // #693 — ⚙ Settings page (hash deep-link #settings/<section>) + 👤 menu
   let showSettings = $state(typeof location !== 'undefined' && location.hash.startsWith('#settings'));
   let showAccountMenu = $state(false);
-  // #709.6 — SettingsPage Appearance section drives theme/font via events
-  // (menus stay commands-only).
-  if (typeof window !== 'undefined') {
-    window.addEventListener('chepherd-toggle-theme', () => toggleTheme());
-    window.addEventListener('chepherd-font-delta', (e) => applyFontSize(fontSize + (e.detail || 0)));
-  }
+  // #709.6 — SettingsPage Appearance section drives theme/font via
+  // events (menus stay commands-only). Registered in onMount with
+  // cleanup (review fix: script-body registration double-fires on
+  // remount/HMR, inconsistent with the rest of this file).
+  onMount(() => {
+    const onTheme = () => toggleTheme();
+    const onFont = (e) => applyFontSize(fontSize + (e.detail || 0));
+    window.addEventListener('chepherd-toggle-theme', onTheme);
+    window.addEventListener('chepherd-font-delta', onFont);
+    return () => {
+      window.removeEventListener('chepherd-toggle-theme', onTheme);
+      window.removeEventListener('chepherd-font-delta', onFont);
+    };
+  });
   let showTeamSettings = $state(null); // null | { team, members }
   let confirmDialog = $state(null);
 

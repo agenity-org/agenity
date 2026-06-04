@@ -197,19 +197,16 @@
   }
   // Consecutive same-author messages within 3 min group under one chip.
   function isGrouped(msgs, i) {
-    if (i === 0) return false;
-    const prev = msgs[i - 1], cur = msgs[i];
-    if (!prev || prev.author !== cur.author) return false;
-    if ((new Date(cur.created_at) - new Date(prev.created_at)) >= 180000) return false;
-    // #709.9 — re-chip after 6 consecutive grouped rows so long runs
-    // never orphan their author off-screen.
-    let run = 0;
-    for (let j = i - 1; j >= 0 && msgs[j].author === cur.author; j--) {
-      if (!isGroupedShallow(msgs, j)) break;
-      run++;
-      if (run >= 6) return false;
-    }
-    return true;
+    // #709.9 (review fix) — compute the row's POSITION within its
+    // consecutive same-author run and chip at every 7th position
+    // (0, 7, 14…). The first cut counted backwards without stopping at
+    // re-chip boundaries, so past row 6 every row chipped (a 15-message
+    // run rendered 9 chips). Position-modulo gives runs of 15 exactly
+    // 3 anchors.
+    let pos = 0;
+    let j = i;
+    while (j > 0 && isGroupedShallow(msgs, j)) { pos++; j--; }
+    return pos > 0 && pos % 7 !== 0;
   }
   function isGroupedShallow(msgs, i) {
     if (i === 0) return false;
