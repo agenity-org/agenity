@@ -11,16 +11,24 @@ on a remote **Host 2**; A↔B talk on-box, A/B↔C talk over the internet.
 > sidecar, orthogonal to A2A, omitted.
 
 ```mermaid
-%%{init: {'flowchart': {'nodeSpacing': 36, 'rankSpacing': 80, 'curve': 'basis'}}}%%
-flowchart LR
+%%{init: {'flowchart': {'htmlLabels': true, 'nodeSpacing': 105, 'rankSpacing': 45, 'curve':'basis'}}}%%
+flowchart TB
   classDef agent fill:#1d2b3a,stroke:#4f9dd9,color:#dce8f5
   classDef daemon fill:#15241c,stroke:#2fbf8f,color:#d6f5e8
   classDef infra fill:#2a2622,stroke:#9a9a9a,color:#d8d2c8
   classDef hub fill:#2a1f10,stroke:#e69f00,color:#f6e6c8
 
-  %% ── HOST 1 (left third) — agents A+B + daemon + podman ──────────────
+  %% ── HUB (top-centre) — both daemons dial OUT to it ──────────────────
+  subgraph HUB["chepherd-hub · signal.openova.io · k8s pod"]
+    HUBP["<b>chepherd-hub</b> :8443 / :3478<br/>registry · signaling relay · STUN/TURN"]:::hub
+  end
+
+  %% ── HOST 1 — daemon spawns agents A + B ─────────────────────────────
   subgraph HOST1["HOST 1 · VM / bare host"]
     direction TB
+    subgraph cD1["container · chepherd"]
+      DAEMON["<b>chepherd run</b> :8080<br/>A2A /jsonrpc · MCP /mcp/ws<br/>Deliverer · knock · HubSignaler<br/>sqlite Task/Channel/Cards"]:::daemon
+    end
     subgraph cA["container · agent A"]
       direction LR
       CLA["<b>claude</b><br/>PTY"]:::agent
@@ -33,25 +41,15 @@ flowchart LR
       BRB["<b>chepherd mcp</b><br/>bridge"]:::agent
       CLB -- stdio --> BRB
     end
-    subgraph cD1["container · chepherd"]
-      DAEMON["<b>chepherd run --headless</b> :8080<br/>A2A /jsonrpc · MCP /mcp/ws · REST/dashboard<br/>Deliverer · knock-writer · HubSignaler<br/>sqlite Task/Channel/AgentCards"]:::daemon
-    end
-    POD1["host <b>podman</b><br/>(socket)"]:::infra
+    POD1["host <b>podman</b>"]:::infra
     BRA -- "WS /mcp/ws" --> DAEMON
     BRB -- "WS /mcp/ws" --> DAEMON
     DAEMON -- "knock→PTY" --> CLA
     DAEMON -- "knock→PTY" --> CLB
     DAEMON -- "run/stop" --> POD1
-    POD1 -. creates .-> cA
-    POD1 -. creates .-> cB
   end
 
-  %% ── HUB (centre) — sits on the horizontal spine ─────────────────────
-  subgraph HUB["chepherd-hub · signal.openova.io · k8s pod"]
-    HUBP["<b>chepherd-hub</b> :8443 / :3478<br/>registry · signaling relay · STUN/TURN"]:::hub
-  end
-
-  %% ── HOST 2 (right third) — agent C + daemon + podman ────────────────
+  %% ── HOST 2 (remote) — daemon spawns agent C ─────────────────────────
   subgraph HOST2["HOST 2 · remote"]
     direction TB
     subgraph cD2["container · chepherd"]
@@ -67,16 +65,14 @@ flowchart LR
     BRC -- "WS /mcp/ws" --> DAEMON2
     DAEMON2 -- "knock→PTY" --> CLC
     DAEMON2 -- "run/stop" --> POD2
-    POD2 -. creates .-> cC
   end
 
-  %% control plane — signaling RELAYED THROUGH the hub (both daemons dial out);
-  %% drawn daemon→hub→daemon so the hub lands centre on the spine.
-  DAEMON -. "HTTPS register · SDP/ICE · TURN" .-> HUBP
-  HUBP  -. "HTTPS register · SDP/ICE · TURN" .-> DAEMON2
+  %% control plane — signaling/discovery/TURN (no arrowhead: it's a dial-out link)
+  HUBP -. "signaling · SDP/ICE · TURN" .- DAEMON
+  HUBP -. "signaling · SDP/ICE · TURN" .- DAEMON2
 
   %% data plane — A2A payload peer-to-peer, hub-blind
-  DAEMON <-->|"WebRTC DataChannel · dc_jsonrpc · A2A JSON-RPC · DTLS · P2P"| DAEMON2
+  DAEMON <-->|"WebRTC DataChannel · dc_jsonrpc · DTLS · P2P"| DAEMON2
 ```
 
 ---
