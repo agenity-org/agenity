@@ -9,57 +9,78 @@ reachable peer, and to a zero-inbound remote party via the central hub.
 
 ---
 
-## Component map
+## Component map — agents A + B share Host 1, agent C is remote on Host 2
+
+Containment: **agent ⊂ session ⊂ daemon**. The wrappers (MCP bridge, runner) are
+per-session; the Deliverer, knock, HubSignaler and state are shared at the daemon.
+A↔B talk **locally** (knock only, no hub). A/B↔C talk **over the internet** via a
+WebRTC DataChannel the hub helps negotiate but never reads.
 
 ```mermaid
-flowchart TB
+flowchart LR
   classDef agent fill:#1d2b3a,stroke:#4f9dd9,color:#dce8f5
   classDef ours fill:#15241c,stroke:#2fbf8f,color:#d6f5e8
   classDef hub fill:#2a1f10,stroke:#e69f00,color:#f6e6c8
-  classDef wire fill:#241626,stroke:#cc79a7,color:#f0dcec
   classDef store fill:#1a1a1a,stroke:#888,color:#ccc
 
-  subgraph HostA["HOST A — daemon · zero inbound to internet"]
+  subgraph H1["HOST 1 — daemon · zero inbound"]
     direction TB
-    AgentA["<b>A2A-UNAWARE AGENT</b><br/>claude-code / codex-cli / aider / qwen …<br/><i>stdio + MCP only — knows nothing about A2A</i>"]:::agent
-    MCPBridge["<b>MCP bridge</b> — it can <i>speak</i><br/>chepherd mcp · stdio → HTTP/WS<br/>internal/mcpserver"]:::ours
-    Knock["<b>knock</b> — inbound wake<br/>internal/runtime/knock<br/>writes <code>[chepherd-knock taskID=… from=…]</code>"]:::ours
-    Runner["<b>RUNNER</b> — it's <i>addressable</i> (agent's A2A face)<br/>cmd/runner · /a2a/&lt;sid&gt;/jsonrpc<br/>/.well-known/agent-card.json · silence-finalize→artifact"]:::ours
-    Deliverer{"<b>Deliverer</b><br/>internal/a2a.Deliverer<br/>picks the path"}:::ours
-    State[("daemon state<br/>TaskStore · ChannelStore<br/>AgentCards · event bus")]:::store
-
-    AgentA -- "①  MCP tool calls<br/>send_to_session · get_task · list_sessions" --> MCPBridge
-    MCPBridge --> Runner
-    Knock -- "②  marker line → agent calls get_task" --> AgentA
-    Runner --> Deliverer
-    Runner -.- State
-    Deliverer -- "local peer" --> Knock
+    subgraph SA["session A"]
+      A["Agent A · claude-code<br/><i>stdio+MCP</i>"]:::agent
+      RA["bridge A + runner A<br/>/a2a/A · card"]:::ours
+      A <--> RA
+    end
+    subgraph SB["session B"]
+      B["Agent B · claude-code<br/><i>stdio+MCP</i>"]:::agent
+      RB["bridge B + runner B<br/>/a2a/B · card"]:::ours
+      B <--> RB
+    end
+    D1{"Deliverer<br/>local·direct·hub"}:::ours
+    K1["knock<br/><code>[chepherd-knock…]</code>→get_task"]:::ours
+    HS1["HubSignaler<br/>+ answerer"]:::ours
+    ST1[("state<br/>Task·Channel·Cards")]:::store
+    RA --> D1
+    RB --> D1
+    RA -.- ST1
+    RB -.- ST1
+    D1 -- "local A↔B" --> K1
+    K1 -. wake .-> A
+    K1 -. wake .-> B
+    D1 -- "remote→hub" --> HS1
   end
 
-  subgraph Hub["CENTRAL HUB — chepherd-hub · signal.openova.io · cmd/chepherd-hub"]
+  subgraph HUB["chepherd-hub · internet · signal.openova.io"]
     direction TB
-    Reg["<b>Registry</b><br/>/v1/registry/announce · /peers<br/><i>parties discover each other</i>"]:::hub
-    Sig["<b>Signaling relay</b> (body-blind)<br/>/v1/signaling/offer · answer · ice · pending"]:::hub
-    Turn["<b>NAT traversal</b><br/>/v1/turn/credentials + STUN/TURN"]:::hub
+    REG["registry /v1/registry"]:::hub
+    SIG["signaling /v1/signaling<br/><i>body-blind relay</i>"]:::hub
+    TURN["STUN / TURN /v1/turn"]:::hub
   end
 
-  DC(["<b>WebRTC DataChannel</b> · dc_jsonrpc<br/>DTLS-encrypted · A2A payload P2P<br/><i>hub NEVER sees the payload</i>"]):::wire
-
-  subgraph HostB["HOST B — independent party · mirror · zero inbound"]
+  subgraph H2["HOST 2 — remote daemon · zero inbound"]
     direction TB
-    HubSig["<b>HubSignaler</b> + answerer loop<br/>internal/webrtcrtc"]:::ours
-    RunnerB["runner → MCP bridge → agent<br/>→ knock"]:::ours
-    HubSig --> RunnerB
+    subgraph SC["session C"]
+      C["Agent C · claude-code<br/><i>stdio+MCP</i>"]:::agent
+      RC["bridge C + runner C<br/>/a2a/C · card"]:::ours
+      C <--> RC
+    end
+    D2{"Deliverer"}:::ours
+    K2["knock→get_task"]:::ours
+    HS2["HubSignaler<br/>+ answerer"]:::ours
+    ST2[("state")]:::store
+    RC --> D2
+    RC -.- ST2
+    D2 -- "remote→hub" --> HS2
+    HS2 --> K2
+    K2 -. wake .-> C
   end
 
-  %% routing paths out of the Deliverer
-  Deliverer == "direct remote · HTTP POST /jsonrpc<br/>(FederatedDeliverer)" ==> RunnerB
-  Deliverer == "zero-inbound remote<br/>(HubDeliverer)" ==> DC
-  DC ==> RunnerB
+  %% control plane only — discovery + signaling + TURN (NEVER payload)
+  HS1 -. "register · SDP/ICE · TURN" .-> HUB
+  HS2 -. "register · SDP/ICE · TURN" .-> HUB
 
-  %% control plane only — signaling + discovery + TURN (never payload)
-  Deliverer -. "SDP / ICE / TURN creds<br/>(control plane only)" .-> Hub
-  HubSig -. "long-poll /signaling/pending" .-> Hub
+  %% data plane — encrypted A2A payload, peer-to-peer, hub blind
+  HS1 <-->|"WebRTC DataChannel · dc_jsonrpc<br/>DTLS · P2P · hub never sees it"| HS2
+  HS1 --> K1
 ```
 
 ---
@@ -78,33 +99,49 @@ flowchart TB
 
 ---
 
-## Message round-trip (alice → bob, zero-inbound remote)
+## Message round-trips
+
+### Local — A → B (same host, no hub)
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant AA as Agent A (claude-code)
-  participant MB as MCP bridge (A)
-  participant DA as Deliverer / HubDeliverer (A)
-  participant H as chepherd-hub
-  participant HB as HubSignaler (B)
-  participant RB as runner + knock (B)
-  participant AB as Agent B (claude-code)
+  participant A as Agent A
+  participant D1 as Deliverer (Host 1)
+  participant K1 as knock (Host 1)
+  participant B as Agent B
+  A->>D1: chepherd.send_to_session("B", body)  (MCP tool)
+  D1->>K1: B is local → knock path (no hub, no network)
+  K1->>B: [chepherd-knock taskID=… from=A]
+  B->>K1: chepherd.get_task(taskID) → reads, replies
+  Note over K1: silence-finalize → reply = task artifact
+  K1-->>A: task completed (artifact = B's reply)
+```
 
-  AA->>MB: chepherd.send_to_session("bob", body)  (MCP tool call)
-  MB->>DA: A2A message → pick path (bob = hub-only peer)
-  Note over DA,H: first contact only — negotiate transport
-  DA->>H: POST /v1/signaling/offer (SDP) + /ice
-  HB->>H: long-poll /v1/signaling/pending → gets offer
-  HB-->>H: POST /v1/signaling/answer (SDP/ICE)
-  Note over DA,HB: WebRTC DataChannel established (DTLS, P2P)<br/>TURN-relayed only if NAT requires
-  DA->>HB: A2A JSON-RPC over dc_jsonrpc (payload — hub blind)
-  HB->>RB: deliver task → write knock marker
-  RB->>AB: [chepherd-knock taskID=… from=alice]
-  AB->>RB: chepherd.get_task(taskID) → reads body, replies
-  Note over RB: silence-finalize captures reply as task artifact
-  RB-->>DA: A2A response over the same DataChannel
-  DA-->>AA: task completed (artifact = bob's reply)
+### Remote — A → C (over the internet, via the hub)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Agent A (Host 1)
+  participant HS1 as HubSignaler (Host 1)
+  participant H as chepherd-hub
+  participant HS2 as HubSignaler (Host 2)
+  participant K2 as knock (Host 2)
+  participant C as Agent C (Host 2)
+
+  A->>HS1: send_to_session("C", body) → Deliverer: C = hub-only peer
+  Note over HS1,H: first contact only — negotiate transport
+  HS1->>H: POST /v1/signaling/offer (SDP) + /ice + TURN creds
+  HS2->>H: long-poll /v1/signaling/pending → gets offer
+  HS2-->>H: POST /v1/signaling/answer
+  Note over HS1,HS2: WebRTC DataChannel up (DTLS, P2P)<br/>TURN-relayed only if NAT requires
+  HS1->>HS2: A2A JSON-RPC over dc_jsonrpc (hub blind to payload)
+  HS2->>K2: deliver → knock marker
+  K2->>C: [chepherd-knock taskID=… from=A]
+  C->>K2: chepherd.get_task(taskID) → reads, replies
+  K2-->>HS1: response over the same DataChannel
+  HS1-->>A: task completed (artifact = C's reply)
 ```
 
 ---
