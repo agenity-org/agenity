@@ -1,121 +1,125 @@
-# chepherd A2A architecture — component map
+# chepherd A2A — component (deployment) diagram
 
-How an **A2A-unaware agent** (claude-code, codex-cli, aider, …) is wrapped so it
-can send and receive A2A (agent-to-agent) messages — locally, to a directly
-reachable peer, and to a zero-inbound remote party via the central hub.
+Every node below is a **literal running process or container** in the shipped
+runtime. Every arrow is a **real action** between them (a syscall, a socket, a
+wire protocol). Topology: agents **A** and **B** run on **Host 1**, agent **C**
+on a remote **Host 2**; A↔B talk on-box, A/B↔C talk over the internet.
 
-> Names below are the real code symbols/files. The agent speaks only **stdio +
-> MCP**; everything that makes it A2A-capable is chepherd's wrapping.
-
----
-
-## Component map — agents A + B share Host 1, agent C is remote on Host 2
-
-Containment: **agent ⊂ session ⊂ daemon**. The wrappers (MCP bridge, runner) are
-per-session; the Deliverer, knock, HubSignaler and state are shared at the daemon.
-A↔B talk **locally** (knock only, no hub). A/B↔C talk **over the internet** via a
-WebRTC DataChannel the hub helps negotiate but never reads.
+> Shipped model = *daemon-spawns-claude-directly*. `cmd/runner` (the per-session
+> `/a2a/<sid>` endpoint) is the v0.9.2 future split and is **not** a running
+> process today, so it is not drawn. Embedded Gitea (`chepherd-gitea`) is a repo
+> sidecar, orthogonal to A2A, omitted.
 
 ```mermaid
+%%{init: {'flowchart': {'nodeSpacing': 36, 'rankSpacing': 80, 'curve': 'basis'}}}%%
 flowchart LR
   classDef agent fill:#1d2b3a,stroke:#4f9dd9,color:#dce8f5
-  classDef ours fill:#15241c,stroke:#2fbf8f,color:#d6f5e8
+  classDef daemon fill:#15241c,stroke:#2fbf8f,color:#d6f5e8
+  classDef infra fill:#2a2622,stroke:#9a9a9a,color:#d8d2c8
   classDef hub fill:#2a1f10,stroke:#e69f00,color:#f6e6c8
-  classDef store fill:#1a1a1a,stroke:#888,color:#ccc
 
-  subgraph H1["HOST 1 — daemon · zero inbound"]
+  %% ── HOST 1 (left third) — agents A+B + daemon + podman ──────────────
+  subgraph HOST1["HOST 1 · VM / bare host"]
     direction TB
-    subgraph SA["session A"]
-      A["Agent A · claude-code<br/><i>stdio+MCP</i>"]:::agent
-      RA["bridge A + runner A<br/>/a2a/A · card"]:::ours
-      A <--> RA
+    subgraph cA["container · agent A"]
+      direction LR
+      CLA["<b>claude</b><br/>PTY"]:::agent
+      BRA["<b>chepherd mcp</b><br/>bridge"]:::agent
+      CLA -- stdio --> BRA
     end
-    subgraph SB["session B"]
-      B["Agent B · claude-code<br/><i>stdio+MCP</i>"]:::agent
-      RB["bridge B + runner B<br/>/a2a/B · card"]:::ours
-      B <--> RB
+    subgraph cB["container · agent B"]
+      direction LR
+      CLB["<b>claude</b><br/>PTY"]:::agent
+      BRB["<b>chepherd mcp</b><br/>bridge"]:::agent
+      CLB -- stdio --> BRB
     end
-    D1{"Deliverer<br/>local·direct·hub"}:::ours
-    K1["knock<br/><code>[chepherd-knock…]</code>→get_task"]:::ours
-    HS1["HubSignaler<br/>+ answerer"]:::ours
-    ST1[("state<br/>Task·Channel·Cards")]:::store
-    RA --> D1
-    RB --> D1
-    RA -.- ST1
-    RB -.- ST1
-    D1 -- "local A↔B" --> K1
-    K1 -. wake .-> A
-    K1 -. wake .-> B
-    D1 -- "remote→hub" --> HS1
+    subgraph cD1["container · chepherd"]
+      DAEMON["<b>chepherd run --headless</b> :8080<br/>A2A /jsonrpc · MCP /mcp/ws · REST/dashboard<br/>Deliverer · knock-writer · HubSignaler<br/>sqlite Task/Channel/AgentCards"]:::daemon
+    end
+    POD1["host <b>podman</b><br/>(socket)"]:::infra
+    BRA -- "WS /mcp/ws" --> DAEMON
+    BRB -- "WS /mcp/ws" --> DAEMON
+    DAEMON -- "knock→PTY" --> CLA
+    DAEMON -- "knock→PTY" --> CLB
+    DAEMON -- "run/stop" --> POD1
+    POD1 -. creates .-> cA
+    POD1 -. creates .-> cB
   end
 
-  subgraph HUB["chepherd-hub · internet · signal.openova.io"]
-    direction TB
-    REG["registry /v1/registry"]:::hub
-    SIG["signaling /v1/signaling<br/><i>body-blind relay</i>"]:::hub
-    TURN["STUN / TURN /v1/turn"]:::hub
+  %% ── HUB (centre) — sits on the horizontal spine ─────────────────────
+  subgraph HUB["chepherd-hub · signal.openova.io · k8s pod"]
+    HUBP["<b>chepherd-hub</b> :8443 / :3478<br/>registry · signaling relay · STUN/TURN"]:::hub
   end
 
-  subgraph H2["HOST 2 — remote daemon · zero inbound"]
+  %% ── HOST 2 (right third) — agent C + daemon + podman ────────────────
+  subgraph HOST2["HOST 2 · remote"]
     direction TB
-    subgraph SC["session C"]
-      C["Agent C · claude-code<br/><i>stdio+MCP</i>"]:::agent
-      RC["bridge C + runner C<br/>/a2a/C · card"]:::ours
-      C <--> RC
+    subgraph cD2["container · chepherd"]
+      DAEMON2["<b>chepherd run</b> :8080<br/>(identical to Host 1)"]:::daemon
     end
-    D2{"Deliverer"}:::ours
-    K2["knock→get_task"]:::ours
-    HS2["HubSignaler<br/>+ answerer"]:::ours
-    ST2[("state")]:::store
-    RC --> D2
-    RC -.- ST2
-    D2 -- "remote→hub" --> HS2
-    HS2 --> K2
-    K2 -. wake .-> C
+    subgraph cC["container · agent C"]
+      direction LR
+      CLC["<b>claude</b><br/>PTY"]:::agent
+      BRC["<b>chepherd mcp</b><br/>bridge"]:::agent
+      CLC -- stdio --> BRC
+    end
+    POD2["host <b>podman</b>"]:::infra
+    BRC -- "WS /mcp/ws" --> DAEMON2
+    DAEMON2 -- "knock→PTY" --> CLC
+    DAEMON2 -- "run/stop" --> POD2
+    POD2 -. creates .-> cC
   end
 
-  %% control plane only — discovery + signaling + TURN (NEVER payload)
-  HS1 -. "register · SDP/ICE · TURN" .-> HUB
-  HS2 -. "register · SDP/ICE · TURN" .-> HUB
+  %% control plane — signaling RELAYED THROUGH the hub (both daemons dial out);
+  %% drawn daemon→hub→daemon so the hub lands centre on the spine.
+  DAEMON -. "HTTPS register · SDP/ICE · TURN" .-> HUBP
+  HUBP  -. "HTTPS register · SDP/ICE · TURN" .-> DAEMON2
 
-  %% data plane — encrypted A2A payload, peer-to-peer, hub blind
-  HS1 <-->|"WebRTC DataChannel · dc_jsonrpc<br/>DTLS · P2P · hub never sees it"| HS2
-  HS1 --> K1
+  %% data plane — A2A payload peer-to-peer, hub-blind
+  DAEMON <-->|"WebRTC DataChannel · dc_jsonrpc · A2A JSON-RPC · DTLS · P2P"| DAEMON2
 ```
 
 ---
 
-## Layers, in one line each
+## What each process is
 
-| Layer | Component | Role |
+| Process / container | Binary | Role in A2A |
 |---|---|---|
-| **Agent** | claude-code / codex / aider … | A2A-unaware; stdio + MCP only |
-| **Speak** | MCP bridge (`chepherd mcp`, `internal/mcpserver`) | agent's stdio MCP → daemon HTTP/WS; carries `send_to_session`, `get_task`, `list_sessions` |
-| **Be addressable** | runner (`cmd/runner`) | per-session A2A endpoint `/a2a/<sid>/jsonrpc` + Agent Card; captures the reply as the task artifact |
-| **Inbound wake** | knock (`internal/runtime/knock`) | one PTY marker `[chepherd-knock taskID=… from=…]` → agent fetches via `get_task` |
-| **Route outbound** | Deliverer (`internal/a2a.Deliverer`) | local→knock · direct→`FederatedDeliverer` · zero-inbound→`HubDeliverer` |
-| **Cross-host transport** | `HubSignaler` + WebRTC DataChannel (`dc_jsonrpc`) | encrypted P2P A2A; negotiated via the hub, payload never touches it |
-| **Central (remote)** | `chepherd-hub` (`cmd/chepherd-hub`) | registry + body-blind signaling relay + STUN/TURN — control plane only |
+| **chepherd** (container, 1 per host) | `chepherd run --headless` | The whole A2A brain: serves A2A `/jsonrpc` + MCP `/mcp/ws`, owns every agent's PTY (writes knocks), runs the Deliverer (path choice) + HubSignaler, holds sqlite Task/Channel/AgentCard state, and spawns agent containers via host podman. |
+| **chepherd-agent-…-X** (container, 1 per agent) | `claude` + `chepherd mcp` | The A2A-unaware agent. `claude` (PTY) is the agent; it spawns `chepherd mcp` (the stdio→WS bridge) per `.mcp.json`. Bridge = how the agent *speaks*; the daemon's knock-into-PTY = how it *hears*. |
+| **podman** (host daemon, 1 per host) | `podman` | The daemon's hands: creates/stops the sibling agent containers over the bind-mounted socket. |
+| **chepherd-hub** (k8s pod, 1 global) | `chepherd-hub` | Remote rendezvous only: peer registry + body-blind WebRTC signaling relay + STUN/TURN. Never on the data path. |
 
 ---
 
-## Message round-trips
+## Real connections (the arrows)
 
-### Local — A → B (same host, no hub)
+- **claude → chepherd mcp** — stdio; claude launches the bridge as its MCP server.
+- **chepherd mcp → daemon** — WebSocket `/mcp/ws`; carries the agent's tool calls (`send_to_session`, `get_task`, `list_sessions`). *This is outbound: how the agent acts.*
+- **daemon → claude (PTY stdin)** — the daemon writes the one-line knock marker into the agent's terminal. *This is inbound: how a task wakes the agent → it calls `get_task`.*
+- **daemon → podman** — `podman run/stop` to spawn/kill agent containers.
+- **daemon ⇄ chepherd-hub** — HTTPS, control plane only: register, exchange SDP/ICE, fetch TURN credentials.
+- **daemon ⇄ daemon (cross-host)** — the **WebRTC DataChannel** (`dc_jsonrpc`): the A2A JSON-RPC payload, DTLS-encrypted, peer-to-peer. The hub negotiates it but never reads it.
+
+---
+
+## Message round-trips (process-accurate)
+
+### Local — A → B (same host, daemon-internal, no hub, no network)
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant A as Agent A
-  participant D1 as Deliverer (Host 1)
-  participant K1 as knock (Host 1)
-  participant B as Agent B
-  A->>D1: chepherd.send_to_session("B", body)  (MCP tool)
-  D1->>K1: B is local → knock path (no hub, no network)
-  K1->>B: [chepherd-knock taskID=… from=A]
-  B->>K1: chepherd.get_task(taskID) → reads, replies
-  Note over K1: silence-finalize → reply = task artifact
-  K1-->>A: task completed (artifact = B's reply)
+  participant CLA as claude A
+  participant BRA as chepherd mcp (A)
+  participant D as chepherd daemon
+  participant CLB as claude B
+  CLA->>BRA: tool call send_to_session("B", body)  (stdio)
+  BRA->>D: WS /mcp/ws  → Deliverer: B is local
+  D->>CLB: write knock to B's PTY [chepherd-knock taskID=… from=A]
+  CLB->>D: get_task(taskID) over its own bridge → reads, replies
+  Note over D: silence-finalize → reply = task artifact
+  D-->>CLA: task completed (artifact = B's reply)
 ```
 
 ### Remote — A → C (over the internet, via the hub)
@@ -123,32 +127,28 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   autonumber
-  participant A as Agent A (Host 1)
-  participant HS1 as HubSignaler (Host 1)
+  participant CLA as claude A
+  participant D1 as chepherd daemon (Host 1)
   participant H as chepherd-hub
-  participant HS2 as HubSignaler (Host 2)
-  participant K2 as knock (Host 2)
-  participant C as Agent C (Host 2)
-
-  A->>HS1: send_to_session("C", body) → Deliverer: C = hub-only peer
-  Note over HS1,H: first contact only — negotiate transport
-  HS1->>H: POST /v1/signaling/offer (SDP) + /ice + TURN creds
-  HS2->>H: long-poll /v1/signaling/pending → gets offer
-  HS2-->>H: POST /v1/signaling/answer
-  Note over HS1,HS2: WebRTC DataChannel up (DTLS, P2P)<br/>TURN-relayed only if NAT requires
-  HS1->>HS2: A2A JSON-RPC over dc_jsonrpc (hub blind to payload)
-  HS2->>K2: deliver → knock marker
-  K2->>C: [chepherd-knock taskID=… from=A]
-  C->>K2: chepherd.get_task(taskID) → reads, replies
-  K2-->>HS1: response over the same DataChannel
-  HS1-->>A: task completed (artifact = C's reply)
+  participant D2 as chepherd daemon (Host 2)
+  participant CLC as claude C
+  CLA->>D1: send_to_session("C", body) via bridge → Deliverer: C = hub-only
+  Note over D1,H: first contact only — negotiate transport
+  D1->>H: HTTPS register + /signaling/offer (SDP) + /ice + TURN creds
+  D2->>H: long-poll /signaling/pending → offer; POST /signaling/answer
+  Note over D1,D2: WebRTC DataChannel up (DTLS, P2P)<br/>TURN-relayed only if NAT requires
+  D1->>D2: A2A JSON-RPC over dc_jsonrpc (hub blind to payload)
+  D2->>CLC: write knock to C's PTY [chepherd-knock taskID=… from=A]
+  CLC->>D2: get_task(taskID) → reads, replies
+  D2-->>D1: response over the same DataChannel
+  D1-->>CLA: task completed (artifact = C's reply)
 ```
 
 ---
 
-## Invariants worth remembering
+## Invariants
 
-- **The agent never knows it's in a mesh.** It calls MCP tools and reads its terminal; the runner + bridge + knock do everything else.
-- **Zero inbound on either host.** Both daemons reach *out* to the hub; the hub relays signaling and (if needed) TURN. No daemon opens an inbound port to the internet.
-- **The hub is control-plane only.** It brokers discovery + the WebRTC handshake + TURN credentials. The A2A payload rides the DTLS-encrypted DataChannel peer-to-peer — the hub cannot read it.
-- **One mental model:** *A2A-unaware agent ↔ MCP bridge (speak) + runner (addressable) → Deliverer picks the path → knock (local) · FederatedDeliverer (direct remote) · HubDeliverer over WebRTC (zero-inbound remote, negotiated via chepherd-hub).*
+- **The agent is just `claude` in a container.** It speaks via its `chepherd mcp` bridge and hears via knocks the daemon writes to its PTY — it never knows a mesh exists.
+- **The daemon is the only A2A-aware process per host.** It hosts the endpoint, owns PTYs, routes, and negotiates remote transport.
+- **Zero inbound.** Both daemons dial *out* to the hub; nothing opens an inbound internet port.
+- **Hub = control plane only.** Registry + signaling + TURN. The A2A payload rides the P2P DataChannel; the hub cannot read it.
