@@ -209,7 +209,10 @@
     flex: 0 0 auto;
     min-height: 0;
   }
-  .head-left { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+  /* #728 — head-left must take remaining space, shrink, AND clip: without
+     overflow:hidden its pills overflowed and overlapped (intercepting clicks
+     on) the fixed head-right controls at narrow pane widths. */
+  .head-left { display: flex; align-items: center; gap: 0.4rem; min-width: 0; flex: 1 1 auto; overflow: hidden; }
   .head-right { display: flex; align-items: center; gap: 0.15rem; flex: 0 0 auto; }
 
   .wbtn-wrap, .picker-wrap { position: relative; }
@@ -224,6 +227,7 @@
     font-size: 0.78rem;
     cursor: pointer;
     max-width: 16rem;
+    min-width: 0; /* #728 — allow the pill to shrink (aname ellipsizes) so it never spills over head-right */
     transition: background 0.14s ease, border-color 0.14s ease;
   }
   .wbtn:hover, .agent-pill:hover { background: var(--calm-chip-hover); border-color: var(--calm-border-strong); }
