@@ -87,7 +87,7 @@ func TestV094Walk_F4_MatchingPin_HandshakeSucceedsBytesFlow(t *testing.T) {
 	openB := make(chan struct{}, 1)
 	caller.OnOpen(func() { openA <- struct{}{} })
 	answerer.OnOpen(func() { openB <- struct{}{} })
-	timeout := time.After(15 * time.Second)
+	timeout := time.After(walkTimeout(15 * time.Second))
 	for ok := 0; ok < 2; {
 		select {
 		case <-openA:
@@ -110,7 +110,7 @@ func TestV094Walk_F4_MatchingPin_HandshakeSucceedsBytesFlow(t *testing.T) {
 			t.Errorf("payload = %q", payload)
 		}
 		t.Logf("F4 matching-pin handshake: DataChannel open + bytes flowed")
-	case <-time.After(5 * time.Second):
+	case <-time.After(walkTimeout(5 * time.Second)):
 		t.Fatal("F4 matching-pin: payload didn't arrive")
 	}
 }
