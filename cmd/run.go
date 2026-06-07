@@ -34,6 +34,7 @@ import (
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/auth"
 	"github.com/chepherd/chepherd/internal/federation"
+	"github.com/chepherd/chepherd/internal/graphify"
 	"github.com/chepherd/chepherd/internal/keychain"
 	"github.com/chepherd/chepherd/internal/mcpserver"
 	"github.com/chepherd/chepherd/internal/persistence/sqlite"
@@ -202,6 +203,33 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 	// can confirm two chepherd binaries have distinct fingerprints +
 	// won't cross-kill each other's agents at startup.
 	fmt.Printf("  instance:  %s (#270 — derived from state-dir abs path)\n\n", rt.InstanceUUID())
+	// #725 — Graphify plugin: build each new session's code knowledge graph
+	// (daemon-side, against the session's workspace) so the daemon can later
+	// serve graph queries to that agent over MCP. Best-effort + async: the
+	// hook never blocks or breaks spawn, and is a no-op when graphify isn't
+	// installed (dev/test) or the session has no working dir. The
+	// agent-facing query surface is wired separately via the daemon's MCP
+	// server (graphify is unreachable as a loopback server from inside the
+	// agent's own container).
+	if gfx := graphify.New(); gfx.Available() {
+		rt.AddSpawnHook(func(_ *session.Session, name string) {
+			_, info := rt.Get(name)
+			if info == nil || info.Cwd == "" {
+				return
+			}
+			cwd := info.Cwd
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+				defer cancel()
+				if err := gfx.BuildCodeOnly(ctx, cwd); err != nil {
+					fmt.Fprintf(os.Stderr, "[graphify] %s: code graph build skipped: %v\n", name, err)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "[graphify] %s: code graph built at %s\n", name, gfx.GraphPath(cwd))
+			}()
+		})
+		fmt.Println("  graphify:  code-graph-on-spawn enabled (#725)")
+	}
 	// #273 — verify the chepherd-agent:latest image's entrypoint script
 	// matches what this binary expects. Loud warning + rebuild
 	// instructions on mismatch. Best-effort — boot does NOT block on
