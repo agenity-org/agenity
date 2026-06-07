@@ -1,0 +1,29 @@
+---
+// ux-studio — "studio" dashboard experiment (VS-Code / IDE-style).
+//
+// A self-contained, visually distinct revamp of the chepherd dashboard
+// living entirely under web/src/components/studio/. Mounts its own root
+// component (Dashboardstudio) which carries its own auth gate, polling,
+// theme management, and the full split-pane editor area — independent of
+// the v08/v09 component tree so it can't collide with other experiments.
+//
+// Route: /ux-studio/
+import Dashboardstudio from '../components/studio/Dashboardstudio.svelte';
+import '../styles/global.css';
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chepherd — studio</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #0d1117; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; color: #e6edf3; }
+    </style>
+  </head>
+  <body>
+    <Dashboardstudio client:load version="studio" />
+  </body>
+</html>

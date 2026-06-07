@@ -1,0 +1,29 @@
+---
+// ux-board — "board" Orchestration Board dashboard (independent UX revamp).
+//
+// Mirrors web/src/pages/v0.9.4.astro's mounting shape: a single root
+// Svelte component hydrated client-side with full interactivity. The
+// board root owns its own auth gate + fetch wrapper (identical to
+// AuthGate's), so it is mounted directly without the v09 AuthGate
+// wrapper — this keeps the route fully self-contained under
+// web/src/components/board/.
+import Dashboardboard from '../components/board/Dashboardboard.svelte';
+import '../styles/global.css';
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chepherd — orchestration board</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #0a0d13; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; color: #eef1f5; }
+      html[data-theme="light"], html[data-theme="light"] body { background: #f4f6fa; color: #15191f; }
+    </style>
+  </head>
+  <body>
+    <Dashboardboard client:load version="board" />
+  </body>
+</html>
