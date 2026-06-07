@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/chepherd/chepherd/internal/graphify"
 	"github.com/chepherd/chepherd/internal/persistence"
 	"github.com/chepherd/chepherd/internal/runtime"
 )
@@ -469,6 +470,16 @@ func (s *Server) toolList() []map[string]any {
 			"properties": map[string]any{
 				"name": map[string]any{"type": "string"},
 			},
+		}},
+		{"name": "chepherd.graph_explain", "description": "Query YOUR repo's code knowledge graph (#725): a plain-language explanation of a code node (function/class/symbol) and its neighbors — calls, dependencies, definitions. Prefer this over grepping/reading files to understand structure (far fewer tokens). Scoped to your own session's repo. Args: node (string, required — e.g. a function or symbol name).", "inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"node": map[string]any{"type": "string"}},
+			"required":   []string{"node"},
+		}},
+		{"name": "chepherd.graph_path", "description": "Query YOUR repo's code knowledge graph (#725): the shortest dependency/call path between two code nodes. Scoped to your own session's repo. Args: from (string, required), to (string, required).", "inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"from": map[string]any{"type": "string"}, "to": map[string]any{"type": "string"}},
+			"required":   []string{"from", "to"},
 		}},
 	}
 }
@@ -978,10 +989,75 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			Body:  fmt.Sprintf("orchestrator %q stopped session %q", s.CurrentCaller(), a.Name),
 		})
 		resp.Result = map[string]any{"ok": true, "stopped": a.Name}
+	case "graph_explain":
+		var a struct {
+			Node string `json:"node"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil || a.Node == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "graph_explain: 'node' required"}
+			return resp
+		}
+		gp, gerr := s.graphPathForCaller()
+		if gerr != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: gerr.Error()}
+			return resp
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		out, err := graphify.New().Explain(ctx, gp, a.Node)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"node": a.Node, "explanation": out}
+	case "graph_path":
+		var a struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil || a.From == "" || a.To == "" {
+			resp.Error = &rpcErr{Code: -32602, Message: "graph_path: 'from' and 'to' required"}
+			return resp
+		}
+		gp, gerr := s.graphPathForCaller()
+		if gerr != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: gerr.Error()}
+			return resp
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		out, err := graphify.New().ShortestPath(ctx, gp, a.From, a.To)
+		if err != nil {
+			resp.Error = &rpcErr{Code: -32000, Message: err.Error()}
+			return resp
+		}
+		resp.Result = map[string]any{"from": a.From, "to": a.To, "path": out}
 	default:
 		resp.Error = &rpcErr{Code: -32601, Message: "unknown chepherd tool: " + name}
 	}
 	return resp
+}
+
+// graphPathForCaller resolves the calling agent's OWN session working dir and
+// returns the path to its code knowledge graph (#725). This is the per-agent
+// scoping primitive: an agent can only query the graph for the repo it is
+// assigned, because the path is derived from its own session — never an
+// arbitrary one. Errors when there is no caller identity, no workspace, or
+// the graph has not been built yet (it builds asynchronously on spawn).
+func (s *Server) graphPathForCaller() (string, error) {
+	caller := s.CurrentCaller()
+	if caller == "" {
+		return "", fmt.Errorf("graph query: no caller identity")
+	}
+	_, info := s.rt.Get(caller)
+	if info == nil || info.Cwd == "" {
+		return "", fmt.Errorf("graph query: caller %q has no workspace", caller)
+	}
+	gp := graphify.New().GraphPath(info.Cwd)
+	if _, err := os.Stat(gp); err != nil {
+		return "", fmt.Errorf("graph not built yet for %q (it builds on spawn)", caller)
+	}
+	return gp, nil
 }
 
 // callerHasAuthority returns true if the current MCP caller has orchestration
