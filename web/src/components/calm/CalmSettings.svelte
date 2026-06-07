@@ -261,7 +261,7 @@
         <div class="widget-host"><WidgetMCPLog {events} /></div>
 
       {:else if section === 'audit'}
-        <div class="widget-host scroll"><AuditLog /></div>
+        <div class="widget-host scroll audit-host"><AuditLog /></div>
       {/if}
     </main>
   </div>
@@ -319,9 +319,29 @@
   .widget-host { flex: 1; min-height: 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
   .widget-host > :global(*) { flex: 1; min-height: 0; }
   .widget-host.pad { padding: 1.6rem 1.8rem; }
-  /* AuditLog (v09) brings its own dark card + internal layout; let it
-     scroll within the host rather than be clipped. */
+  /* AuditLog (v09) brings its own internal layout; let it scroll within
+     the host rather than be clipped. */
   .widget-host.scroll { overflow: auto; }
+  /* #728 — map AuditLog's themeable vars to calm tokens so it adapts to
+     light AND dark (it ships dark fallbacks for the standalone v09 route). */
+  .audit-host {
+    --audit-bg: var(--calm-bg);
+    --audit-fg: var(--calm-fg);
+    --audit-fg-muted: var(--calm-fg-muted);
+    --audit-fg-faint: var(--calm-fg-faint);
+    --audit-surface: var(--calm-surface);
+    --audit-chip: var(--calm-chip);
+    --audit-input: var(--calm-input);
+    --audit-border: var(--calm-border);
+    --audit-border-strong: var(--calm-border-strong);
+    --audit-accent: var(--calm-accent);
+    --audit-accent-fg: #fff;
+    --audit-accent-border: var(--calm-accent);
+    --audit-danger: var(--calm-danger);
+    --audit-ok: var(--calm-ok);
+    --audit-link: var(--calm-accent);
+    --audit-height: 100%;
+  }
   h2 { font-size: 1.3rem; font-weight: 700; margin: 0 0 0.3rem; }
   .lede { color: var(--calm-fg-muted); font-size: 0.88rem; margin: 0 0 1.4rem; }
 
