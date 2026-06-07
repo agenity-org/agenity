@@ -59,6 +59,61 @@ system functionally do,"* not *"how production-ready or popular is it."*
   - **Iso (75)** — containerized + non-root + zero-inbound, but pod-per-agent K8s isolation is the design, not uniformly the running reality. OpenHands (90, Docker-by-default) and kagent (85, k8s-native) are more complete.
 - **Closest functional rivals are NOT the popular ones:** **AGNTCY** matches the mesh shape (Fed/0In/Disc/Std) but has no operator console (HITL 35) and no agent-wrapping/live-inbound; **kagent** is the broadest infra runtime but empty on zero-inbound (0In 25) and weak on wrapping arbitrary CLIs. The entire Claude-Code family is functionally *narrow* — deep on Orch/HITL/MCP/CLIs, near-zero on the whole A2A/Fed/0In/Wrap left half.
 
+## Deep-dive: chepherd vs kagent (+ complementary positioning)
+
+**kagent uses A2A directly and natively** (verified from kagent docs): *"every AI
+agent created with kagent implements the A2A protocol and can be invoked by an A2A
+client."* It serves standard Agent Cards at `/.well-known/agent.json`, exposes an
+A2A JSON-RPC endpoint (port 8083 on the kagent-controller), and any external A2A
+client can call it. So chepherd and kagent **speak the same A2A wire** — that
+shared protocol is the basis for complementarity. They differ on what "an agent"
+*is*:
+
+| Axis | **kagent** | **chepherd** |
+|---|---|---|
+| What an agent is | Declarative **k8s CRD** — programmatic agent on Google ADK / LangGraph / CrewAI | **Wrapped interactive CLI** (`claude`, codex, aider), A2A-unaware; runner makes it A2A-capable |
+| A2A endpoint | controller-hosted, `/.well-known/agent.json`, :8083 | per-agent **runner**, `/a2a/<sid>/jsonrpc` + Agent Card |
+| A2A transport | HTTP / JSON-RPC (standard, in-cluster) | HTTP/JSON-RPC **+ WebRTC DataChannel** (P2P, non-spec extension) |
+| Reachability | k8s Service / Gateway / Ingress — assumes reachability | **zero-inbound**, outbound-only, hub-relayed signaling, NAT traversal |
+| Cross-org | multi-cluster (Enterprise-gated), still HTTP-reachable | **independent orgs, nothing exposed** |
+| Inbound delivery | invoke a (usually stateless) endpoint | **knock into a live interactive session** |
+| Human role | dashboard + OTel/Prometheus observability | **operator console: live panes + steering + alerts** |
+
+**One-line diff:** kagent is the in-cluster runtime for programmatic agents you
+author as code; chepherd is the edge wrapper for interactive agents humans drive,
+federated peer-to-peer across trust boundaries.
+
+### Positioning: complementary, not competitive
+
+Competing with kagent (CNCF, Solo.io) is a losing fight. Complementary is honest
+and defensible because chepherd does two things kagent structurally does not:
+
+1. **chepherd wraps the agents kagent can't** — stock interactive CLIs (`claude-code`)
+   with a live A2A inbox. *kagent for autonomous service-agents; chepherd for the
+   interactive coding agents humans operate — on the same A2A bus.*
+2. **chepherd can be the cross-org / zero-inbound transport for kagent.** kagent has
+   no zero-inbound P2P story (0In: 25); chepherd's hub + WebRTC mesh lets an A2A
+   agent in org A reach one in org B with no ingress on either side.
+   > **kagent is the LAN for agents (in-cluster, HTTP). chepherd is the WAN
+   > (cross-org, zero-inbound P2P). They meet at the A2A Agent Card.**
+3. **One workflow, two layers:** operator drives an interactive agent in chepherd →
+   it delegates via A2A to a kagent agent (k8s/Istio/Prometheus tools, in-cluster)
+   → result returns over A2A → knocked into the live chepherd session for review.
+
+**Caveat — where "complementary" breaks:**
+- Holds only if chepherd keeps a **spec-clean A2A HTTP face** on every runner (WebRTC
+  an *optional* transport upgrade, not the only door). Otherwise kagent agents can't
+  interop without bespoke glue and the claim is marketing (today Std: 75).
+- Thin moat: kagent could adopt SLIM/AGNTCY or add a P2P transport and absorb the
+  WAN role. chepherd must move fast on the harder-to-copy **interactive-wrap +
+  human-operator** identity, and must NOT drift into being an in-cluster
+  orchestrator (that is kagent's turf).
+
+**Proof-of-complementarity spike (1–2 days):** a chepherd-wrapped `claude` agent
+invokes a kagent agent over standard A2A HTTP via its Agent Card; then the reverse —
+a kagent agent sends an A2A task to a chepherd runner, which knocks it into a live
+claude session. Both directions over vanilla A2A = the positioning is demonstrable.
+
 ## Sources (June 2026)
 
 - A2A protocol (LF/AAIF), v1.0.1 (2026-05-28): https://a2a-protocol.org/latest/specification/ · https://github.com/a2aproject/A2A
