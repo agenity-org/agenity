@@ -45,7 +45,15 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates gosu \
     podman fuse-overlayfs slirp4netns uidmap \
+    python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Graphify (#725) — daemon-central codebase knowledge-graph plugin. Pinned.
+# Code-only builds are local tree-sitter (no LLM / no tokens); the daemon
+# shells out to `graphify update <repo> --no-cluster` and serves the graph
+# to agents via `python -m graphify.serve --transport http`. Default-on;
+# opt-out at provisioning (the Plugins step).
+RUN pip3 install --no-cache-dir graphifyy==0.8.35
 
 # Non-root user for the chepherd process itself
 RUN useradd -m -u 1000 -s /bin/bash chepherd \
