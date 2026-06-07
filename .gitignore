@@ -27,3 +27,6 @@ walk-evidence/
 # Curated UAT acceptance evidence (exception to the *.png ban above)
 !docs/ledger/evidence/
 !docs/ledger/evidence/*.png
+
+# graphify local build output (#725)
+graphify-out/

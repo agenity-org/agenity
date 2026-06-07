@@ -217,6 +217,9 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			if info == nil || info.Cwd == "" {
 				return
 			}
+			if info.GraphifyDisabled {
+				return // operator opted out at provisioning (#725 Plugins step)
+			}
 			cwd := info.Cwd
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

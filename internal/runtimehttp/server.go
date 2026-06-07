@@ -1396,6 +1396,7 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			UseDefaultPrompt bool                   `json:"use_default_prompt"`
 			StatSheet        runtime.AgentStatSheet `json:"stat_sheet"`
 			ClaudeTokenID    string                 `json:"claude_token_id"`
+			DisableGraphify  bool                   `json:"disable_graphify"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -1440,16 +1441,17 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		spawnEnv := s.collectVCSTokenEnv(req.ProviderID)
 		spawnEnv = stripEnvKey(spawnEnv, "ANTHROPIC_API_KEY")
 		info, sess, err := s.rt.Spawn(runtime.SpawnSpec{
-			Name:          req.Name,
-			AgentSlug:     req.Agent,
-			Team:          req.Team,
-			Role:          role,
-			Cwd:           cwd,
-			SystemPrompt:  systemPrompt,
-			StatSheet:     req.StatSheet,
-			AgentArgs:     args,
-			ClaudeTokenID: req.ClaudeTokenID,
-			Env:           spawnEnv,
+			Name:            req.Name,
+			AgentSlug:       req.Agent,
+			Team:            req.Team,
+			Role:            role,
+			Cwd:             cwd,
+			SystemPrompt:    systemPrompt,
+			StatSheet:       req.StatSheet,
+			AgentArgs:       args,
+			ClaudeTokenID:   req.ClaudeTokenID,
+			Env:             spawnEnv,
+			DisableGraphify: req.DisableGraphify,
 		})
 		if err == nil && req.Team != "" {
 			_, _ = s.rt.JoinTeam(req.Name, req.Team, runtime.MembershipRole(req.Role), "")
