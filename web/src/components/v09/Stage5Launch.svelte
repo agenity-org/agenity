@@ -62,6 +62,9 @@
   // null = pre-launch (not yet attempted)
   let launchResults = $state(null);
   let launchingNow = $state(false);
+  // #725 — Plugins: Graphify code-graph is built on spawn by default;
+  // operator can opt out per launch. Threads to body.disable_graphify.
+  let graphifyEnabled = $state(true);
 
   async function loadSkillNames() {
     try {
@@ -306,6 +309,9 @@
         claude_token_id: accountID,
         system_prompt: firstSkill.prompt_override || firstSkill.org_override_body || '',
         stat_sheet: statSheet,
+        // #725 — Graphify code-graph plugin. Default ON (build-on-spawn);
+        // operator opts out per launch via the Plugins toggle below.
+        disable_graphify: !graphifyEnabled,
       };
       const r = await fetch('/api/v1/sessions', {
         method: 'POST',
@@ -522,6 +528,12 @@
     <label class="recipe">
       <input type="checkbox" bind:checked={saveAsRecipe} />
       Save this team as a recipe
+    </label>
+
+    <!-- #725 — Plugins: Graphify code-graph (default on; opt out per launch) -->
+    <label class="recipe" title="Builds a per-agent code knowledge graph on spawn (tree-sitter, no LLM). Queryable via chepherd.graph_explain / graph_path. Uncheck to skip.">
+      <input type="checkbox" bind:checked={graphifyEnabled} />
+      Graphify code-graph plugin <span class="plugin-hint">— built on spawn, queryable by the agent</span>
     </label>
   {/if}
 
