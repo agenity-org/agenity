@@ -87,7 +87,7 @@ func TestV094Walk_F2_DataChannel_BeatsHTTPBaseline(t *testing.T) {
 	openB := make(chan struct{}, 1)
 	a.OnOpen(func() { openA <- struct{}{} })
 	b.OnOpen(func() { openB <- struct{}{} })
-	timeout := time.After(15 * time.Second)
+	timeout := time.After(walkTimeout(15 * time.Second))
 	for ok := 0; ok < 2; {
 		select {
 		case <-openA:
@@ -109,7 +109,7 @@ func TestV094Walk_F2_DataChannel_BeatsHTTPBaseline(t *testing.T) {
 	dcTimes := make([]time.Duration, 0, trials)
 	httpTimes := make([]time.Duration, 0, trials)
 	for i := 0; i < trials; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), walkTimeout(5*time.Second))
 		_, elapsed, err := client.MeasuredSendRPC(ctx, req)
 		cancel()
 		if err != nil {
