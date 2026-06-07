@@ -4,12 +4,11 @@
 // the dashboard listener stays plain TLS (browsers can't present
 // client certs).
 //
-// The handler is the SAME runtimehttp.Server mux the dashboard
-// uses — every D3 / D1 / T2 / A4 endpoint is reachable to mTLS-
-// verified peers + the existing application-layer auth (D3 grants,
-// A4 extended-card auth gate) still applies orthogonally. mTLS at
-// the listener is the FIRST gate; AuthMiddleware + GrantCheck are
-// the SECOND.
+// The handler is Server.FederationHandler() — a scoped mux that
+// exposes ONLY /api/v1/federation/jwt, /api/v1/jwks.json, and
+// /healthz without authMiddleware. mTLS cert pinning at the TLS
+// handshake is the auth layer; the dashboard Handler() (with
+// authMiddleware) is NOT used here.
 //
 // Refs #527 #487 V0.9.2-ARCHITECTURE.md §15.1 §22.
 package cmd
@@ -26,9 +25,9 @@ import (
 )
 
 // startFederationListener binds the federation-facing TLS listener
-// on addr + serves the same handler as the dashboard. Returns the
-// actual bound address (so callers using addr ":0" can discover
-// the kernel-assigned port) + the *http.Server for shutdown.
+// on addr + serves FederationHandler() (scoped mux, no authMiddleware).
+// Returns the actual bound address (so callers using addr ":0" can
+// discover the kernel-assigned port) + the *http.Server for shutdown.
 func startFederationListener(addr string, rs *runtimehttp.Server) (string, *http.Server, error) {
 	if rs.FederationMTLS == nil {
 		return "", nil, fmt.Errorf("startFederationListener: no MTLSConfig (set --federation-mtls=true first)")
@@ -39,8 +38,11 @@ func startFederationListener(addr string, rs *runtimehttp.Server) (string, *http
 	}
 	tlsCfg := federation.BuildServerTLSConfig(rs.FederationMTLS)
 	tlsLn := tls.NewListener(tcpLn, tlsCfg)
+	// #562 — use FederationHandler() (no authMiddleware) instead of
+	// Handler() (authMiddleware-wrapped). The hub has no daemon Bearer
+	// token; mTLS certificate pinning is the auth layer here.
 	srv := &http.Server{
-		Handler:           rs.Handler(),
+		Handler:           rs.FederationHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
