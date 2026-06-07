@@ -54,13 +54,16 @@ type SessionInfo struct {
 	// at /workspace inside the agent container. Both stay constant
 	// across resume / handoff (#173 / #STAGE-3); the live session ID
 	// (above) rotates per attach.
-	AgentID   string    `json:"agent_id,omitempty"`
-	PVCHandle string    `json:"pvc_handle,omitempty"`
-	Team      string    `json:"team"` // team membership — workers in same team @-reach freely
-	Role      Role      `json:"role"` // worker | shepherd
-	Cwd       string    `json:"cwd"`  // working directory the agent was spawned in
-	CreatedAt time.Time `json:"created_at"`
-	Paused    bool      `json:"paused"`
+	AgentID   string `json:"agent_id,omitempty"`
+	PVCHandle string `json:"pvc_handle,omitempty"`
+	Team      string `json:"team"` // team membership — workers in same team @-reach freely
+	Role      Role   `json:"role"` // worker | shepherd
+	Cwd       string `json:"cwd"`  // working directory the agent was spawned in
+	// GraphifyDisabled opts the session out of the #725 code-graph plugin
+	// (carried from SpawnSpec.DisableGraphify so the spawn hook can check it).
+	GraphifyDisabled bool      `json:"graphify_disabled,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	Paused           bool      `json:"paused"`
 
 	// #694 — operator-set identity icon (emoji) shown across the
 	// dashboard (rail row, terminal tab, transcript chip, inspector
@@ -914,6 +917,11 @@ type SpawnSpec struct {
 	// ~/.claude/.credentials.json when none exists in the vault. Lets
 	// operators run agents under different Claude accounts. (R5, R4.)
 	ClaudeTokenID string
+
+	// DisableGraphify opts this session out of the Graphify code-graph
+	// plugin (#725). Default false → graphify builds on spawn (default-on);
+	// the provisioning Plugins step sets this true when the operator opts out.
+	DisableGraphify bool
 }
 
 // Spawn creates a new session, registers it, persists metadata, and starts
@@ -1139,6 +1147,7 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 		Team:             spec.Team,
 		Role:             spec.Role,
 		Cwd:              spec.Cwd,
+		GraphifyDisabled: spec.DisableGraphify,
 		CreatedAt:        time.Now().UTC(),
 		PID:              s.PID(),
 		SystemPrompt:     spec.SystemPrompt,
@@ -3191,7 +3200,6 @@ const claudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 
 var claudeOAuthTokenEndpointOverride string
-
 
 // claudeCredsExpiresAt extracts the expiresAt epoch-ms from a
 // credentials.json payload. Returns 0 on any parse failure (caller
