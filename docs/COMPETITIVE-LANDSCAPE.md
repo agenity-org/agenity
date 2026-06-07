@@ -43,7 +43,8 @@ system functionally do,"* not *"how production-ready or popular is it."*
 | **Cursor Cloud Agents** | 10 | 80 | 10 | 20 | 10 | 45 | 10 | 35 | 70 | 80 | 60 | 85 | 20 | **41** |
 | **claude-flow / ruflo** | 55 | 25 | 15 | 10 | 25 | 35 | 30 | 40 | 80 | 35 | 80 | 50 | 50 | **41** |
 | **Claude Code** (subagents + Dynamic Workflows) | 25 | 20 | 5 | 10 | 15 | 60 | 20 | 30 | 95 | 50 | 85 | 85 | 5 | **39** |
-| **Worktree orchestrators** (Conductor / claude-squad / Vibe Kanban / uzi / Sculptor) | 5 | 15 | 5 | 5 | 10 | 30 | 5 | 10 | 50 | 60 | 60 | 80 | 85 | **32** |
+| **Conductor** (Melty Labs — Mac app) | 5 | 10 | 5 | 5 | 10 | 25 | 5 | 10 | 50 | 45 | 60 | 90 | 70 | **34** |
+| **Other worktree orchestrators** (claude-squad / Vibe Kanban / uzi / Sculptor) | 5 | 15 | 5 | 5 | 10 | 30 | 5 | 10 | 50 | 60 | 60 | 80 | 85 | **32** |
 
 `FUNC` = holistic functional breadth across all 13 capabilities (not a flat average — rewards genuine coverage, penalizes gaps).
 
