@@ -477,16 +477,58 @@
       ],
     };
   }
-  // Right-click an AGENT row (in any Sessions pane) → Agent settings (#11).
+  // Right-click an AGENT row (in any Sessions pane) → operator LIFECYCLE
+  // actions + settings (Pause/Resume, Restart, Stop, Agent settings). Mirrors
+  // the inline pause/stop pattern in WsLeaf (same endpoints) so the right-click
+  // menu and the row buttons act identically.
+  let agentBusy = $state('');          // name currently in flight (any lifecycle verb)
+  let agentPendingStop = $state('');   // inline two-click confirm for destructive stop
+
+  async function agentLifecycle(name, kind, paused) {
+    if (agentBusy === name) return;
+    agentBusy = name;
+    let url, method = 'POST', body = null;
+    if (kind === 'pause') { url = `${API}/sessions/${name}/pause`; body = JSON.stringify({ paused }); }
+    else if (kind === 'restart') { url = `${API}/sessions/${name}/restart`; }
+    else if (kind === 'stop') { url = `${API}/sessions/${name}`; method = 'DELETE'; }
+    else { agentBusy = ''; return; }
+    try {
+      await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body });
+      flash(kind === 'pause' ? (paused ? `Paused ${name}` : `Resumed ${name}`) : kind === 'restart' ? `Restarting ${name}` : `Stopped ${name}`);
+    } catch {}
+    agentBusy = '';
+    refresh();
+  }
+
   function openAgentMenu(name, x, y) {
     closeAllMenus();
     const s = sessions.find((x2) => x2.name === name);
+    const paused = !!s?.paused;
+    const stopConfirming = agentPendingStop === name;
     ctxMenu = {
       x, y,
       items: [
+        paused
+          ? { label: 'Resume', disabled: !s || agentBusy === name, onpick: () => agentLifecycle(name, 'pause', false) }
+          : { label: 'Pause', disabled: !s || agentBusy === name, onpick: () => agentLifecycle(name, 'pause', true) },
+        { label: 'Restart', disabled: !s || agentBusy === name, onpick: () => agentLifecycle(name, 'restart') },
+        {
+          label: stopConfirming ? 'Click again to stop' : 'Stop',
+          danger: true,
+          disabled: !s || agentBusy === name,
+          keepOpen: !stopConfirming,   // first click re-opens the menu to confirm
+          onpick: () => {
+            if (!stopConfirming) {
+              agentPendingStop = name;
+              setTimeout(() => { if (agentPendingStop === name) { agentPendingStop = ''; if (ctxMenu) ctxMenu = null; } }, 4000);
+              openAgentMenu(name, x, y);   // reopen with the confirm label
+              return;
+            }
+            agentPendingStop = '';
+            agentLifecycle(name, 'stop');
+          },
+        },
         { label: 'Agent settings', onpick: () => openAgentSettings(name) },
-        { label: 'Open in new pane', onpick: () => openAgentInNewPane(name) },
-        { label: 'Focus terminal', disabled: !s, onpick: () => selectAgent(name) },
       ],
     };
   }
@@ -500,7 +542,13 @@
       ],
     };
   }
-  function pickCtx(item) { if (item.disabled) return; ctxMenu = null; item.onpick(); }
+  function pickCtx(item) {
+    if (item.disabled) return;
+    // Most items dismiss the menu; a `keepOpen` item (e.g. the first click of
+    // the two-click Stop confirm) handles re-rendering the menu itself.
+    if (!item.keepOpen) ctxMenu = null;
+    item.onpick();
+  }
   function closeAllMenus() { userMenuOpen = false; overflowOpen = false; ctxMenu = null; }
 
   // ---------------- keyboard (#switch + #6) ----------------

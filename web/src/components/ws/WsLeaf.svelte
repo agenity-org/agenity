@@ -60,16 +60,50 @@
 
   let pickerOpen = $state(false);
   let widgetMenuOpen = $state(false);
+  // Fixed-popover coordinates for whichever picker is open. Both menus are
+  // rendered position:fixed at the document level so they ESCAPE the .leaf /
+  // .head-left `overflow:hidden` (which is required for split-tree panes but
+  // was CLIPPING the old position:absolute dropdowns → operator-reported
+  // "panes drop down list is still not visible"). On open we capture the
+  // trigger button's getBoundingClientRect() and clamp to the viewport.
+  let widgetMenuPos = $state({ x: 0, y: 0 });
+  let pickerPos = $state({ x: 0, y: 0 });
+  const MENU_W = 256;   // ~16rem agent-menu; widget menu is narrower but clamp by the wider
+
+  function popoverPos(btn) {
+    const r = btn.getBoundingClientRect();
+    const vw = (typeof window !== 'undefined' ? window.innerWidth : 1280);
+    const vh = (typeof window !== 'undefined' ? window.innerHeight : 800);
+    let x = r.left;
+    let y = r.bottom + 4;
+    if (x + MENU_W > vw - 8) x = Math.max(8, vw - MENU_W - 8);     // clamp right edge
+    if (y > vh - 80) y = Math.max(8, r.top - 4 - 240);             // flip above if no room below
+    return { x, y };
+  }
+  function toggleWidgetMenu(e) {
+    e.stopPropagation();
+    pickerOpen = false;
+    if (!widgetMenuOpen) widgetMenuPos = popoverPos(e.currentTarget);
+    widgetMenuOpen = !widgetMenuOpen;
+  }
+  function togglePicker(e) {
+    e.stopPropagation();
+    widgetMenuOpen = false;
+    if (!pickerOpen) pickerPos = popoverPos(e.currentTarget);
+    pickerOpen = !pickerOpen;
+  }
 
   // Dismiss the content-picker + agent-picker on outside-click or ESC. The
-  // menus live inside .wbtn-wrap / .picker-wrap; a click anywhere outside
-  // those (or an Escape keypress) closes whichever is open. Listeners are
-  // window-level + cheap; they early-return when nothing is open.
+  // menus are now fixed popovers carrying a `.ws-leaf-popover` marker; a click
+  // anywhere outside the trigger wraps OR the popover (or an Escape keypress)
+  // closes whichever is open. A window scroll/resize closes them too — the
+  // captured coords would otherwise go stale. Listeners are window-level +
+  // cheap; they early-return when nothing is open.
   function closePickers() { pickerOpen = false; widgetMenuOpen = false; }
   function onDocPointerDown(e) {
     if (!pickerOpen && !widgetMenuOpen) return;
     const el = e.target;
-    if (el && el.closest && el.closest('.wbtn-wrap, .picker-wrap')) return;
+    if (el && el.closest && el.closest('.wbtn-wrap, .picker-wrap, .ws-leaf-popover')) return;
     closePickers();
   }
   function onDocKeyDown(e) {
@@ -78,12 +112,17 @@
       closePickers();
     }
   }
+  function onViewportChange() { if (pickerOpen || widgetMenuOpen) closePickers(); }
   if (typeof window !== 'undefined') {
     window.addEventListener('pointerdown', onDocPointerDown, true);
     window.addEventListener('keydown', onDocKeyDown, true);
+    window.addEventListener('scroll', onViewportChange, true);   // capture: catches nested scrollers
+    window.addEventListener('resize', onViewportChange);
     onDestroy(() => {
       window.removeEventListener('pointerdown', onDocPointerDown, true);
       window.removeEventListener('keydown', onDocKeyDown, true);
+      window.removeEventListener('scroll', onViewportChange, true);
+      window.removeEventListener('resize', onViewportChange);
     });
   }
 
@@ -187,45 +226,22 @@
   <header class="leaf-head">
     <div class="head-left">
       <span class="wbtn-wrap">
-        <button class="wbtn" title="Change pane type" onclick={(e) => { e.stopPropagation(); widgetMenuOpen = !widgetMenuOpen; pickerOpen = false; }}>
+        <button class="wbtn" title="Change pane type" onclick={toggleWidgetMenu}>
           <span class="wglyph">{cur.glyph}</span>
           <span class="wlabel">{cur.label}</span>
           <span class="caret">⌄</span>
         </button>
-        {#if widgetMenuOpen}
-          <div class="menu" role="menu">
-            {#each PANE_TYPES as w}
-              <button class="menu-item" class:active={w.id === node.widget} onclick={(e) => { e.stopPropagation(); chooseWidget(w.id); }}>
-                <span class="wglyph">{w.glyph}</span>{w.label}
-              </button>
-            {/each}
-          </div>
-        {/if}
       </span>
 
       {#if node.widget === 'terminal'}
         <span class="picker-wrap">
-          <button class="agent-pill" title="Choose which agent this terminal shows" onclick={(e) => { e.stopPropagation(); pickerOpen = !pickerOpen; widgetMenuOpen = false; }}>
+          <button class="agent-pill" title="Choose which agent this terminal shows" onclick={togglePicker}>
             <span class="dot" style={`background:${id.color}`}></span>
             <span class="ic" style={`color:${id.color}`}>{id.icon}</span>
             <span class="aname">{boundName || 'pick agent'}</span>
             {#if boundSession}<span class="status {statusLabel(boundSession)}">{statusLabel(boundSession)}</span>{/if}
             <span class="caret">⌄</span>
           </button>
-          {#if pickerOpen}
-            <div class="menu agent-menu" role="menu">
-              {#if agentOptions.length === 0}<div class="menu-empty">no sessions yet</div>{/if}
-              {#each agentOptions as s}
-                {@const sid = agentIdentity(s)}
-                <button class="menu-item" class:active={s.name === boundName} onclick={(e) => { e.stopPropagation(); choose(s.name); }}>
-                  <span class="ic" style={`color:${sid.color}`}>{sid.icon}</span>
-                  <span class="mname">{s.name}</span>
-                  <span class="mrole">{s.role || ''}</span>
-                  <span class="status {statusLabel(s)}">{statusLabel(s)}</span>
-                </button>
-              {/each}
-            </div>
-          {/if}
         </span>
       {/if}
     </div>
@@ -372,6 +388,35 @@
   </div>
 </div>
 
+<!-- Picker popovers rendered OUTSIDE .leaf as position:fixed so they escape
+     the .leaf / .head-left `overflow:hidden` that was clipping the old
+     position:absolute dropdowns. Coords captured from the trigger rect on
+     open + clamped to the viewport; closed on outside-click / ESC / scroll /
+     resize via the window listeners above. -->
+{#if widgetMenuOpen}
+  <div class="menu ws-leaf-popover" role="menu" style={`left:${widgetMenuPos.x}px; top:${widgetMenuPos.y}px`}>
+    {#each PANE_TYPES as w}
+      <button class="menu-item" class:active={w.id === node.widget} onclick={(e) => { e.stopPropagation(); chooseWidget(w.id); }}>
+        <span class="wglyph">{w.glyph}</span>{w.label}
+      </button>
+    {/each}
+  </div>
+{/if}
+{#if pickerOpen}
+  <div class="menu agent-menu ws-leaf-popover" role="menu" style={`left:${pickerPos.x}px; top:${pickerPos.y}px`}>
+    {#if agentOptions.length === 0}<div class="menu-empty">no sessions yet</div>{/if}
+    {#each agentOptions as s}
+      {@const sid = agentIdentity(s)}
+      <button class="menu-item" class:active={s.name === boundName} onclick={(e) => { e.stopPropagation(); choose(s.name); }}>
+        <span class="ic" style={`color:${sid.color}`}>{sid.icon}</span>
+        <span class="mname">{s.name}</span>
+        <span class="mrole">{s.role || ''}</span>
+        <span class="status {statusLabel(s)}">{statusLabel(s)}</span>
+      </button>
+    {/each}
+  </div>
+{/if}
+
 <style>
   .leaf { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; background: var(--calm-surface); border: 1px solid var(--calm-border); border-radius: 6px; overflow: hidden; box-shadow: var(--calm-shadow-sm); transition: border-color 0.18s ease, box-shadow 0.18s ease; }
   .leaf.is-focused { border-color: color-mix(in srgb, var(--calm-accent) 55%, var(--calm-border)); box-shadow: var(--calm-shadow-focus); }
@@ -399,8 +444,11 @@
   .ctl:hover { background: var(--calm-chip-hover); color: var(--calm-fg); }
   .ctl-close:hover { color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 14%, transparent); }
 
-  .menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 12rem; background: var(--calm-surface); border: 1px solid var(--calm-border-strong); border-radius: 6px; padding: 0.3rem; box-shadow: var(--calm-shadow-lg); display: flex; flex-direction: column; gap: 0.1rem; max-height: 60vh; overflow: auto; }
-  .agent-menu { min-width: 16rem; }
+  /* Fixed-positioned popover (rendered outside .leaf to escape overflow:hidden).
+     left/top come from the inline style set on open; z-index sits above the
+     split-tree but below the root ctx-menu (1300). */
+  .menu { position: fixed; z-index: 200; min-width: 12rem; max-width: 16rem; background: var(--calm-surface); border: 1px solid var(--calm-border-strong); border-radius: 6px; padding: 0.3rem; box-shadow: var(--calm-shadow-lg); display: flex; flex-direction: column; gap: 0.1rem; max-height: 60vh; overflow: auto; }
+  .agent-menu { min-width: 16rem; max-width: 20rem; }
   .menu-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.55rem; background: transparent; border: 0; border-radius: 8px; color: var(--calm-fg); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer; width: 100%; }
   .menu-item:hover { background: var(--calm-chip-hover); }
   .menu-item.active { background: color-mix(in srgb, var(--calm-accent) 16%, transparent); }
