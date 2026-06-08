@@ -27,27 +27,47 @@ export const IDENTITY_PALETTE = [
   '#9a9a9a', // grey
 ];
 
-// Default icon by role — lead ♛ · architect △ · reviewer ⚖ · worker ⚒ ·
-// shepherd ✻ · qa ◎ · external/hub ⇄ (per the #690 spec).
-const ROLE_ICONS = {
-  'tech-lead': '♛',
-  'scrum-master': '♛',
-  'orchestrator': '♛',
-  'product-owner': '♛',
-  'architect': '△',
-  'code-reviewer': '⚖',
-  'reviewer': '⚖',
-  'worker': '⚒',
-  'generalist': '⚒',
-  'full-stack-developer': '⚒',
-  'frontend-developer': '⚒',
-  'backend-developer': '⚒',
-  'devops-sre': '⚒',
-  'security-engineer': '⚖',
-  'shepherd': '✻',
-  'qa': '◎',
-  'qa-engineer': '◎',
+// Icon by SPECIALTY (the agent's job) — each distinct specialty gets a
+// distinct, RELEVANT glyph. Keyed in priority: role_id → agent-type →
+// name-keyword → team-role. Sessions are almost all role:'worker' with the
+// real job in role_id / the descriptive name, so keying on `role` alone
+// collapsed everyone to ⚒ — the bug the operator flagged.
+const SPECIALTY_ICONS = {
+  'tech-lead': '♛', lead: '♛', orchestrator: '⎈', 'scrum-master': '⚑',
+  'product-owner': '◈', architect: '△',
+  'code-reviewer': '⚖', reviewer: '⚖',
+  'frontend-developer': '❖', frontend: '❖',
+  'backend-developer': '⚙', backend: '⚙',
+  'full-stack-developer': '⬢', 'full-stack': '⬢', fullstack: '⬢',
+  'devops-sre': '∞', devops: '∞', sre: '∞',
+  'security-engineer': '⚿', security: '⚿',
+  'qa-engineer': '◎', qa: '◎',
+  'data-engineer': '⛁', data: '⛁', 'ml-engineer': '⊛', ml: '⊛',
+  'technical-writer': '✎', writer: '✎',
+  designer: '◐', shepherd: '✻',
+  generalist: '⚒', worker: '⚒', implementer: '⚒',
 };
+
+// Name-keyword fallback (ordered; first match wins) — for descriptive names
+// like "code-reviewer-1" / "full-stack" / "devops-2" when role_id is absent.
+const NAME_ICON_RULES = [
+  [/lead|orchestr/, '♛'], [/scrum/, '⚑'], [/product|owner/, '◈'],
+  [/architect|\barch\b/, '△'], [/review|critic/, '⚖'],
+  [/full.?stack/, '⬢'], [/front|\bfe\b|\bui\b/, '❖'], [/back|\bbe\b|server/, '⚙'],
+  [/devops|\bsre\b|infra|\bops\b/, '∞'], [/secur|\bsec\b/, '⚿'],
+  [/\bqa\b|test/, '◎'], [/\bml\b|model|neural/, '⊛'], [/data|etl/, '⛁'],
+  [/writer|docs|scribe/, '✎'], [/design/, '◐'], [/shepherd|watch|prophet/, '✻'],
+  [/implement|build|\bdev\b|worker|coder/, '⚒'],
+];
+
+function iconFor(name, role, roleId, agentType) {
+  const k = (s) => SPECIALTY_ICONS[String(s || '').toLowerCase()];
+  const direct = k(roleId) || k(agentType);
+  if (direct) return direct;
+  const n = String(name || '').toLowerCase();
+  for (const [re, glyph] of NAME_ICON_RULES) if (re.test(n)) return glyph;
+  return k(role) || '●';
+}
 
 // #709.7 — roster-ordered color assignment. Hashing collides in small
 // teams (~30% for 3 agents over 8 buckets), breaking the operator's
@@ -89,7 +109,9 @@ export function agentIdentity(agentOrName, role = '') {
   const name = isObj ? (agentOrName.name || '') : (agentOrName || '');
   const r = String((isObj ? agentOrName.role : role) || '').toLowerCase();
   const external = isObj && (agentOrName.agent === 'external-a2a' || agentOrName.external);
+  const roleId = isObj ? (agentOrName.role_id || '') : '';
+  const agentType = isObj ? (agentOrName.agent || '') : '';
   const override = isObj ? (agentOrName.icon || '') : '';
-  const icon = override || (external ? '⇄' : (ROLE_ICONS[r] || '●'));
+  const icon = override || (external ? '⇄' : iconFor(name, r, roleId, agentType));
   return { name, color: agentColor(name), icon };
 }

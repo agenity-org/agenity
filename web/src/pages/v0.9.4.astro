@@ -46,12 +46,13 @@
 // redirect to /v0.9.4/ for one release window. That redirect
 // lives in middleware/server config — out of scope for this
 // route file.
-// #728 — calm is now the default dashboard (operator-picked UX revamp,
-// replacing the rejected #709 fixed-shell). Mounts the calm root (its own
-// login gate + fetch-auth wrapper), mirroring /ux-calm/. The legacy v09
-// AuthGate tree stays reachable at /v0.9.3/; the other exploration variants
-// remain at /ux-mission|studio|mux|board/ until the operator purges them.
-import Dashboardcalm from '../components/calm/Dashboardcalm.svelte';
+// #732 — WORKSPACES is now the default dashboard (operator-picked over calm:
+// named virtual-desktops, Ctrl+1..9 switching, composable resizable panes,
+// right-click agent/team → settings). Mounts the ws root (its own login gate
+// + fetch-auth wrapper), mirroring /ux-ws/. ws reuses calm's components
+// (CalmRail/CalmInspector/CalmPane/CalmLeaf), so calm/ stays in the tree;
+// /v0.9.3/ keeps the legacy v09 AuthGate tree.
+import Dashboardws from '../components/ws/Dashboardws.svelte';
 import '../styles/global.css';
 ---
 <!DOCTYPE html>
@@ -67,6 +68,6 @@ import '../styles/global.css';
     </style>
   </head>
   <body>
-    <Dashboardcalm client:load version="v0.9.4" />
+    <Dashboardws client:load version="v0.9.4" />
   </body>
 </html>
