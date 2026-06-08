@@ -154,6 +154,11 @@
         fetch(`${API}/memberships`).then((r) => r.json()),
         fetch(`${API}/events?limit=80`).then((r) => r.json()),
       ]);
+      // A successful poll means the daemon + token are healthy again, so let a
+      // previously-capped SSE reconnect (transient-outage self-heal). The
+      // backoff + the needLogin/token guard in startEventStream prevent this
+      // from reintroducing a tight reconnect loop.
+      evRetries = 0;
       sessions = s.sessions || [];
       registerRoster(
         [...sessions]
@@ -190,7 +195,12 @@
 
   let evStream = null;
   let evRetries = 0;
+  let evRetryTimer = null;   // queued bounded-retry setTimeout id (so we can cancel it)
   function startEventStream() {
+    // No-op while signed out: a queued retry must NOT revive the stream after
+    // sign-out/unmount (its `if (evStream) return` guard is null then, so it
+    // would re-open and reflood). needLogin / no-token short-circuits that.
+    if (needLogin || !getToken()) return;
     if (evStream) return;
     const tok = getToken();
     const q = tok ? '?token=' + encodeURIComponent(tok) : '';
@@ -201,10 +211,12 @@
       // BOUNDED backoff: the 2.5s poll already refreshes events, so a
       // misbehaving/expired-token SSE endpoint must NOT infinite-reconnect —
       // that floods the console + hammers the daemon. Cap at 4 tries, then
-      // fall back to polling only.
+      // fall back to polling only. The retry timer id is stored so
+      // stopLiveLoop() can clearTimeout it (else a queued retry fires after
+      // sign-out and re-opens the stream, reviving the flood the cap kills).
       evStream.onerror = () => {
         evStream?.close(); evStream = null;
-        if (evRetries < 4) { evRetries += 1; setTimeout(startEventStream, Math.min(30000, 3000 * evRetries)); }
+        if (evRetries < 4) { evRetries += 1; evRetryTimer = setTimeout(startEventStream, Math.min(30000, 3000 * evRetries)); }
       };
     } catch {}
   }
@@ -226,6 +238,7 @@
   function stopLiveLoop() {
     if (pollIv) { clearInterval(pollIv); pollIv = null; }
     if (on401) { window.removeEventListener('chepherd-401', on401); on401 = null; }
+    if (evRetryTimer) { clearTimeout(evRetryTimer); evRetryTimer = null; }   // kill any queued SSE retry
     try { evStream?.close(); } catch {}
     evStream = null;
   }
@@ -448,6 +461,7 @@
   // ---------------- context menus (#6) ----------------
   function openWsMenu(w, x, y) {
     closeAllMenus();
+    clearPendingStop();   // a new menu cancels any stale Stop confirm
     const idx = workspaces.findIndex((x2) => x2.id === w.id);
     ctxMenu = {
       x, y,
@@ -462,6 +476,7 @@
   }
   function openPaneMenu(leafId, x, y) {
     closeAllMenus();
+    clearPendingStop();   // a new menu cancels any stale Stop confirm
     setFocusedLeaf(leafId);
     const isMax = maximizedLeafId === leafId;
     const canCollapse = !!T.parentOf(curLayout(), leafId);
@@ -483,6 +498,15 @@
   // menu and the row buttons act identically.
   let agentBusy = $state('');          // name currently in flight (any lifecycle verb)
   let agentPendingStop = $state('');   // inline two-click confirm for destructive stop
+  let agentPendingStopTimer = null;    // the 4s confirm-expiry timer (cancellable)
+
+  // Clear any in-flight Stop confirm + its expiry timer. Called whenever a NEW
+  // context menu opens, so a stale Stop timer from a previous agent can never
+  // blind-null a freshly-opened menu for a DIFFERENT agent.
+  function clearPendingStop() {
+    if (agentPendingStopTimer) { clearTimeout(agentPendingStopTimer); agentPendingStopTimer = null; }
+    agentPendingStop = '';
+  }
 
   async function agentLifecycle(name, kind, paused) {
     if (agentBusy === name) return;
@@ -493,38 +517,63 @@
     else if (kind === 'stop') { url = `${API}/sessions/${name}`; method = 'DELETE'; }
     else { agentBusy = ''; return; }
     try {
-      await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body });
-      flash(kind === 'pause' ? (paused ? `Paused ${name}` : `Resumed ${name}`) : kind === 'restart' ? `Restarting ${name}` : `Stopped ${name}`);
-    } catch {}
+      // Only flash success on a 2xx. A non-PTY external peer or an orphan row
+      // 404s (or 4xx/5xx); flashing "Stopped X" then would be a FALSE success.
+      const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body });
+      if (r.ok) {
+        flash(kind === 'pause' ? (paused ? `Paused ${name}` : `Resumed ${name}`) : kind === 'restart' ? `Restarting ${name}` : `Stopped ${name}`);
+      } else {
+        const verb = kind === 'pause' ? (paused ? 'pause' : 'resume') : kind;
+        flash(`Could not ${verb} ${name} (${r.status})`);
+      }
+    } catch (e) {
+      flash(`Could not ${kind === 'pause' ? (paused ? 'pause' : 'resume') : kind} ${name}`);
+    }
     agentBusy = '';
     refresh();
   }
 
   function openAgentMenu(name, x, y) {
     closeAllMenus();
+    // Opening this menu for a DIFFERENT agent cancels any pending Stop confirm
+    // (and its 4s timer) belonging to the previous agent — so X's stale timer
+    // can never close Y's menu. The re-entrant confirm re-open passes the SAME
+    // name (pending already set), so it preserves it.
+    if (agentPendingStop && agentPendingStop !== name) clearPendingStop();
     const s = sessions.find((x2) => x2.name === name);
     const paused = !!s?.paused;
     const stopConfirming = agentPendingStop === name;
+    // A non-PTY external A2A peer / exited row has no controllable container —
+    // its lifecycle endpoints 404. Disable those verbs so the operator can't
+    // trigger a guaranteed-failing action (Agent settings stays enabled).
+    const noLifecycle = !s || s.exited || s.agent === 'external-a2a' || s.external;
     ctxMenu = {
       x, y,
       items: [
         paused
-          ? { label: 'Resume', disabled: !s || agentBusy === name, onpick: () => agentLifecycle(name, 'pause', false) }
-          : { label: 'Pause', disabled: !s || agentBusy === name, onpick: () => agentLifecycle(name, 'pause', true) },
-        { label: 'Restart', disabled: !s || agentBusy === name, onpick: () => agentLifecycle(name, 'restart') },
+          ? { label: 'Resume', disabled: noLifecycle || agentBusy === name, onpick: () => agentLifecycle(name, 'pause', false) }
+          : { label: 'Pause', disabled: noLifecycle || agentBusy === name, onpick: () => agentLifecycle(name, 'pause', true) },
+        { label: 'Restart', disabled: noLifecycle || agentBusy === name, onpick: () => agentLifecycle(name, 'restart') },
         {
           label: stopConfirming ? 'Click again to stop' : 'Stop',
           danger: true,
-          disabled: !s || agentBusy === name,
+          disabled: noLifecycle || agentBusy === name,
           keepOpen: !stopConfirming,   // first click re-opens the menu to confirm
           onpick: () => {
             if (!stopConfirming) {
+              // Cancel any previous confirm timer before starting this one, then
+              // scope the expiry: only auto-close the menu if THIS agent is
+              // still the pending one (a different menu opening resets it).
+              clearPendingStop();
               agentPendingStop = name;
-              setTimeout(() => { if (agentPendingStop === name) { agentPendingStop = ''; if (ctxMenu) ctxMenu = null; } }, 4000);
+              agentPendingStopTimer = setTimeout(() => {
+                agentPendingStopTimer = null;
+                if (agentPendingStop === name) { agentPendingStop = ''; if (ctxMenu) ctxMenu = null; }
+              }, 4000);
               openAgentMenu(name, x, y);   // reopen with the confirm label
               return;
             }
-            agentPendingStop = '';
+            clearPendingStop();
             agentLifecycle(name, 'stop');
           },
         },
@@ -535,6 +584,7 @@
   // Right-click a TEAM label (in any Sessions pane) → Team settings (#11).
   function openTeamMenu(teamName, x, y) {
     closeAllMenus();
+    clearPendingStop();   // a new menu cancels any stale Stop confirm
     ctxMenu = {
       x, y,
       items: [

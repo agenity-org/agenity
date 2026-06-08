@@ -134,6 +134,11 @@
         fetch(`${API}/memberships`).then((r) => r.json()),
         fetch(`${API}/events?limit=80`).then((r) => r.json()),
       ]);
+      // A successful poll means the daemon + token are healthy again, so let a
+      // previously-capped SSE reconnect (transient-outage self-heal). The
+      // backoff + the needLogin/token guard in startEventStream prevent this
+      // from reintroducing a tight reconnect loop.
+      evRetries = 0;
       sessions = s.sessions || [];
       registerRoster(
         [...sessions]
@@ -159,7 +164,12 @@
 
   let evStream = null;
   let evRetries = 0;
+  let evRetryTimer = null;   // queued bounded-retry setTimeout id (so we can cancel it)
   function startEventStream() {
+    // No-op while signed out: a queued retry must NOT revive the stream after
+    // sign-out/unmount (its `if (evStream) return` guard is null then, so it
+    // would re-open and reflood). needLogin / no-token short-circuits that.
+    if (needLogin || !getToken()) return;
     if (evStream) return;
     const tok = getToken();
     const q = tok ? '?token=' + encodeURIComponent(tok) : '';
@@ -169,10 +179,12 @@
       evStream.onmessage = (e) => { try { events = [...events, JSON.parse(e.data)].slice(-200); } catch {} };
       // BOUNDED backoff: the 2.5s poll already refreshes events, so a
       // misbehaving/expired-token SSE endpoint must NOT infinite-reconnect
-      // (was flooding the console + hammering the daemon). Cap at 4 tries.
+      // (was flooding the console + hammering the daemon). Cap at 4 tries. The
+      // retry timer id is stored so cleanup()/signOut() can clearTimeout it
+      // (else a queued retry fires after sign-out + re-opens the stream).
       evStream.onerror = () => {
         evStream?.close(); evStream = null;
-        if (evRetries < 4) { evRetries += 1; setTimeout(startEventStream, Math.min(30000, 3000 * evRetries)); }
+        if (evRetries < 4) { evRetries += 1; evRetryTimer = setTimeout(startEventStream, Math.min(30000, 3000 * evRetries)); }
       };
     } catch {}
   }
@@ -360,7 +372,9 @@
     return () => {
       clearInterval(iv);
       window.removeEventListener('chepherd-401', on401);
+      if (evRetryTimer) { clearTimeout(evRetryTimer); evRetryTimer = null; }   // kill any queued SSE retry
       evStream?.close();
+      evStream = null;
     };
   });
 
@@ -374,6 +388,7 @@
   function signOut() {
     userMenuOpen = false;
     try { localStorage.removeItem('chepherd-token'); } catch {}
+    if (evRetryTimer) { clearTimeout(evRetryTimer); evRetryTimer = null; }   // kill any queued SSE retry
     try { evStream?.close(); } catch {}
     evStream = null;
     needLogin = true;

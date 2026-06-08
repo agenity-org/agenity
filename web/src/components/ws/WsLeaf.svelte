@@ -103,7 +103,13 @@
   function onDocPointerDown(e) {
     if (!pickerOpen && !widgetMenuOpen) return;
     const el = e.target;
-    if (el && el.closest && el.closest('.wbtn-wrap, .picker-wrap, .ws-leaf-popover')) return;
+    // Scope the "inside" test to THIS leaf instance. The trigger wraps + the
+    // fixed popovers all carry data-leaf-id={node.id}; a click only counts as
+    // "inside" when its nearest tagged ancestor belongs to THIS leaf. Opening
+    // pane B's picker therefore closes pane A's (the click is inside B's
+    // [data-leaf-id], not A's), so only one picker is ever open across panes.
+    const inside = el && el.closest ? el.closest('[data-leaf-id]') : null;
+    if (inside && inside.getAttribute('data-leaf-id') === node.id) return;
     closePickers();
   }
   function onDocKeyDown(e) {
@@ -177,6 +183,12 @@
   let sQuery = $state('');
   let busy = $state({});          // name -> 'pause'|'stop' while in flight
   let pendingStop = $state('');   // inline-confirm for destructive stop
+  let actErr = $state({});        // name -> short error string (transient) on a failed action
+
+  // A non-PTY external A2A peer (and any exited row) has no controllable
+  // container, so its lifecycle endpoints 404. Hide the buttons for those so
+  // the operator never clicks an action that silently can't apply.
+  function controllable(s) { return !!s && !s.exited && !(s.agent === 'external-a2a' || s.external); }
 
   // Build team → [session] groups (same shape as the former roster).
   let sessionGroups = $derived.by(() => {
@@ -214,11 +226,18 @@
       return;
     }
     busy = { ...busy, [name]: kind };
+    const { [name]: _e, ...restErr } = actErr; actErr = restErr;   // clear any prior error
     let url, method = 'POST', body = null;
     if (kind === 'pause') { url = `${API}/sessions/${name}/pause`; body = JSON.stringify({ paused }); }
     else if (kind === 'stop') { url = `${API}/sessions/${name}`; method = 'DELETE'; pendingStop = ''; }
-    try { await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body }); } catch {}
+    try {
+      // Surface failure instead of silently swallowing it. A non-PTY external
+      // peer / orphan row 404s; the old `catch {}` looked like success.
+      const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body });
+      if (!r.ok) actErr = { ...actErr, [name]: `failed (${r.status})` };
+    } catch { actErr = { ...actErr, [name]: 'failed' }; }
     const { [name]: _, ...rest } = busy; busy = rest;
+    if (actErr[name]) setTimeout(() => { const { [name]: _x, ...r2 } = actErr; actErr = r2; }, 4000);
   }
 </script>
 
@@ -300,8 +319,9 @@
                     <span class="srow-role">{s.role || 'agent'}</span>
                   </span>
                   <span class="srow-dot {st}" title={st}></span>
+                  {#if actErr[s.name]}<span class="srow-err" title={`Action ${actErr[s.name]}`}>{actErr[s.name]}</span>{/if}
                   <span class="srow-acts">
-                    {#if !s.exited}
+                    {#if controllable(s)}
                       {#if s.paused}
                         <button class="srow-act" title="Resume" aria-label={`Resume ${s.name}`} disabled={!!busy[s.name]} onclick={(e) => lifecycle(e, s.name, 'pause', false)}>{busy[s.name] === 'pause' ? '…' : '▶'}</button>
                       {:else}
@@ -394,7 +414,7 @@
      open + clamped to the viewport; closed on outside-click / ESC / scroll /
      resize via the window listeners above. -->
 {#if widgetMenuOpen}
-  <div class="menu ws-leaf-popover" role="menu" style={`left:${widgetMenuPos.x}px; top:${widgetMenuPos.y}px`}>
+  <div class="menu ws-leaf-popover" data-leaf-id={node.id} role="menu" style={`left:${widgetMenuPos.x}px; top:${widgetMenuPos.y}px`}>
     {#each PANE_TYPES as w}
       <button class="menu-item" class:active={w.id === node.widget} onclick={(e) => { e.stopPropagation(); chooseWidget(w.id); }}>
         <span class="wglyph">{w.glyph}</span>{w.label}
@@ -403,7 +423,7 @@
   </div>
 {/if}
 {#if pickerOpen}
-  <div class="menu agent-menu ws-leaf-popover" role="menu" style={`left:${pickerPos.x}px; top:${pickerPos.y}px`}>
+  <div class="menu agent-menu ws-leaf-popover" data-leaf-id={node.id} role="menu" style={`left:${pickerPos.x}px; top:${pickerPos.y}px`}>
     {#if agentOptions.length === 0}<div class="menu-empty">no sessions yet</div>{/if}
     {#each agentOptions as s}
       {@const sid = agentIdentity(s)}
@@ -493,6 +513,7 @@
   .srow-act:disabled { cursor: progress; opacity: 0.5; }
   .srow-act.danger:hover:not(:disabled) { color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 14%, transparent); }
   .srow-act.confirm { opacity: 1; color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 16%, transparent); font-size: 0.68rem; font-weight: 700; }
+  .srow-err { font-size: 0.62rem; font-weight: 700; color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 14%, transparent); padding: 0.04rem 0.34rem; border-radius: 6px; white-space: nowrap; flex: 0 0 auto; }
 
   .feed { height: 100%; overflow: auto; padding: 0.7rem; display: flex; flex-direction: column; gap: 0.4rem; color: var(--calm-fg); }
   .feed-lede { color: var(--calm-fg-muted); font-size: 0.78rem; margin-bottom: 0.2rem; }
