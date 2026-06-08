@@ -85,6 +85,14 @@ type SessionInfo struct {
 	GitHubURL string `json:"github_url,omitempty"`
 	Branch    string `json:"branch,omitempty"`
 
+	// RepoURL is the LOSSLESS canonical repo URL the session is bound to,
+	// carried from the spawn's clone_url (Stage 2 selection). Stored at
+	// spawn BEFORE the cwd-encoding flattens `/ . :` → `-`, so the
+	// dashboard's Agent Details REPO link can render it exactly instead of
+	// reverse-decoding the lossy cwd. Falls back to the git-context URL when
+	// no clone_url was supplied. Frontend (CalmInspector) prefers this.
+	RepoURL string `json:"repo_url,omitempty"`
+
 	// Exit detection — flipped by the activity sniffer when the PTY EOFs.
 	// Failed exits (non-zero code) stay in List() so the operator can see
 	// what went wrong; clean exits are dismissed quickly.
@@ -901,6 +909,13 @@ type SpawnSpec struct {
 	SystemPrompt string         // optional override for the agent's system prompt
 	StatSheet    AgentStatSheet // optional override for the default per-role stat sheet
 
+	// RepoURL is the lossless clone_url the operator selected in Stage 2
+	// (#651). Carried straight onto SessionInfo.RepoURL so the dashboard
+	// repo link is exact rather than decoded from the cwd-encoded path.
+	// Empty when the spawn has no repo (bare cwd) — Spawn then falls back to
+	// the git-context origin URL.
+	RepoURL string
+
 	// AgentArgs is appended to the agent CLI's default args. Useful for
 	// passing --resume <uuid> or similar.
 	AgentArgs []string
@@ -1159,6 +1174,15 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// makes the right-pane "GitHub" link populate immediately. Branch is
 	// refreshed in List() since it can change mid-session.
 	info.GitHubURL, info.Branch = readGitContext(spec.Cwd)
+	// Store the LOSSLESS repo URL from the spawn's clone_url (#651 Stage 2
+	// selection) BEFORE it's lost to cwd-encoding. Normalize ssh→https +
+	// strip .git via githubFromGitURL so the dashboard link is canonical.
+	// Fall back to the git-context origin URL when no clone_url was passed.
+	if spec.RepoURL != "" {
+		info.RepoURL = githubFromGitURL(spec.RepoURL)
+	} else {
+		info.RepoURL = info.GitHubURL
+	}
 	if spec.Role == RoleShepherd {
 		info.Shepherding = []string{spec.Team}
 	}
@@ -2298,6 +2322,7 @@ func (r *Runtime) Restart(name string) (*SessionInfo, error) {
 		Cwd:          info.Cwd,
 		SystemPrompt: info.SystemPrompt,
 		StatSheet:    info.StatSheet,
+		RepoURL:      info.RepoURL, // preserve the lossless repo URL across restart
 	}
 	r.mu.Unlock()
 	if err := r.Stop(name); err != nil {

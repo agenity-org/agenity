@@ -315,6 +315,16 @@ function parseStored(raw) {
   } catch { return null; }
 }
 
+// sanitizeWorkspaceList takes a raw workspaces array (e.g. a saved-view blob
+// loaded from the server) and returns the same sanitized/migrated shape that
+// loadWorkspaces produces from localStorage — valid layouts, ids backfilled,
+// names defaulted. Returns null when the input isn't a usable list. Shared so
+// server-loaded named views go through the exact same algebra as local ones.
+export function sanitizeWorkspaceList(list) {
+  if (!Array.isArray(list)) return null;
+  return parseStored(JSON.stringify(list));
+}
+
 export function loadWorkspaces() {
   try {
     // Post-migration users: just load v3 (custom or freshly-seeded alike).

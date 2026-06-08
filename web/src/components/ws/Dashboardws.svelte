@@ -118,6 +118,18 @@
   let overflowOpen = $state(false);
   let mounted = $state(false);
 
+  // ---- saved views (server-side, durable named snapshots) ----
+  // The `workspaces` array above is the live working set (auto-persisted to
+  // localStorage). A SAVED VIEW is a named snapshot of that array PUT to the
+  // server (GET/PUT /api/v1/workspaces[/{name}]) so it survives a browser
+  // clear + is reachable cross-device. Loading a view replaces the working
+  // set + re-persists it to localStorage.
+  let viewsMenuOpen = $state(false);   // the "Views" dropdown
+  let savedViews = $state([]);         // [name, …] from GET /api/v1/workspaces
+  let viewsBusy = $state(false);       // a save/load is in flight
+  let savingView = $state(false);      // the inline "name this view" input is showing
+  let saveViewName = $state('');       // bound to that input
+
   // ---- agent / team editors (reused v08, opened from context menus) ----
   let editAgent = $state(null);        // session object | null
   let editTeam = $state(null);         // team object | null
@@ -464,6 +476,78 @@
   }
   function cancelRename() { renamingId = ''; renameVal = ''; }
 
+  // ---------------- saved views (server-side, durable) ----------------
+  // Snapshot the live `workspaces` array (the full set) so the server stores
+  // exactly what loadWorkspaces consumes — same {id,name,layout} shape.
+  function viewSnapshot() {
+    return workspaces.map((w) => ({ id: w.id, name: w.name, layout: w.layout }));
+  }
+  async function loadSavedViewNames() {
+    try {
+      const r = await fetch(`${API}/workspaces`);
+      if (!r.ok) { savedViews = []; return; }
+      const j = await r.json();
+      savedViews = Array.isArray(j.workspaces) ? j.workspaces : [];
+    } catch { savedViews = []; }
+  }
+  function beginSaveView() {
+    // Default the name to the active workspace's, so a one-tap save is sane.
+    saveViewName = (activeWs?.name || `View ${savedViews.length + 1}`);
+    savingView = true;
+  }
+  function cancelSaveView() { savingView = false; saveViewName = ''; }
+  async function commitSaveView() {
+    const name = (saveViewName || '').trim();
+    if (!name) { flash('Name the view first'); return; }
+    viewsBusy = true;
+    try {
+      const r = await fetch(`${API}/workspaces/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(viewSnapshot()),
+      });
+      if (!r.ok) { flash(`Save failed (${r.status})`); return; }
+      flash(`Saved view “${name}”`);
+      savingView = false; saveViewName = '';
+      await loadSavedViewNames();
+    } catch (e) {
+      flash('Save failed');
+    } finally {
+      viewsBusy = false;
+    }
+  }
+  async function loadSavedView(name) {
+    viewsBusy = true;
+    try {
+      const r = await fetch(`${API}/workspaces/${encodeURIComponent(name)}`);
+      if (!r.ok) { flash(`Load failed (${r.status})`); return; }
+      const blob = await r.json();
+      const next = T.sanitizeWorkspaceList(blob);
+      if (!next || !next.length) { flash('View is empty / unreadable'); return; }
+      // Replace the working set, reseed per-workspace focus, persist locally.
+      workspaces = next;
+      const focusSeed = {};
+      for (const w of workspaces) focusSeed[w.id] = T.leaves(w.layout)[0]?.id || '';
+      wsFocus = focusSeed;
+      wsMax = {};
+      activeId = workspaces[0].id;
+      T.saveWorkspaces(viewSnapshot());
+      T.saveActiveId(activeId);
+      viewsMenuOpen = false;
+      flash(`Loaded view “${name}”`);
+    } catch (e) {
+      flash('Load failed');
+    } finally {
+      viewsBusy = false;
+    }
+  }
+  function toggleViewsMenu(e) {
+    e.stopPropagation();
+    closeAllMenus();
+    viewsMenuOpen = !viewsMenuOpen;
+    if (viewsMenuOpen) { savingView = false; saveViewName = ''; loadSavedViewNames(); }
+  }
+
   // ---------------- agent / team editors (reuse v08 modals) ----------------
   function openAgentSettings(name) {
     const s = sessions.find((x) => x.name === name);
@@ -642,7 +726,7 @@
     if (!item.keepOpen) ctxMenu = null;
     item.onpick();
   }
-  function closeAllMenus() { userMenuOpen = false; overflowOpen = false; ctxMenu = null; }
+  function closeAllMenus() { userMenuOpen = false; overflowOpen = false; viewsMenuOpen = false; ctxMenu = null; }
 
   // ---------------- keyboard (#switch + #6) ----------------
   function onKey(e) {
@@ -660,7 +744,8 @@
     if (editTeam) { editTeam = null; return; }
     if (showWizard) { showWizard = false; refresh(); return; }
     if (showSettings) { showSettings = false; return; }
-    if (userMenuOpen || overflowOpen) { closeAllMenus(); return; }
+    if (savingView) { cancelSaveView(); return; }
+    if (userMenuOpen || overflowOpen || viewsMenuOpen) { closeAllMenus(); return; }
     if (renamingId) { cancelRename(); return; }
     if (maximizedLeafId) { setMaxLeaf(''); return; }
   }
@@ -672,6 +757,10 @@
     if (ctxMenu) ctxMenu = null;
     if (userMenuOpen) userMenuOpen = false;
     if (overflowOpen) overflowOpen = false;
+    // Don't auto-close the Views menu while its inline save-name input is
+    // active (clicks inside it stopPropagation, but a focus/blur shouldn't
+    // wipe a half-typed name); only the menu's own controls close it.
+    if (viewsMenuOpen && !savingView) viewsMenuOpen = false;
   }
 
   // ---------------- responsive ----------------
@@ -812,11 +901,35 @@
              #12 no +Pane in header (panes added by splitting + per-pane picker). -->
         {#if tight}
           <div class="overflow-wrap">
-            <button class="icon-btn" onclick={(e) => { e.stopPropagation(); overflowOpen = !overflowOpen; }} title="More" aria-label="More controls">⋯</button>
+            <button class="icon-btn" onclick={(e) => { e.stopPropagation(); overflowOpen = !overflowOpen; if (overflowOpen) { savingView = false; saveViewName = ''; loadSavedViewNames(); } }} title="More" aria-label="More controls">⋯</button>
             {#if overflowOpen}
-              <div class="user-menu" role="menu">
+              <div class="user-menu" role="menu" onclick={(e) => { if (savingView) e.stopPropagation(); }} onkeydown={() => {}} tabindex="-1">
                 <button class="um-item" role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; showWizard = true; }}>✦ Spawn agents</button>
                 <button class="um-item" role="menuitem" onclick={(e) => { e.stopPropagation(); toggleTheme(); }}>{theme === 'dark' ? '☀ Light theme' : '☾ Dark theme'}</button>
+                <div class="um-sep"></div>
+                <div class="um-head">Views</div>
+                {#if savingView}
+                  <div class="view-save-row">
+                    <input
+                      class="view-save-input"
+                      type="text"
+                      placeholder="View name…"
+                      bind:value={saveViewName}
+                      onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitSaveView(); } else if (e.key === 'Escape') { e.preventDefault(); cancelSaveView(); } }}
+                      aria-label="View name"
+                    />
+                    <button class="view-save-go" disabled={viewsBusy} onclick={(e) => { e.stopPropagation(); commitSaveView(); }} title="Save view">Save</button>
+                  </div>
+                {:else}
+                  <button class="um-item" role="menuitem" onclick={(e) => { e.stopPropagation(); loadSavedViewNames(); beginSaveView(); }}>＋ Save view…</button>
+                {/if}
+                {#if savedViews.length === 0}
+                  <div class="views-empty">{viewsBusy ? 'Loading…' : 'No saved views'}</div>
+                {:else}
+                  {#each savedViews as v (v)}
+                    <button class="um-item" role="menuitem" disabled={viewsBusy} onclick={(e) => { e.stopPropagation(); overflowOpen = false; loadSavedView(v); }} title={`Load “${v}”`}>▸ {v}</button>
+                  {/each}
+                {/if}
                 <div class="um-sep"></div>
                 <div class="um-head">Signed in</div>
                 <button class="um-item" role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; showSettings = true; }}>⚙ Settings</button>
@@ -826,6 +939,38 @@
           </div>
         {:else}
           <button class="pill-btn accent" onclick={() => (showWizard = true)} title="Spawn agents">✦ Spawn</button>
+          <div class="views-wrap">
+            <button class="pill-btn" onclick={toggleViewsMenu} title="Save / load named views (durable, cross-device)" aria-haspopup="menu" aria-expanded={viewsMenuOpen}>▦ Views</button>
+            {#if viewsMenuOpen}
+              <div class="user-menu views-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+                <div class="um-head">Save current</div>
+                {#if savingView}
+                  <div class="view-save-row">
+                    <input
+                      class="view-save-input"
+                      type="text"
+                      placeholder="View name…"
+                      bind:value={saveViewName}
+                      onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitSaveView(); } else if (e.key === 'Escape') { e.preventDefault(); cancelSaveView(); } }}
+                      aria-label="View name"
+                    />
+                    <button class="view-save-go" disabled={viewsBusy} onclick={commitSaveView} title="Save view">Save</button>
+                  </div>
+                {:else}
+                  <button class="um-item" role="menuitem" onclick={beginSaveView}>＋ Save view…</button>
+                {/if}
+                <div class="um-sep"></div>
+                <div class="um-head">Saved views</div>
+                {#if savedViews.length === 0}
+                  <div class="views-empty">{viewsBusy ? 'Loading…' : 'No saved views yet'}</div>
+                {:else}
+                  {#each savedViews as v (v)}
+                    <button class="um-item" role="menuitem" disabled={viewsBusy} onclick={() => loadSavedView(v)} title={`Load “${v}”`}>▸ {v}</button>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
+          </div>
           <button class="icon-btn" onclick={toggleTheme} title="Toggle light / dark" aria-label="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
           <div class="divider-y"></div>
           <div class="user-wrap">
@@ -977,8 +1122,17 @@
   .pill-btn.accent:hover { filter: brightness(1.06); }
   .divider-y { width: 1px; height: 20px; background: var(--calm-border); margin: 0 0.15rem; }
 
-  .user-wrap, .overflow-wrap { position: relative; }
+  .user-wrap, .overflow-wrap, .views-wrap { position: relative; }
   .user-menu { top: calc(100% + 8px); right: 0; }
+  .views-menu { min-width: 14rem; max-height: 60vh; overflow-y: auto; }
+  .views-empty { padding: 0.5rem 0.55rem; color: var(--calm-fg-faint); font-size: 0.78rem; }
+  .view-save-row { display: flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.3rem 0.4rem; }
+  .view-save-input { flex: 1; min-width: 0; padding: 0.35rem 0.5rem; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-border); border-radius: 6px; font: inherit; font-size: 0.8rem; }
+  .view-save-input:focus { outline: none; border-color: var(--calm-accent); }
+  .view-save-go { flex: 0 0 auto; padding: 0.35rem 0.6rem; background: var(--calm-accent); color: #06121f; border: 0; border-radius: 6px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
+  .view-save-go:hover:not(:disabled) { filter: brightness(1.06); }
+  .view-save-go:disabled { opacity: 0.5; cursor: progress; }
+  .user-menu .um-item:disabled { opacity: 0.5; cursor: progress; }
   .um-head { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--calm-fg-faint); font-weight: 700; padding: 0.35rem 0.55rem 0.25rem; }
 
   /* ===================== BODY — ONE GENERIC TREE ===================== */
