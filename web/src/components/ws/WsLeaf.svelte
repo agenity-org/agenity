@@ -179,16 +179,7 @@
   });
 
   // ---------------- Sessions pane (replaces the old roster) ----------------
-  const API = '/api/v1';
   let sQuery = $state('');
-  let busy = $state({});          // name -> 'pause'|'stop' while in flight
-  let pendingStop = $state('');   // inline-confirm for destructive stop
-  let actErr = $state({});        // name -> short error string (transient) on a failed action
-
-  // A non-PTY external A2A peer (and any exited row) has no controllable
-  // container, so its lifecycle endpoints 404. Hide the buttons for those so
-  // the operator never clicks an action that silently can't apply.
-  function controllable(s) { return !!s && !s.exited && !(s.agent === 'external-a2a' || s.external); }
 
   // Build team → [session] groups (same shape as the former roster).
   let sessionGroups = $derived.by(() => {
@@ -216,29 +207,6 @@
     return out;
   });
   let liveCount = $derived(sessions.filter((s) => !s.exited && s.live !== false).length);
-
-  async function lifecycle(e, name, kind, paused) {
-    e.stopPropagation();
-    if (busy[name]) return;
-    if (kind === 'stop' && pendingStop !== name) {
-      pendingStop = name;
-      setTimeout(() => { if (pendingStop === name) pendingStop = ''; }, 4000);
-      return;
-    }
-    busy = { ...busy, [name]: kind };
-    const { [name]: _e, ...restErr } = actErr; actErr = restErr;   // clear any prior error
-    let url, method = 'POST', body = null;
-    if (kind === 'pause') { url = `${API}/sessions/${name}/pause`; body = JSON.stringify({ paused }); }
-    else if (kind === 'stop') { url = `${API}/sessions/${name}`; method = 'DELETE'; pendingStop = ''; }
-    try {
-      // Surface failure instead of silently swallowing it. A non-PTY external
-      // peer / orphan row 404s; the old `catch {}` looked like success.
-      const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body });
-      if (!r.ok) actErr = { ...actErr, [name]: `failed (${r.status})` };
-    } catch { actErr = { ...actErr, [name]: 'failed' }; }
-    const { [name]: _, ...rest } = busy; busy = rest;
-    if (actErr[name]) setTimeout(() => { const { [name]: _x, ...r2 } = actErr; actErr = r2; }, 4000);
-  }
 </script>
 
 <div class="leaf {focused ? 'is-focused' : ''}" data-leaf-id={node.id} onmousedown={onfocus} oncontextmenu={(e) => { e.preventDefault(); onctxmenu(e.clientX, e.clientY); }} role="presentation">
@@ -319,16 +287,11 @@
                     <span class="srow-role">{s.role || 'agent'}</span>
                   </span>
                   <span class="srow-dot {st}" title={st}></span>
-                  {#if actErr[s.name]}<span class="srow-err" title={`Action ${actErr[s.name]}`}>{actErr[s.name]}</span>{/if}
+                  <!-- Lifecycle (Pause/Resume + Stop) lives in the right-click
+                       menu + the Agent Details panel; the row stays
+                       click-to-focus + right-click-for-menu with only the
+                       open-in-new-pane affordance here. -->
                   <span class="srow-acts">
-                    {#if controllable(s)}
-                      {#if s.paused}
-                        <button class="srow-act" title="Resume" aria-label={`Resume ${s.name}`} disabled={!!busy[s.name]} onclick={(e) => lifecycle(e, s.name, 'pause', false)}>{busy[s.name] === 'pause' ? '…' : '▶'}</button>
-                      {:else}
-                        <button class="srow-act" title="Pause" aria-label={`Pause ${s.name}`} disabled={!!busy[s.name]} onclick={(e) => lifecycle(e, s.name, 'pause', true)}>{busy[s.name] === 'pause' ? '…' : '⏸'}</button>
-                      {/if}
-                      <button class="srow-act danger {pendingStop === s.name ? 'confirm' : ''}" title={pendingStop === s.name ? 'Click again to stop' : 'Stop'} aria-label={`Stop ${s.name}`} disabled={!!busy[s.name]} onclick={(e) => lifecycle(e, s.name, 'stop')}>{busy[s.name] === 'stop' ? '…' : (pendingStop === s.name ? '✓?' : '■')}</button>
-                    {/if}
                     <button class="srow-act" title="Open in a new pane" aria-label={`Open ${s.name} in a new pane`} onclick={(e) => { e.stopPropagation(); onopenagentnew(s.name); }}>＋</button>
                   </span>
                 </div>
@@ -509,11 +472,7 @@
   .srow-acts { display: inline-flex; align-items: center; gap: 0.1rem; flex: 0 0 auto; }
   .srow-act { width: 22px; height: 22px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px solid transparent; color: var(--calm-fg-muted); border-radius: 6px; cursor: pointer; font-size: 0.8rem; line-height: 1; opacity: 0; transition: opacity 0.13s ease, background 0.13s ease, color 0.13s ease; }
   .srow:hover .srow-act { opacity: 1; }
-  .srow-act:hover:not(:disabled) { background: var(--calm-chip); color: var(--calm-accent); }
-  .srow-act:disabled { cursor: progress; opacity: 0.5; }
-  .srow-act.danger:hover:not(:disabled) { color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 14%, transparent); }
-  .srow-act.confirm { opacity: 1; color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 16%, transparent); font-size: 0.68rem; font-weight: 700; }
-  .srow-err { font-size: 0.62rem; font-weight: 700; color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 14%, transparent); padding: 0.04rem 0.34rem; border-radius: 6px; white-space: nowrap; flex: 0 0 auto; }
+  .srow-act:hover { background: var(--calm-chip); color: var(--calm-accent); }
 
   .feed { height: 100%; overflow: auto; padding: 0.7rem; display: flex; flex-direction: column; gap: 0.4rem; color: var(--calm-fg); }
   .feed-lede { color: var(--calm-fg-muted); font-size: 0.78rem; margin-bottom: 0.2rem; }

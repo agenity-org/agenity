@@ -1477,6 +1477,10 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 			ClaudeTokenID:   req.ClaudeTokenID,
 			Env:             spawnEnv,
 			DisableGraphify: req.DisableGraphify,
+			// #651 — carry the Stage 2 clone_url so SessionInfo stores the
+			// lossless repo URL (dashboard repo link is exact, not decoded
+			// from the cwd-encoded path).
+			RepoURL: req.CloneURL,
 		})
 		if err == nil && req.Team != "" {
 			_, _ = s.rt.JoinTeam(req.Name, req.Team, runtime.MembershipRole(req.Role), "")
@@ -2612,6 +2616,14 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = s.rt.Stop(m.Name)
 		}
+		// #651 — carry the team's Stage 2 clone_url as the lossless repo
+		// URL, but only for members landing in the shared apply-time cwd (a
+		// per-member cwd override points at a different repo, so we let Spawn
+		// fall back to that repo's git-context origin URL).
+		memberRepoURL := ""
+		if memberCwd == cwd {
+			memberRepoURL = req.CloneURL
+		}
 		_, newSess, err := s.rt.Spawn(runtime.SpawnSpec{
 			Name:          m.Name,
 			AgentSlug:     firstNonEmpty(ov.Agent, m.Agent),
@@ -2622,6 +2634,7 @@ func (s *Server) templateApply(w http.ResponseWriter, r *http.Request) {
 			StatSheet:     m.StatSheet,
 			AgentArgs:     agentArgs,
 			ClaudeTokenID: ov.ClaudeTokenID,
+			RepoURL:       memberRepoURL,
 		})
 		res := spawned{Name: m.Name, Role: string(m.Role)}
 		if err != nil {
