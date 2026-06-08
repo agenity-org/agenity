@@ -340,6 +340,16 @@ type Runtime struct {
 	// SessionInfo.{TotalBytes,Bytes5m,IdleSeconds}.
 	activity map[string]*sessionActivity
 
+	// repoURLCache memoizes serve-time RepoURL derivation (#1). Sessions
+	// spawned before SessionInfo.RepoURL existed (or whose spawn didn't
+	// carry a clone_url) have an empty RepoURL; List() derives the canonical
+	// repo URL by reading `git -C <cwd> config remote.origin.url` from the
+	// cloned repo on disk — the LOSSLESS source of truth (cwd-decoding is
+	// irrecoverably ambiguous for dashed owner+repo names). Keyed by cwd so
+	// repeated List() calls don't re-exec git. Guarded by repoURLCacheMu.
+	repoURLCache   map[string]string
+	repoURLCacheMu sync.Mutex
+
 	// v0.6 unified data model — Agent + Team + Membership as first-class objects.
 	// Coexists with v0.5 SessionInfo during the transition; new MCP tools
 	// (create_team / join_team / leave_team / list_teams) operate on these.
@@ -819,6 +829,7 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		info:             make(map[string]*SessionInfo),
 		stateDir:         stateDir,
 		activity:         make(map[string]*sessionActivity),
+		repoURLCache:     make(map[string]string),
 		teams:            make(map[string]*Team),
 		memberships:      make(map[string]*Membership),
 		axisReviews:      make(map[string]map[string]*AxisReview),
@@ -1176,12 +1187,14 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	info.GitHubURL, info.Branch = readGitContext(spec.Cwd)
 	// Store the LOSSLESS repo URL from the spawn's clone_url (#651 Stage 2
 	// selection) BEFORE it's lost to cwd-encoding. Normalize ssh→https +
-	// strip .git via githubFromGitURL so the dashboard link is canonical.
-	// Fall back to the git-context origin URL when no clone_url was passed.
+	// strip .git/trailing-slash via normalizeRepoURL so the dashboard link
+	// is canonical for ANY host (github, gitea, gitlab). When no clone_url
+	// was passed, read the cloned repo's actual remote.origin.url from disk
+	// (#1) — the lossless source of truth, never the ambiguous cwd encoding.
 	if spec.RepoURL != "" {
-		info.RepoURL = githubFromGitURL(spec.RepoURL)
+		info.RepoURL = normalizeRepoURL(spec.RepoURL)
 	} else {
-		info.RepoURL = info.GitHubURL
+		info.RepoURL = r.deriveRepoURL(spec.Cwd)
 	}
 	if spec.Role == RoleShepherd {
 		info.Shepherding = []string{spec.Team}
@@ -1550,6 +1563,15 @@ func (r *Runtime) List() []*SessionInfo {
 		// Refresh branch on every read — cheap and changes mid-session.
 		if c.Cwd != "" {
 			c.Branch = readGitBranch(c.Cwd)
+		}
+		// #1 — derive RepoURL at serve-time for sessions that lack it
+		// (spawned before SessionInfo.RepoURL existed, or whose spawn
+		// carried no clone_url). Reads the cloned repo's actual remote
+		// from disk — the LOSSLESS source of truth (cwd-decoding is
+		// irrecoverably ambiguous for dashed owner+repo names). Cached
+		// by cwd so we don't re-exec git on every List().
+		if c.RepoURL == "" && c.Cwd != "" {
+			c.RepoURL = r.deriveRepoURL(c.Cwd)
 		}
 		// Refresh Claude extras (model + context tokens + sessionId UUID)
 		// from the JSONL transcript. Cheap: tail-reads last ~200 lines.
@@ -2866,8 +2888,44 @@ func readGitContext(cwd string) (githubURL, branch string) {
 	return githubFromGitURL(url), readGitBranch(cwd)
 }
 
+// deriveRepoURL returns the canonical repo URL for a cwd by reading the
+// cloned repo's actual `remote.origin.url` from disk and normalizing it
+// (ssh→https, strip .git/trailing slash). Memoized per cwd so repeated
+// List() calls don't re-exec git. Returns "" if cwd isn't a git repo.
+// This is the #1 fix: the cwd-encoded path flattens `/ . :` → `-`, which
+// is irrecoverably ambiguous when BOTH owner and repo contain dashes
+// (e.g. ping-cash/ping-cash mis-splits to ping-cash-ping/cash) — so we
+// never guess from cwd; we read the on-disk remote, the lossless truth.
+func (r *Runtime) deriveRepoURL(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	r.repoURLCacheMu.Lock()
+	if r.repoURLCache == nil {
+		// Defensive: tests may build a Runtime literal without the cache map.
+		r.repoURLCache = make(map[string]string)
+	}
+	if v, ok := r.repoURLCache[cwd]; ok {
+		r.repoURLCacheMu.Unlock()
+		return v
+	}
+	r.repoURLCacheMu.Unlock()
+
+	url := normalizeRepoURL(readGitOriginURL(cwd))
+
+	r.repoURLCacheMu.Lock()
+	r.repoURLCache[cwd] = url
+	r.repoURLCacheMu.Unlock()
+	return url
+}
+
 func readGitOriginURL(cwd string) string {
-	out, err := execCommand("git", "-C", cwd, "config", "--get", "remote.origin.url")
+	// `-c safe.directory=<cwd>` is REQUIRED: agent repos are cloned/owned by a
+	// different uid than the runtime process (container :U-mount uid-shift), so
+	// modern git refuses with "detected dubious ownership" and `config --get`
+	// returns empty — silently defeating the repo-URL derivation (#1). Scoping
+	// the override to this exact cwd keeps it tight (not a global "*").
+	out, err := execCommand("git", "-c", "safe.directory="+cwd, "-C", cwd, "config", "--get", "remote.origin.url")
 	if err != nil {
 		return ""
 	}
@@ -2875,11 +2933,48 @@ func readGitOriginURL(cwd string) string {
 }
 
 func readGitBranch(cwd string) string {
-	out, err := execCommand("git", "-C", cwd, "branch", "--show-current")
+	// Same dubious-ownership guard applies to branch reads — see readGitOriginURL.
+	out, err := execCommand("git", "-c", "safe.directory="+cwd, "-C", cwd, "branch", "--show-current")
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(out)
+}
+
+// normalizeRepoURL canonicalizes ANY git remote URL (ssh or https, any
+// host) to a browseable https URL: ssh→https for arbitrary hosts, strip
+// trailing slash, strip .git suffix. Unlike githubFromGitURL it does not
+// drop non-github remotes — gitea/gitlab/etc all normalize to their https
+// form. Used by serve-time RepoURL derivation (#1) where we want the EXACT
+// repo regardless of host. Returns "" for empty/unparseable input.
+func normalizeRepoURL(url string) string {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return ""
+	}
+	url = strings.TrimSuffix(url, "/")
+	url = strings.TrimSuffix(url, ".git")
+	// scp-style ssh: git@host:owner/repo  → https://host/owner/repo
+	if strings.HasPrefix(url, "git@") {
+		rest := strings.TrimPrefix(url, "git@")
+		if i := strings.IndexByte(rest, ':'); i >= 0 {
+			host := rest[:i]
+			path := strings.TrimPrefix(rest[i+1:], "/")
+			return "https://" + host + "/" + path
+		}
+	}
+	// ssh://git@host/owner/repo  → https://host/owner/repo
+	if strings.HasPrefix(url, "ssh://") {
+		rest := strings.TrimPrefix(url, "ssh://")
+		rest = strings.TrimPrefix(rest, "git@")
+		return "https://" + rest
+	}
+	// http(s):// already browseable — return as-is (slash/.git already stripped).
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		return url
+	}
+	// Bare host/owner/repo or anything else — best-effort https prefix.
+	return url
 }
 
 // githubFromGitURL normalizes a git remote URL (ssh or https) to the

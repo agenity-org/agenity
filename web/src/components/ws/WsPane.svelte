@@ -30,6 +30,7 @@
     parentSide = '',
     onfocusleaf = () => {},
     onsetratio = () => {},
+    onsetfixed = () => {},
     onsplit = () => {},
     onclose = () => {},
     onsetagent = () => {},
@@ -44,6 +45,13 @@
     canClose = true,
   } = $props();
 
+  // A split with `fixed:'a'|'b'` renders that side at a FIXED pixel width
+  // (the other side flexes to fill) so rails like Sessions / Agent-Details
+  // are pixel-identical across every workspace tab (#3/#4). Only horizontal
+  // rails use this; vertical splits stay ratio-based.
+  let fixedSide = $derived(node && node.kind === 'h' && (node.fixed === 'a' || node.fixed === 'b') ? node.fixed : '');
+  let fixedPx = $derived(typeof node?.fixedPx === 'number' ? node.fixedPx : 260);
+
   let container = $state(null);
   let dragging = $state(false);
 
@@ -54,6 +62,16 @@
     const rect = container.getBoundingClientRect();
     function onMove(e) {
       const point = e.touches ? e.touches[0] : e;
+      if (fixedSide) {
+        // Fixed-px rail: drag adjusts the pixel width of the fixed side,
+        // clamped sensibly, so the rail stays the operator's chosen size
+        // (still pixel-stable across tabs since it's not a ratio).
+        const fromLeft = point.clientX - rect.left;
+        let px = fixedSide === 'a' ? fromLeft : (rect.width - fromLeft);
+        px = Math.max(140, Math.min(640, px));
+        onsetfixed(node.id, px);
+        return;
+      }
       let ratio = horiz ? (point.clientX - rect.left) / rect.width : (point.clientY - rect.top) / rect.height;
       onsetratio(node.id, ratio);
     }
@@ -108,26 +126,32 @@
   />
 {:else}
   <div class="split {node.kind === 'h' ? 'split-h' : 'split-v'}" bind:this={container}>
-    <div class="split-side" style={node.kind === 'h' ? `width:${aPct}%` : `height:${aPct}%`}>
+    <div
+      class="split-side"
+      style={fixedSide === 'a' ? `flex:0 0 ${fixedPx}px` : fixedSide === 'b' ? 'flex:1 1 0; min-width:0' : (node.kind === 'h' ? `width:${aPct}%` : `height:${aPct}%`)}
+    >
       <svelte:self
         node={node.a}
         {sessions} {teams} {memberships} {events} {peers} {tasks} {focusedSession} {selectedAgent}
         {focusedLeafId} {maximizedLeafId}
         parentSplit={node} parentSide="a"
-        {onfocusleaf} {onsetratio} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu} {onpickagent} {onopenagentnew} {onagentctxmenu} {onteamctxmenu}
+        {onfocusleaf} {onsetratio} {onsetfixed} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu} {onpickagent} {onopenagentnew} {onagentctxmenu} {onteamctxmenu}
         canClose={true}
       />
     </div>
     <div class="divider {node.kind === 'h' ? 'divider-h' : 'divider-v'} {dragging ? 'is-dragging' : ''}" onmousedown={startDrag} ontouchstart={startDrag} role="separator" aria-orientation={node.kind === 'h' ? 'vertical' : 'horizontal'} aria-label="Resize panes" tabindex="-1">
       <span class="grip"></span>
     </div>
-    <div class="split-side" style={node.kind === 'h' ? `width:${100 - aPct}%` : `height:${100 - aPct}%`}>
+    <div
+      class="split-side"
+      style={fixedSide === 'b' ? `flex:0 0 ${fixedPx}px` : fixedSide === 'a' ? 'flex:1 1 0; min-width:0' : (node.kind === 'h' ? `width:${100 - aPct}%` : `height:${100 - aPct}%`)}
+    >
       <svelte:self
         node={node.b}
         {sessions} {teams} {memberships} {events} {peers} {tasks} {focusedSession} {selectedAgent}
         {focusedLeafId} {maximizedLeafId}
         parentSplit={node} parentSide="b"
-        {onfocusleaf} {onsetratio} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu} {onpickagent} {onopenagentnew} {onagentctxmenu} {onteamctxmenu}
+        {onfocusleaf} {onsetratio} {onsetfixed} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu} {onpickagent} {onopenagentnew} {onagentctxmenu} {onteamctxmenu}
         canClose={true}
       />
     </div>

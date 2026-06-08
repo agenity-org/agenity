@@ -129,6 +129,9 @@
   let viewsBusy = $state(false);       // a save/load is in flight
   let savingView = $state(false);      // the inline "name this view" input is showing
   let saveViewName = $state('');       // bound to that input
+  // Name of the saved view the operator marked as the STARTUP default (#3).
+  // When set, it's loaded over the hardcoded seeds on mount.
+  let defaultViewName = $state('');
 
   // ---- agent / team editors (reused v08, opened from context menus) ----
   let editAgent = $state(null);        // session object | null
@@ -199,7 +202,10 @@
           // terminal as a side effect of a background refresh — a
           // terminal-less workspace (seeded "Board" / "Talk", or any
           // operator-composed one) must stay exactly as the operator left it.
-          if (activeWs && firstTerminalLeafId(activeWs.layout)) bindFocusedTerminal(w.name, false);
+          // SKIP when the active Work view still holds an auto-terminal
+          // placeholder — the auto-fill effect (#3) will populate the grid
+          // with up to 4 agent terminals; binding here would clobber the tag.
+          if (activeWs && firstTerminalLeafId(activeWs.layout) && !findAutoWorkLeaf(activeWs.layout)) bindFocusedTerminal(w.name, false);
         }
       }
     } catch {}
@@ -301,6 +307,49 @@
   function firstTerminalLeafId(layout) { const tl = T.leaves(layout).find((l) => l.widget === 'terminal'); return tl ? tl.id : ''; }
   function ensureFocusedLeaf(layout) { const all = T.leaves(layout); if (!all.find((l) => l.id === focusedLeafId)) setFocusedLeaf(all[0]?.id || ''); }
 
+  // ---- auto-open up to 4 live-agent terminals in the Work view (#3) ----
+  // The Work seed carries ONE terminal leaf tagged config.autoTerminals='work'
+  // as a placeholder. Once sessions load, replace that placeholder with a
+  // balanced grid of up-to-4 live, non-shepherd agent terminals (one per
+  // agent), so the Work tab opens MANY live terminals tiled — not a single
+  // focused one. Runs once per workspace (the tag is consumed on fill).
+  let autoFilledWork = $state({});   // workspaceId -> true once filled
+
+  function liveWorkAgents() {
+    return sessions
+      .filter((s) => !s.exited && s.live !== false && s.role !== 'shepherd')
+      .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '') || (a.name || '').localeCompare(b.name || ''))
+      .slice(0, 4)
+      .map((s) => s.name);
+  }
+
+  // Find a terminal leaf tagged autoTerminals==='work' anywhere in the tree.
+  function findAutoWorkLeaf(node) {
+    return T.leaves(node).find((l) => l.widget === 'terminal' && l.config?.autoTerminals === 'work') || null;
+  }
+
+  function maybeAutoFillWorkTerminals() {
+    if (!persistReady) return;
+    for (const w of workspaces) {
+      if (autoFilledWork[w.id]) continue;
+      const placeholder = findAutoWorkLeaf(w.layout);
+      if (!placeholder) { autoFilledWork = { ...autoFilledWork, [w.id]: true }; continue; }
+      const names = liveWorkAgents();
+      if (!names.length) continue;   // wait for at least one live agent
+      // Build the grid (1..4) and graft it in place of the placeholder leaf.
+      const grid = T.gridOf(names.map((n) => ({ agent: n })));
+      const nextLayout = T.replaceLeaf(w.layout, placeholder.id, grid);
+      workspaces = workspaces.map((x) => (x.id === w.id ? { ...x, layout: nextLayout } : x));
+      autoFilledWork = { ...autoFilledWork, [w.id]: true };
+      // Seed focus to the first terminal of the new grid for this workspace.
+      const firstTermId = firstTerminalLeafId(nextLayout);
+      if (firstTermId) {
+        wsFocus = { ...wsFocus, [w.id]: firstTermId };
+        for (const n of names) pushTermMru(w.id, firstTermId);
+      }
+    }
+  }
+
   function selectAgent(name) {
     selectedAgent = name;
     pushMRU(name);
@@ -374,6 +423,7 @@
     if (leaf?.widget === 'terminal' && leaf.config?.agent) { selectedAgent = leaf.config.agent; pushMRU(selectedAgent); }
   }
   function onSetRatio(splitId, ratio) { setCurLayout(T.setSplitRatio(curLayout(), splitId, ratio)); }
+  function onSetFixed(splitId, px) { setCurLayout(T.setSplitFixedPx(curLayout(), splitId, px)); }
   function onSplit(leafId, dir) {
     const cur = T.findLeaf(curLayout(), leafId);
     const cfg = cur?.widget === 'terminal' ? { agent: cur.config?.agent || selectedAgent } : {};
@@ -541,11 +591,41 @@
       viewsBusy = false;
     }
   }
+  // Load the starred default view as the startup working set (#3). Async +
+  // best-effort: needs a token, so it silently no-ops while signed out (the
+  // seeds remain). Doesn't flash on failure — startup should be quiet.
+  async function applyDefaultViewOnStartup(name) {
+    if (!getToken()) return;
+    try {
+      const r = await fetch(`${API}/workspaces/${encodeURIComponent(name)}`);
+      if (!r.ok) return;
+      const blob = await r.json();
+      const next = T.sanitizeWorkspaceList(blob);
+      if (!next || !next.length) return;
+      workspaces = next;
+      const focusSeed = {};
+      for (const w of workspaces) focusSeed[w.id] = T.leaves(w.layout)[0]?.id || '';
+      wsFocus = focusSeed;
+      wsMax = {};
+      activeId = workspaces[0].id;
+      T.saveWorkspaces(viewSnapshot());
+      T.saveActiveId(activeId);
+    } catch {}
+  }
+
   function toggleViewsMenu(e) {
     e.stopPropagation();
     closeAllMenus();
     viewsMenuOpen = !viewsMenuOpen;
     if (viewsMenuOpen) { savingView = false; saveViewName = ''; loadSavedViewNames(); }
+  }
+  // Mark (or unmark) a saved view as the STARTUP default (#3). Persisted so a
+  // reload honours it over the hardcoded seeds. Toggling the current default
+  // off reverts startup to the seeds.
+  function setDefaultView(name) {
+    defaultViewName = (defaultViewName === name) ? '' : name;
+    T.saveDefaultViewName(defaultViewName);
+    flash(defaultViewName ? `“${name}” is now your default view` : 'Default view cleared');
   }
 
   // ---------------- agent / team editors (reuse v08 modals) ----------------
@@ -577,6 +657,9 @@
     catch (e) { loginError = String(e); return; }
     needLogin = false; loginError = ''; loginInput = '';
     startLiveLoop();
+    // First-run login with a starred default view but no local layout yet:
+    // apply it now that we have a token (#3).
+    if (defaultViewName && !T.loadWorkspaces()) applyDefaultViewOnStartup(defaultViewName);
   }
   function signOut() {
     userMenuOpen = false;
@@ -737,6 +820,13 @@
       if (e.key === '`') { e.preventDefault(); cycleWorkspace(1); return; }
       if (e.key === 'Tab') { e.preventDefault(); cycleWorkspace(e.shiftKey ? -1 : 1); return; }
     }
+    // #5 — Ctrl+Alt+Arrow moves focus to the SPATIAL neighbour pane in that
+    // direction within the active workspace. Distinct keychord from the
+    // Ctrl+1..9 / Ctrl+` workspace switching above (those exclude Alt).
+    if ((e.ctrlKey || e.metaKey) && e.altKey && !typing) {
+      const dir = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.key];
+      if (dir) { e.preventDefault(); focusNeighborPane(dir); return; }
+    }
     if (e.key !== 'Escape') return;
     // ESC priority order: menus → modals → rename → maximize.
     if (ctxMenu) { ctxMenu = null; return; }
@@ -749,6 +839,60 @@
     if (renamingId) { cancelRename(); return; }
     if (maximizedLeafId) { setMaxLeaf(''); return; }
   }
+  // #5 — spatial pane navigation. Move focus to the nearest pane whose centre
+  // lies in the requested direction from the currently-focused pane, using the
+  // RENDERED bounding rects of the .leaf[data-leaf-id] elements in the active
+  // workspace's canvas. Picks the candidate that's (a) on the correct side and
+  // (b) closest in primary axis, then closest in the perpendicular axis — the
+  // standard spatial-navigation tie-break. No-op when there's no neighbour.
+  function focusNeighborPane(dir) {
+    if (!activeWs) return;
+    let nodes = [];
+    try {
+      const root = document.querySelector('.stage-grid');
+      if (!root) return;
+      nodes = Array.from(root.querySelectorAll('.leaf[data-leaf-id]'));
+    } catch { return; }
+    if (nodes.length < 2) return;
+
+    const validIds = new Set(T.leaves(activeWs.layout).map((l) => l.id));
+    const rects = nodes
+      .map((el) => ({ id: el.getAttribute('data-leaf-id'), r: el.getBoundingClientRect() }))
+      .filter((x) => x.id && validIds.has(x.id) && x.r.width > 0 && x.r.height > 0);
+    if (rects.length < 2) return;
+
+    const curId = focusedLeafId || rects[0].id;
+    const cur = rects.find((x) => x.id === curId) || rects[0];
+    const cr = cur.r;
+
+    // Edge-based spatial selection (robust to panes of differing extents, e.g.
+    // a full-height Sessions rail beside half-height terminals): a candidate is
+    // "in direction" when its leading edge is strictly beyond the current
+    // pane's edge in that axis. Score = gap along the travel axis (primary) +
+    // perpendicular SEPARATION (0 when the rects overlap on the perp axis, so
+    // aligned neighbours always beat diagonal ones) lightly weighted.
+    const sep = (aMin, aMax, bMin, bMax) => (bMin > aMax ? bMin - aMax : (aMin > bMax ? aMin - bMax : 0));
+    let best = null, bestScore = Infinity;
+    for (const cand of rects) {
+      if (cand.id === cur.id) continue;
+      const k = cand.r;
+      let primary, perp, onSide;
+      if (dir === 'left')       { onSide = k.right <= cr.left + 1;  primary = cr.left - k.right;  perp = sep(cr.top, cr.bottom, k.top, k.bottom); }
+      else if (dir === 'right') { onSide = k.left >= cr.right - 1;  primary = k.left - cr.right;  perp = sep(cr.top, cr.bottom, k.top, k.bottom); }
+      else if (dir === 'up')    { onSide = k.bottom <= cr.top + 1;  primary = cr.top - k.bottom;  perp = sep(cr.left, cr.right, k.left, k.right); }
+      else                      { onSide = k.top >= cr.bottom - 1;  primary = k.top - cr.bottom;  perp = sep(cr.left, cr.right, k.left, k.right); }
+      if (!onSide) continue;
+      const score = Math.max(0, primary) + perp * 1.5;
+      if (score < bestScore) { bestScore = score; best = cand; }
+    }
+    if (best) {
+      setFocusedLeaf(best.id);
+      const leaf = T.findLeaf(activeWs.layout, best.id);
+      if (leaf?.widget === 'terminal' && leaf.config?.agent) { selectedAgent = leaf.config.agent; pushMRU(selectedAgent); }
+      try { document.querySelector(`.stage-grid .leaf[data-leaf-id="${CSS.escape(best.id)}"]`)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }); } catch {}
+    }
+  }
+
   // Any click reaching the window closes the open popups. The toggle buttons +
   // the items inside the menus all stopPropagation, so a click that bubbles
   // this far is necessarily OUTSIDE them → dismiss the context menu AND the
@@ -783,6 +927,15 @@
   $effect(() => {
     if (!persistReady) return;
     T.saveActiveId(activeId);
+  });
+
+  // Auto-fill the Work view's terminal grid once live agents are known (#3).
+  // Reacts to `sessions` so it fires on the first poll that returns agents.
+  $effect(() => {
+    if (!persistReady) return;
+    // Touch sessions so this effect re-runs when the roster changes.
+    void sessions.length;
+    maybeAutoFillWorkTerminals();
   });
 
   // Poll mesh/tasks only while a pane of that type exists.
@@ -830,6 +983,15 @@
     for (const w of workspaces) focusSeed[w.id] = T.leaves(w.layout)[0]?.id || '';
     wsFocus = focusSeed;
     persistReady = true;
+
+    // Honour a saved STARTUP DEFAULT VIEW over the hardcoded seeds (#3): when
+    // the operator has starred a saved view, load it (server-side) as the
+    // initial working set. Only do this when there was NO customised local
+    // layout to migrate (loaded == null) so we never clobber unsaved edits.
+    defaultViewName = T.loadDefaultViewName();
+    if (defaultViewName && !(loaded && loaded.length)) {
+      applyDefaultViewOnStartup(defaultViewName);
+    }
 
     applyResponsive();
     window.addEventListener('resize', applyResponsive);
@@ -892,6 +1054,7 @@
           oncancelrename={cancelRename}
           onreorder={reorderWorkspace}
           onctxmenu={openWsMenu}
+          onclose={deleteWorkspace}
         />
       </div>
 
@@ -965,7 +1128,16 @@
                   <div class="views-empty">{viewsBusy ? 'Loading…' : 'No saved views yet'}</div>
                 {:else}
                   {#each savedViews as v (v)}
-                    <button class="um-item" role="menuitem" disabled={viewsBusy} onclick={() => loadSavedView(v)} title={`Load “${v}”`}>▸ {v}</button>
+                    <div class="view-row">
+                      <button class="um-item view-load" role="menuitem" disabled={viewsBusy} onclick={() => loadSavedView(v)} title={`Load “${v}”`}>▸ {v}</button>
+                      <button
+                        class="view-star {defaultViewName === v ? 'is-default' : ''}"
+                        title={defaultViewName === v ? 'Default startup view (click to clear)' : 'Set as default startup view'}
+                        aria-label={defaultViewName === v ? `Clear default view ${v}` : `Set ${v} as default view`}
+                        aria-pressed={defaultViewName === v}
+                        onclick={(e) => { e.stopPropagation(); setDefaultView(v); }}
+                      >{defaultViewName === v ? '★' : '☆'}</button>
+                    </div>
                   {/each}
                 {/if}
               </div>
@@ -1001,6 +1173,7 @@
                 {focusedLeafId} {maximizedLeafId}
                 onfocusleaf={onFocusLeaf}
                 onsetratio={onSetRatio}
+                onsetfixed={onSetFixed}
                 onsplit={onSplit}
                 onclose={onCloseLeaf}
                 onsetagent={onSetAgent}
@@ -1132,6 +1305,12 @@
   .view-save-go { flex: 0 0 auto; padding: 0.35rem 0.6rem; background: var(--calm-accent); color: #06121f; border: 0; border-radius: 6px; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
   .view-save-go:hover:not(:disabled) { filter: brightness(1.06); }
   .view-save-go:disabled { opacity: 0.5; cursor: progress; }
+  /* Saved-view row: load button + a star to mark the startup default (#3). */
+  .view-row { display: flex; align-items: center; gap: 0.1rem; }
+  .view-row .view-load { flex: 1; min-width: 0; }
+  .view-star { flex: 0 0 auto; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 6px; color: var(--calm-fg-faint); cursor: pointer; font-size: 0.95rem; line-height: 1; }
+  .view-star:hover { background: var(--calm-chip-hover); color: var(--calm-fg); }
+  .view-star.is-default { color: var(--calm-accent); }
   .user-menu .um-item:disabled { opacity: 0.5; cursor: progress; }
   .um-head { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--calm-fg-faint); font-weight: 700; padding: 0.35rem 0.55rem 0.25rem; }
 
