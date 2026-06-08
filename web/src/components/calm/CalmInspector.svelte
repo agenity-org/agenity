@@ -79,9 +79,13 @@
 
   let repoUrl = $derived.by(() => {
     if (!s) return '';
-    const direct = s.repo_url || s.clone_url || s.html_url || s.github_url;
-    if (direct && /^(https?|git|ssh):\/\//.test(direct)) return direct;
-    return decodeRepoFromCwd(s.cwd);
+    // LOSSLESS ONLY: the backend derives repo_url from the cloned repo's real
+    // git remote. We deliberately do NOT fall back to decoding the cwd path —
+    // that mis-splits dashed repos (ping-cash/ping-cash → ping-cash-ping/cash),
+    // and a WRONG link is worse than none. No repo field → hide the row.
+    const direct = s.repo_url || s.clone_url || s.html_url || s.github_url || '';
+    if (!/^(https?|git|ssh):\/\//.test(direct)) return '';
+    return direct.replace(/^git@([^:]+):/, 'https://$1/').replace(/\.git$/, '').replace(/\/$/, '');
   });
   // Compact display label for the repo link (drop scheme + trailing .git).
   let repoLabel = $derived(
