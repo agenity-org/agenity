@@ -36,7 +36,7 @@ export function nextId(prefix = 'n') {
 export const PANE_TYPES = [
   { id: 'sessions',   label: 'Sessions',   glyph: '☰' },
   { id: 'terminal',   label: 'Terminal',   glyph: '▦' },
-  { id: 'inspector',  label: 'Inspector',  glyph: '◉' },
+  { id: 'inspector',  label: 'Agent Details', glyph: '◉' },
   { id: 'kanban',     label: 'Kanban',     glyph: '☷' },
   { id: 'events',     label: 'Events',     glyph: '〜' },
   { id: 'transcript', label: 'Transcript', glyph: '✉' },
@@ -219,13 +219,18 @@ export function cloneTreeFreshIds(node) {
 }
 
 // ---------------- seed compositions ----------------
-// Three editable/deletable starting desktops. These are just compositions;
-// the operator can rebuild them freely. Every seed leads with a Sessions
-// pane (the agent list — there is no longer a fixed roster) so agents are
-// reachable out of the box, then pairs it with a working surface.
-//   Work    — Sessions | (terminal over inspector).
-//   Board   — Sessions | (kanban beside an events feed).
-//   Talk    — Sessions | transcript.
+// Three editable/deletable starting desktops — the global first-run default
+// for every new operator. Just compositions; the operator can rebuild them
+// freely. Every seed leads with a Sessions pane (the agent list — there is no
+// longer a fixed roster) so agents are reachable out of the box.
+//   Work (active on load) — Sessions(16%) | Terminal(62%) | Agent Details(22%).
+//     A three-way horizontal split: agent list on the far left, the live
+//     terminal of the auto-focused agent in the centre, its Agent Details on
+//     the right. Encoded as Sessions | (Terminal | AgentDetails). With the
+//     outer ratio 0.16 the right group gets 84%; split that 0.738 so the
+//     terminal occupies 0.84·0.738 ≈ 0.62 and details 0.84·0.262 ≈ 0.22.
+//   Overview — Sessions(18%) | (Kanban | Events).
+//   Conversation — Transcript (large) | Agent Details(24%).
 export function seedWorkspaces() {
   return [
     {
@@ -233,23 +238,23 @@ export function seedWorkspaces() {
       name: 'Work',
       layout: hsplit(
         leaf('sessions', {}),
-        vsplit(leaf('terminal', {}), leaf('inspector', {}), 0.66),
-        0.22,
+        hsplit(leaf('terminal', {}), leaf('inspector', {}), 0.738),
+        0.16,
       ),
     },
     {
       id: nextId('ws'),
-      name: 'Board',
+      name: 'Overview',
       layout: hsplit(
         leaf('sessions', {}),
         hsplit(leaf('kanban', {}), leaf('events', {}), 0.6),
-        0.22,
+        0.18,
       ),
     },
     {
       id: nextId('ws'),
-      name: 'Talk',
-      layout: hsplit(leaf('sessions', {}), leaf('transcript', {}), 0.22),
+      name: 'Conversation',
+      layout: hsplit(leaf('transcript', {}), leaf('inspector', {}), 0.76),
     },
   ];
 }
@@ -257,16 +262,44 @@ export function seedWorkspaces() {
 // ---------------- persistence (per-user → localStorage) ----------------
 // Keyed so the data survives reloads. We persist the full workspace list,
 // the active index, and per-workspace focus/maximize hints.
-// v2: roster removed → seeds now lead with a Sessions pane. Bumping the key
-// re-seeds operators whose v1 layouts predate the Sessions pane type (so they
-// aren't stranded without a way to reach agents).
-const STORE_KEY = 'ws-workspaces-v2';
-const ACTIVE_KEY = 'ws-active-v2';
+//
+// v3: the global first-run default changed (Work = Sessions|Terminal|Agent
+// Details; Overview; Conversation). Bumping the key re-seeds operators who
+// still carry an UNTOUCHED v2 seed, while operators who CUSTOMISED their v2
+// layout keep it (migrated forward) — see loadWorkspaces' v2 fallback. v2
+// itself re-seeded v1 operators (roster → Sessions pane).
+const STORE_KEY = 'ws-workspaces-v3';
+const ACTIVE_KEY = 'ws-active-v3';
+const STORE_KEY_V2 = 'ws-workspaces-v2';
+const ACTIVE_KEY_V2 = 'ws-active-v2';
 
-export function loadWorkspaces() {
+// Structural fingerprint of a tree, id-independent: pane types + split axes +
+// rounded ratios. Lets us tell a PRISTINE old seed (re-seed it) from a layout
+// the operator edited (migrate it forward).
+function fingerprint(node) {
+  if (!node || typeof node !== 'object') return '∅';
+  if (node.kind === 'leaf') return `L:${node.widget}`;
+  const r = Math.round((typeof node.ratio === 'number' ? node.ratio : 0.5) * 100);
+  return `${node.kind}(${r},${fingerprint(node.a)},${fingerprint(node.b)})`;
+}
+function workspacesFingerprint(list) {
+  if (!Array.isArray(list)) return '';
+  return list.map((w) => `${w?.name || ''}=${fingerprint(w?.layout)}`).join('|');
+}
+// The exact v2 pristine seed shape (Work/Board/Talk). Generated, not hand-
+// typed, so it can't drift from the algebra. Any stored v2 list whose
+// fingerprint matches this was never customised → safe to re-seed to v3.
+function v2SeedFingerprint() {
+  const v2 = [
+    { name: 'Work',  layout: hsplit(leaf('sessions', {}), vsplit(leaf('terminal', {}), leaf('inspector', {}), 0.66), 0.22) },
+    { name: 'Board', layout: hsplit(leaf('sessions', {}), hsplit(leaf('kanban', {}), leaf('events', {}), 0.6), 0.22) },
+    { name: 'Talk',  layout: hsplit(leaf('sessions', {}), leaf('transcript', {}), 0.22) },
+  ];
+  return workspacesFingerprint(v2);
+}
+
+function parseStored(raw) {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
     const out = [];
@@ -282,6 +315,25 @@ export function loadWorkspaces() {
   } catch { return null; }
 }
 
+export function loadWorkspaces() {
+  try {
+    // Post-migration users: just load v3 (custom or freshly-seeded alike).
+    const v3 = localStorage.getItem(STORE_KEY);
+    if (v3) return parseStored(v3);
+
+    // No v3 yet. Look at the legacy v2 store to decide migrate-vs-reseed.
+    const v2raw = localStorage.getItem(STORE_KEY_V2);
+    if (!v2raw) return null;                 // brand-new user → seed v3
+    const v2list = parseStored(v2raw);
+    if (!v2list) return null;                // unparseable → seed v3
+    // Untouched v2 default → discard, return null so the caller seeds v3.
+    if (workspacesFingerprint(v2list) === v2SeedFingerprint()) return null;
+    // Customised v2 layout → migrate it forward (it persists under v3 on the
+    // next save). The operator keeps their desktops.
+    return v2list;
+  } catch { return null; }
+}
+
 export function saveWorkspaces(workspaces) {
   try {
     // Strip transient _prevRatio is fine to keep; it's serializable.
@@ -290,7 +342,7 @@ export function saveWorkspaces(workspaces) {
 }
 
 export function loadActiveId() {
-  try { return localStorage.getItem(ACTIVE_KEY) || ''; } catch { return ''; }
+  try { return localStorage.getItem(ACTIVE_KEY) || localStorage.getItem(ACTIVE_KEY_V2) || ''; } catch { return ''; }
 }
 export function saveActiveId(id) {
   try { localStorage.setItem(ACTIVE_KEY, id || ''); } catch {}

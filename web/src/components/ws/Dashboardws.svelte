@@ -95,6 +95,12 @@
   let activeId = $state('');
   let wsFocus = $state({});   // workspaceId -> focusedLeafId
   let wsMax = $state({});     // workspaceId -> maximizedLeafId
+  // Per-workspace MRU of TERMINAL leaf ids the operator has focused, newest
+  // first. Used so that clicking an agent in a Sessions pane rebinds the
+  // last terminal the operator actually touched — NOT an arbitrary/first one.
+  // (Clicking a Sessions row moves focus to the Sessions leaf on mousedown,
+  // so focusedLeafId is no longer the terminal by the time we rebind.)
+  let wsTermMru = $state({}); // workspaceId -> [terminalLeafId, …]
   let persistReady = $state(false);
 
   let activeWs = $derived(workspaces.find((w) => w.id === activeId) || null);
@@ -249,8 +255,36 @@
     if (!activeWs) return;
     workspaces = workspaces.map((w) => (w.id === activeWs.id ? { ...w, layout: next } : w));
   }
-  function setFocusedLeaf(id) { if (activeWs) wsFocus = { ...wsFocus, [activeWs.id]: id }; }
+  function setFocusedLeaf(id) {
+    if (!activeWs) return;
+    wsFocus = { ...wsFocus, [activeWs.id]: id };
+    // If a TERMINAL leaf just got focus, remember it as most-recent for this
+    // workspace so a later Sessions-row click rebinds THIS terminal.
+    const leaf = T.findLeaf(activeWs.layout, id);
+    if (leaf?.widget === 'terminal') pushTermMru(activeWs.id, id);
+  }
   function setMaxLeaf(id) { if (activeWs) wsMax = { ...wsMax, [activeWs.id]: id }; }
+
+  function pushTermMru(wsId, leafId) {
+    if (!wsId || !leafId) return;
+    const prev = wsTermMru[wsId] || [];
+    wsTermMru = { ...wsTermMru, [wsId]: [leafId, ...prev.filter((x) => x !== leafId)].slice(0, 12) };
+  }
+  // Resolve the terminal leaf a Sessions-click should rebind, in priority:
+  //   1. the currently-focused leaf IF it is itself a terminal;
+  //   2. else the most-recently-focused terminal leaf that still exists;
+  //   3. else the first terminal in the tree.
+  // Returns '' when the workspace has no terminal pane at all.
+  function mruTerminalLeafId(layout, focusedId) {
+    const focused = T.findLeaf(layout, focusedId);
+    if (focused && focused.widget === 'terminal') return focused.id;
+    const mru = activeWs ? (wsTermMru[activeWs.id] || []) : [];
+    for (const id of mru) {
+      const l = T.findLeaf(layout, id);
+      if (l && l.widget === 'terminal') return l.id;
+    }
+    return firstTerminalLeafId(layout);
+  }
 
   function firstTerminalLeafId(layout) { const tl = T.leaves(layout).find((l) => l.widget === 'terminal'); return tl ? tl.id : ''; }
   function ensureFocusedLeaf(layout) { const all = T.leaves(layout); if (!all.find((l) => l.id === focusedLeafId)) setFocusedLeaf(all[0]?.id || ''); }
@@ -262,21 +296,27 @@
   }
 
   // Clicking an agent (in a Sessions pane) binds it to a terminal:
-  //   1. if the focused pane IS a terminal → rebind it;
-  //   2. else if any terminal pane exists → bind the first one;
-  //   3. else split a NEW terminal off the focused pane (never clobber a
+  //   1. if the focused pane IS a terminal → rebind THAT exact leaf;
+  //   2. else the most-recently-focused terminal leaf (MRU) → rebind it;
+  //   3. else the first terminal in the tree → rebind it;
+  //   4. else split a NEW terminal off the focused pane (never clobber a
   //      Sessions / inspector / kanban pane by converting it).
+  // Note: a Sessions-row click moves focus to the Sessions leaf on mousedown,
+  // so by the time we land here focusedLeafId is the Sessions pane, NOT the
+  // terminal the operator last touched — hence the MRU lookup in (2). Without
+  // it we'd fall through to firstTerminalLeafId and rebind an arbitrary
+  // terminal (the reported multi-terminal mis-bind bug).
   function bindFocusedTerminal(name, flashIt) {
     if (!activeWs) return;
     let layout = activeWs.layout;
     ensureFocusedLeaf(layout);
     const fid = wsFocus[activeWs.id] || T.leaves(layout)[0]?.id || '';
-    const focused = T.findLeaf(layout, fid);
 
-    let targetId = (focused && focused.widget === 'terminal') ? focused.id : firstTerminalLeafId(layout);
+    let targetId = mruTerminalLeafId(layout, fid);
     if (targetId) {
       layout = T.setLeafConfig(layout, targetId, { agent: name });
       wsFocus = { ...wsFocus, [activeWs.id]: targetId };
+      pushTermMru(activeWs.id, targetId);
       if (flashIt) flash(`Focus → ${name}`);
     } else {
       // No terminal anywhere — split a new one off the focused pane so the
@@ -286,9 +326,12 @@
         const { tree, newId } = T.splitLeaf(layout, base, 'h', 'terminal', { agent: name });
         layout = tree;
         wsFocus = { ...wsFocus, [activeWs.id]: newId };
+        pushTermMru(activeWs.id, newId);
       } else {
         layout = T.leaf('terminal', { agent: name });
-        wsFocus = { ...wsFocus, [activeWs.id]: T.leaves(layout)[0].id };
+        const onlyId = T.leaves(layout)[0].id;
+        wsFocus = { ...wsFocus, [activeWs.id]: onlyId };
+        pushTermMru(activeWs.id, onlyId);
       }
       if (flashIt) flash(`Opened ${name}`);
     }
