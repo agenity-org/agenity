@@ -158,14 +158,22 @@
   }
 
   let evStream = null;
+  let evRetries = 0;
   function startEventStream() {
     if (evStream) return;
     const tok = getToken();
     const q = tok ? '?token=' + encodeURIComponent(tok) : '';
     try {
       evStream = new EventSource(`${API}/events/stream${q}`);
+      evStream.onopen = () => { evRetries = 0; };
       evStream.onmessage = (e) => { try { events = [...events, JSON.parse(e.data)].slice(-200); } catch {} };
-      evStream.onerror = () => { evStream?.close(); evStream = null; setTimeout(startEventStream, 3000); };
+      // BOUNDED backoff: the 2.5s poll already refreshes events, so a
+      // misbehaving/expired-token SSE endpoint must NOT infinite-reconnect
+      // (was flooding the console + hammering the daemon). Cap at 4 tries.
+      evStream.onerror = () => {
+        evStream?.close(); evStream = null;
+        if (evRetries < 4) { evRetries += 1; setTimeout(startEventStream, Math.min(30000, 3000 * evRetries)); }
+      };
     } catch {}
   }
 
