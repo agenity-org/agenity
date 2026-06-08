@@ -46,7 +46,12 @@
 // redirect to /v0.9.4/ for one release window. That redirect
 // lives in middleware/server config — out of scope for this
 // route file.
-import AuthGate from '../components/v09/AuthGate.svelte';
+// #728 — calm is now the default dashboard (operator-picked UX revamp,
+// replacing the rejected #709 fixed-shell). Mounts the calm root (its own
+// login gate + fetch-auth wrapper), mirroring /ux-calm/. The legacy v09
+// AuthGate tree stays reachable at /v0.9.3/; the other exploration variants
+// remain at /ux-mission|studio|mux|board/ until the operator purges them.
+import Dashboardcalm from '../components/calm/Dashboardcalm.svelte';
 import '../styles/global.css';
 ---
 <!DOCTYPE html>
@@ -57,11 +62,11 @@ import '../styles/global.css';
     <title>chepherd v0.9.4 — workspace</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
-      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #0a0a0a; }
-      body { font-family: ui-sans-serif, system-ui, sans-serif; color: #f5f5f5; }
+      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; }
     </style>
   </head>
   <body>
-    <AuthGate client:load version="v0.9.4" />
+    <Dashboardcalm client:load version="v0.9.4" />
   </body>
 </html>

@@ -286,9 +286,9 @@
 <style>
   .audit {
     padding: 1rem 1.5rem;
-    background: #0a0a0a;
-    color: #f5f5f5;
-    height: 100vh;
+    background: var(--audit-bg, #0a0a0a);
+    color: var(--audit-fg, #f5f5f5);
+    height: var(--audit-height, 100vh);
     box-sizing: border-box;
     overflow-y: auto;
     font-family: ui-sans-serif, system-ui, sans-serif;
@@ -299,7 +299,7 @@
     align-items: baseline;
     gap: 1rem;
     margin-bottom: 1rem;
-    border-bottom: 1px solid #222;
+    border-bottom: 1px solid var(--audit-border, #222);
     padding-bottom: 0.5rem;
   }
   h1 {
@@ -307,8 +307,8 @@
     margin: 0;
   }
   .scope-badge {
-    background: #2a2a2a;
-    border: 1px solid #444;
+    background: var(--audit-chip, #2a2a2a);
+    border: 1px solid var(--audit-border-strong, #444);
     border-radius: 4px;
     padding: 2px 8px;
     margin-left: 0.5rem;
@@ -318,7 +318,7 @@
   .scope-badge button {
     background: none;
     border: none;
-    color: #f88;
+    color: var(--audit-danger, #f88);
     cursor: pointer;
     margin-left: 4px;
     font-size: 1rem;
@@ -326,7 +326,7 @@
   .meta {
     display: flex;
     gap: 1rem;
-    color: #999;
+    color: var(--audit-fg-muted, #999);
     font-size: 0.85rem;
     font-family: ui-monospace, monospace;
   }
@@ -335,9 +335,9 @@
     flex-wrap: wrap;
     gap: 0.75rem;
     align-items: flex-end;
-    background: #111;
+    background: var(--audit-surface, #111);
     padding: 0.75rem;
-    border: 1px solid #222;
+    border: 1px solid var(--audit-border, #222);
     border-radius: 4px;
     margin-bottom: 1rem;
   }
@@ -345,14 +345,14 @@
     display: flex;
     flex-direction: column;
     font-size: 0.8rem;
-    color: #aaa;
+    color: var(--audit-fg-muted, #aaa);
     gap: 0.25rem;
   }
   .filters input,
   .filters select {
-    background: #1a1a1a;
-    color: #f5f5f5;
-    border: 1px solid #333;
+    background: var(--audit-input, #1a1a1a);
+    color: var(--audit-fg, #f5f5f5);
+    border: 1px solid var(--audit-border, #333);
     border-radius: 3px;
     padding: 4px 6px;
     font-family: ui-monospace, monospace;
@@ -360,21 +360,21 @@
     min-width: 8rem;
   }
   .filters button[type='submit'] {
-    background: #2a4a6a;
-    color: #fff;
-    border: 1px solid #3a5a7a;
+    background: var(--audit-accent, #2a4a6a);
+    color: var(--audit-accent-fg, #fff);
+    border: 1px solid var(--audit-accent-border, #3a5a7a);
     border-radius: 3px;
     padding: 6px 16px;
     cursor: pointer;
     font-size: 0.9rem;
   }
   .state-msg {
-    color: #999;
+    color: var(--audit-fg-muted, #999);
     padding: 0.5rem 0;
     font-style: italic;
   }
   .state-msg.error {
-    color: #f88;
+    color: var(--audit-danger, #f88);
     font-style: normal;
   }
   table {
@@ -387,19 +387,19 @@
   td {
     text-align: left;
     padding: 6px 8px;
-    border-bottom: 1px solid #222;
+    border-bottom: 1px solid var(--audit-border, #222);
   }
   th {
-    color: #aaa;
+    color: var(--audit-fg-muted, #aaa);
     font-weight: 500;
-    background: #111;
+    background: var(--audit-surface, #111);
     position: sticky;
     top: 0;
   }
   .agent-link {
     background: none;
     border: none;
-    color: #6ad;
+    color: var(--audit-link, #6ad);
     text-decoration: underline;
     cursor: pointer;
     font-family: inherit;
@@ -407,15 +407,15 @@
     padding: 0;
   }
   .status-success {
-    color: #6c6;
+    color: var(--audit-ok, #6c6);
   }
   .status-error {
-    color: #f88;
+    color: var(--audit-danger, #f88);
     font-weight: 600;
   }
   .empty {
     text-align: center;
-    color: #666;
+    color: var(--audit-fg-faint, #666);
     padding: 2rem;
   }
 </style>
