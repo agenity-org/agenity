@@ -16,8 +16,10 @@
     · Canon (#7)    → the DEFAULT / org-level canon teams inherit; per-team
                        canon is edited via Team settings (right-click a team).
     · Grants        → GET/POST /api/v1/grants, PATCH/DELETE /api/v1/grants/{id}
-    · Review axes    → GET /api/v1/reviews/{target}/  (trailing slash — bare
-                       /api/v1/reviews 301-redirects)
+    · Review axes    → GET /api/v1/reviews/{target}  (NO trailing slash after
+                       the target — the backend trims only "/api/v1/reviews/"
+                       then looks up the remainder verbatim, so a trailing
+                       slash would query "{target}/" and never match)
 
   Re-hosts v08 widgets unchanged (they already hit real endpoints); we only
   bridge calm CSS tokens. ESC closes the modal (root owns the listener).
@@ -103,7 +105,7 @@
     grantBusy = '';
   }
 
-  // ---- Review axes (trailing slash — /api/v1/reviews 301-redirects) ----
+  // ---- Review axes (NO trailing slash after target — see header note) ----
   let reviews = $state([]);
   let reviewsErr = $state('');
   let reviewTarget = $state('');
@@ -111,7 +113,7 @@
     reviewsErr = ''; reviews = [];
     if (!target) return;
     try {
-      const r = await fetch(`${API}/reviews/${encodeURIComponent(target)}/`);
+      const r = await fetch(`${API}/reviews/${encodeURIComponent(target)}`);
       if (r.ok) { const j = await r.json(); reviews = j.reviews || []; } else reviewsErr = `HTTP ${r.status}`;
     } catch (e) { reviewsErr = String(e); }
   }

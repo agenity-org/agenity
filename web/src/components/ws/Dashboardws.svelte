@@ -157,7 +157,7 @@
       sessions = s.sessions || [];
       registerRoster(
         [...sessions]
-          .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '') || a.name.localeCompare(b.name))
+          .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '') || (a.name || '').localeCompare(b.name || ''))
           .map((x) => x.name)
       );
       teams = t.teams || [];
@@ -170,7 +170,14 @@
       }
       if (!selectedAgent && sessions.length) {
         const w = sessions.find((x) => !x.exited && x.role !== 'shepherd') || sessions.find((x) => !x.exited);
-        if (w) { selectedAgent = w.name; bindFocusedTerminal(w.name, false); }
+        if (w) {
+          selectedAgent = w.name;
+          // Only bind into an EXISTING terminal pane. Never split a new
+          // terminal as a side effect of a background refresh — a
+          // terminal-less workspace (seeded "Board" / "Talk", or any
+          // operator-composed one) must stay exactly as the operator left it.
+          if (activeWs && firstTerminalLeafId(activeWs.layout)) bindFocusedTerminal(w.name, false);
+        }
       }
     } catch {}
   }
@@ -191,6 +198,27 @@
       evStream.onmessage = (e) => { try { events = [...events, JSON.parse(e.data)].slice(-200); } catch {} };
       evStream.onerror = () => { evStream?.close(); evStream = null; setTimeout(startEventStream, 3000); };
     } catch {}
+  }
+
+  // ---- live loop (single idempotent owner of polling + 401 + EventSource) ----
+  // Called from BOTH onMount's token-present branch AND doLogin success, so a
+  // first-run token login starts the roster/status/live-count polling without a
+  // hard reload. Idempotent: re-entry while already running is a no-op.
+  let pollIv = null;
+  let on401 = null;
+  function startLiveLoop() {
+    if (pollIv) return;           // already running — don't double-start
+    refresh();
+    startEventStream();
+    pollIv = setInterval(refresh, 2500);
+    on401 = () => { needLogin = true; };
+    window.addEventListener('chepherd-401', on401);
+  }
+  function stopLiveLoop() {
+    if (pollIv) { clearInterval(pollIv); pollIv = null; }
+    if (on401) { window.removeEventListener('chepherd-401', on401); on401 = null; }
+    try { evStream?.close(); } catch {}
+    evStream = null;
   }
 
   // ---------------- active-workspace layout helpers ----------------
@@ -399,13 +427,12 @@
     try { const r = await fetch(`${API}/sessions`); if (r.status === 401) { loginError = 'token rejected'; return; } }
     catch (e) { loginError = String(e); return; }
     needLogin = false; loginError = ''; loginInput = '';
-    refresh(); startEventStream();
+    startLiveLoop();
   }
   function signOut() {
     userMenuOpen = false;
     try { localStorage.removeItem('chepherd-token'); } catch {}
-    try { evStream?.close(); } catch {}
-    evStream = null;
+    stopLiveLoop();
     needLogin = true;
   }
 
@@ -487,7 +514,15 @@
     if (renamingId) { cancelRename(); return; }
     if (maximizedLeafId) { setMaxLeaf(''); return; }
   }
-  function onGlobalClick() { if (ctxMenu) ctxMenu = null; }
+  // Any click reaching the window closes the open popups. The toggle buttons +
+  // the items inside the menus all stopPropagation, so a click that bubbles
+  // this far is necessarily OUTSIDE them → dismiss the context menu AND the
+  // user / overflow menus (ESC is handled separately in onKey).
+  function onGlobalClick() {
+    if (ctxMenu) ctxMenu = null;
+    if (userMenuOpen) userMenuOpen = false;
+    if (overflowOpen) overflowOpen = false;
+  }
 
   // ---------------- responsive ----------------
   function applyResponsive() {
@@ -562,22 +597,22 @@
     window.addEventListener('keydown', onKey);
     window.addEventListener('click', onGlobalClick);
 
-    if (!getToken()) { needLogin = true; return () => cleanup(); }
-
-    refresh();
-    startEventStream();
-    const iv = setInterval(refresh, 2500);
-    const on401 = () => { needLogin = true; };
-    window.addEventListener('chepherd-401', on401);
-
+    // Single teardown for BOTH branches: always remove the chrome listeners
+    // set up above, and stop the live loop (a no-op if it never started). This
+    // closes over no later-declared consts, so the no-token branch can return
+    // it safely (no TDZ, no leaked resize/keydown/click listeners).
     function cleanup() {
-      clearInterval(iv);
-      window.removeEventListener('chepherd-401', on401);
       window.removeEventListener('resize', applyResponsive);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('click', onGlobalClick);
-      evStream?.close();
+      stopLiveLoop();
     }
+
+    // With a token present, start polling + 401 + EventSource. Without one we
+    // show the login screen; doLogin() starts the live loop on success.
+    if (getToken()) startLiveLoop();
+    else needLogin = true;
+
     return cleanup;
   });
 

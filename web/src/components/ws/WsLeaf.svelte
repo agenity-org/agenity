@@ -15,9 +15,10 @@
   Body hosts the chosen content. sessions → the agent list (replaces the old
   roster): click a row to focus its terminal, + to open in a new pane,
   right-click an agent or a team label for the settings menus; terminal →
-  live WidgetTerminal; kanban → WidgetKanban; events / mcplog → WidgetMCPLog
-  over the live event stream; tasks / mesh → live A2A inbox / federation
-  peers; transcript → TeamTranscript; inspector → CalmInspector.
+  live WidgetTerminal; kanban → WidgetKanban; events → the FULL live runtime
+  event stream (every kind/actor); mcplog → WidgetMCPLog (same stream filtered
+  to MCP-call audit kinds); tasks / mesh → live A2A inbox / federation peers;
+  transcript → TeamTranscript; inspector → CalmInspector.
 -->
 <script>
   import WidgetTerminal from '../v08/widgets/WidgetTerminal.svelte';
@@ -25,8 +26,8 @@
   import WidgetMCPLog from '../v08/widgets/WidgetMCPLog.svelte';
   import TeamTranscript from '../TeamTranscript.svelte';
   import CalmInspector from '../calm/CalmInspector.svelte';
-  import CalmRail from '../calm/CalmRail.svelte';
   import { agentIdentity } from '../../lib/agentIdentity.js';
+  import { onDestroy } from 'svelte';
   import { PANE_TYPES, paneMeta } from './layoutWs.js';
 
   let {
@@ -60,6 +61,32 @@
   let pickerOpen = $state(false);
   let widgetMenuOpen = $state(false);
 
+  // Dismiss the content-picker + agent-picker on outside-click or ESC. The
+  // menus live inside .wbtn-wrap / .picker-wrap; a click anywhere outside
+  // those (or an Escape keypress) closes whichever is open. Listeners are
+  // window-level + cheap; they early-return when nothing is open.
+  function closePickers() { pickerOpen = false; widgetMenuOpen = false; }
+  function onDocPointerDown(e) {
+    if (!pickerOpen && !widgetMenuOpen) return;
+    const el = e.target;
+    if (el && el.closest && el.closest('.wbtn-wrap, .picker-wrap')) return;
+    closePickers();
+  }
+  function onDocKeyDown(e) {
+    if (e.key === 'Escape' && (pickerOpen || widgetMenuOpen)) {
+      e.stopPropagation();   // swallow before the root's ESC-priority handler
+      closePickers();
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pointerdown', onDocPointerDown, true);
+    window.addEventListener('keydown', onDocKeyDown, true);
+    onDestroy(() => {
+      window.removeEventListener('pointerdown', onDocPointerDown, true);
+      window.removeEventListener('keydown', onDocKeyDown, true);
+    });
+  }
+
   let agentOptions = $derived(
     [...sessions].sort((a, b) => {
       const al = a.exited ? 1 : 0, bl = b.exited ? 1 : 0;
@@ -91,6 +118,20 @@
     return 'live';
   }
   function fmtTime(t) { if (!t) return ''; try { return new Date(t).toLocaleTimeString(); } catch { return String(t); } }
+
+  // ---------------- Events pane (the LIVE event stream) ----------------
+  // Distinct from the MCP Log pane: Events shows the WHOLE runtime event
+  // stream (every kind, every actor) the dashboard already polls + streams,
+  // newest first; MCP Log (WidgetMCPLog) filters that same stream down to
+  // MCP-call audit kinds. Operator can grep by kind / actor / body.
+  let evQuery = $state('');
+  let eventFeed = $derived.by(() => {
+    const f = (evQuery || '').trim().toLowerCase();
+    return (events || [])
+      .filter((e) => !f || [e.kind, e.actor, e.body].filter(Boolean).join(' ').toLowerCase().includes(f))
+      .slice(-300)
+      .reverse();
+  });
 
   // ---------------- Sessions pane (replaces the old roster) ----------------
   const API = '/api/v1';
@@ -271,7 +312,25 @@
         <div class="hollow">No agent with a linked repository. Bind a github_url-bearing agent (focus one in a Sessions pane) to see its board.</div>
       {/if}
     {:else if node.widget === 'events'}
-      <div class="widget-host"><WidgetMCPLog {events} /></div>
+      <div class="events">
+        <div class="ev-bar">
+          <input type="text" placeholder="Filter events…" bind:value={evQuery} aria-label="Filter events" onclick={(e) => e.stopPropagation()} />
+          <span class="ev-count">{eventFeed.length}</span>
+        </div>
+        <div class="ev-scroll">
+          {#each eventFeed as e, i (e.id ?? (e.at || '') + '|' + i)}
+            <div class="ev-row">
+              <span class="ev-time">{fmtTime(e.at)}</span>
+              <span class="ev-kind">{e.kind || 'event'}</span>
+              <span class="ev-actor">{e.actor || ''}</span>
+              <span class="ev-body">{e.body || ''}</span>
+            </div>
+          {/each}
+          {#if eventFeed.length === 0}
+            <div class="hollow sm">{events.length ? 'No events match.' : 'No events yet.'}</div>
+          {/if}
+        </div>
+      </div>
     {:else if node.widget === 'transcript'}
       <div class="full-host"><TeamTranscript team="all" /></div>
     {:else if node.widget === 'inspector'}
@@ -400,4 +459,19 @@
   .state-chip.completed { color: var(--calm-ok); background: color-mix(in srgb, var(--calm-ok) 15%, transparent); }
   .state-chip.working, .state-chip.submitted { color: var(--calm-accent-2); background: color-mix(in srgb, var(--calm-accent-2) 15%, transparent); }
   .state-chip.failed { color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 15%, transparent); }
+
+  /* ---- Events pane (the live runtime event stream) ---- */
+  .events { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .ev-bar { flex: 0 0 auto; padding: 0.5rem 0.55rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--calm-border); }
+  .ev-bar input { flex: 1; min-width: 0; padding: 0.38rem 0.55rem; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-border); border-radius: 6px; font-size: 0.78rem; }
+  .ev-bar input::placeholder { color: var(--calm-fg-faint); }
+  .ev-bar input:focus { outline: none; border-color: var(--calm-accent); }
+  .ev-count { font-size: 0.64rem; color: var(--calm-fg-faint); white-space: nowrap; }
+  .ev-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0.2rem 0; }
+  .ev-row { display: grid; grid-template-columns: 64px 110px 96px 1fr; gap: 0.45rem; padding: 0.2rem 0.6rem; font-size: 0.72rem; font-family: ui-monospace, monospace; border-bottom: 1px solid var(--calm-border); align-items: baseline; }
+  .ev-row:hover { background: var(--calm-chip-hover); }
+  .ev-time { color: var(--calm-fg-faint); }
+  .ev-kind { color: var(--calm-accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev-actor { color: var(--calm-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev-body { color: var(--calm-fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
