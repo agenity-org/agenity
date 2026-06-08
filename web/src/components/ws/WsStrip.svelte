@@ -23,6 +23,7 @@
     oncancelrename = () => {},
     onreorder = () => {},      // (fromIndex, toIndex)
     onctxmenu = () => {},      // (workspace, clientX, clientY)
+    onclose = () => {},        // (workspaceId) — delete that workspace
   } = $props();
 
   let dragId = $state('');
@@ -74,6 +75,18 @@
         />
       {:else}
         <span class="chip-name">{w.name}</span>
+        {#if workspaces.length > 1}
+          <button
+            class="chip-close"
+            title="Close this workspace"
+            aria-label={`Close workspace ${w.name}`}
+            onclick={(e) => { e.stopPropagation(); onclose(w.id); }}
+            onkeydown={(e) => e.stopPropagation()}
+            ondblclick={(e) => e.stopPropagation()}
+            onmousedown={(e) => e.stopPropagation()}
+            draggable="false"
+          >✕</button>
+        {/if}
       {/if}
     </div>
   {/each}
@@ -117,6 +130,22 @@
   .chip.active .chip-num { color: var(--calm-accent); border-color: color-mix(in srgb, var(--calm-accent) 40%, var(--calm-border)); }
   .chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .chip-rename { flex: 1; min-width: 0; width: 100%; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-accent); border-radius: 5px; font: inherit; font-size: 0.76rem; padding: 0.05rem 0.3rem; }
+
+  /* Browser-style close ✕: hidden until tab hover or active, then a small
+     clickable target on the right. Never closes the last remaining tab
+     (button isn't rendered when only one workspace exists). */
+  .chip-close {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; margin-left: 0.1rem; padding: 0;
+    background: transparent; border: 0; border-radius: 4px;
+    color: var(--calm-fg-faint); cursor: pointer; font-size: 0.7rem; line-height: 1;
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  }
+  .chip:hover .chip-close,
+  .chip.active .chip-close,
+  .chip-close:focus-visible { opacity: 1; visibility: visible; }
+  .chip-close:hover { background: var(--calm-chip-hover); color: var(--calm-fg); }
 
   .strip-add { width: 28px; height: 28px; flex: 0 0 auto; align-self: center; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px dashed var(--calm-border-strong); color: var(--calm-fg-muted); border-radius: 8px; cursor: pointer; font-size: 0.9rem; margin-left: 0.2rem; }
   .strip-add:hover { color: var(--calm-accent); border-color: var(--calm-accent); }

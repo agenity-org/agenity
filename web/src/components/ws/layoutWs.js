@@ -50,6 +50,18 @@ export function paneMeta(widget) {
   return PANE_TYPES.find((p) => p.id === widget) || PANE_TYPES[0];
 }
 
+// ---------------- shared layout constants ----------------
+// SESSIONS_W is the FIXED pixel width of the left Sessions pane in EVERY
+// seed (Work, Overview, Conversation) so it reads identically tab-to-tab
+// (#3/#4 — operator-reported "Sessions width varies per tab"). It's a
+// pixel constant, not a ratio, because ratios scale with the viewport and
+// therefore differ between a 16%-Work-split and a 24%-Conversation-split.
+// AGENT_DETAILS_W is the matching fixed width for the right Agent-Details
+// rail. Splits carrying `fixed:'a'|'b'` + `fixedPx` render that side at a
+// fixed px width (the other side flexes) — see WsPane.
+export const SESSIONS_W = 260;
+export const AGENT_DETAILS_W = 340;
+
 // ---------------- tree constructors ----------------
 export function leaf(widget = 'terminal', config = {}) {
   return { kind: 'leaf', id: nextId('leaf'), widget, config };
@@ -57,9 +69,33 @@ export function leaf(widget = 'terminal', config = {}) {
 export function hsplit(a, b, ratio = 0.5) { return { kind: 'h', id: nextId('split'), a, b, ratio }; }
 export function vsplit(a, b, ratio = 0.5) { return { kind: 'v', id: nextId('split'), a, b, ratio }; }
 
+// fixedSplit makes ONE side a fixed pixel width (the other flexes to fill).
+// `which` is 'a' or 'b' — the fixed side. Used for the Sessions / Agent-
+// Details rails so they're pixel-identical across every workspace tab. The
+// kind is always 'h' (left/right rails). ratio is retained as a sane
+// fallback if a consumer ignores the fixed hint.
+export function fixedSplit(a, b, which, px) {
+  return { kind: 'h', id: nextId('split'), a, b, ratio: which === 'a' ? 0.2 : 0.8, fixed: which, fixedPx: px };
+}
+
+// gridOf tiles 1..4 terminal leaves in a BALANCED grid (the auto-opened
+// live-agent terminals for the Work view, #3). 1→single, 2→side-by-side,
+// 3→one-over-a-pair, 4→2×2. Each config carries the agent name (or {} when
+// no agent is available so the pane still renders its "pick agent" state).
+export function gridOf(configs) {
+  const c = (configs && configs.length) ? configs : [{}];
+  const L = (cfg) => leaf('terminal', cfg || {});
+  if (c.length === 1) return L(c[0]);
+  if (c.length === 2) return hsplit(L(c[0]), L(c[1]), 0.5);
+  if (c.length === 3) return vsplit(hsplit(L(c[0]), L(c[1]), 0.5), L(c[2]), 0.5);
+  // 4 (and any overflow, capped by the caller) → 2×2.
+  return vsplit(hsplit(L(c[0]), L(c[1]), 0.5), hsplit(L(c[2]), L(c[3]), 0.5), 0.5);
+}
+
 // A fresh workspace leads with a Sessions pane beside a terminal so the
 // operator can immediately reach agents (no fixed roster exists anymore).
-export function defaultLayout() { return hsplit(leaf('sessions', {}), leaf('terminal', {}), 0.24); }
+// The Sessions rail is the shared fixed width.
+export function defaultLayout() { return fixedSplit(leaf('sessions', {}), leaf('terminal', {}), 'a', SESSIONS_W); }
 
 // ---------------- tree algebra (immutable rebuilds → $state fires) ----
 export function leaves(node, out = []) {
@@ -87,6 +123,18 @@ export function splitLeaf(tree, leafId, dir, newWidget = 'terminal', newConfig =
     return { ...node, a: rec(node.a), b: rec(node.b) };
   }
   return { tree: rec(tree), newId: fresh.id };
+}
+
+// replaceLeaf swaps the leaf with `leafId` for an arbitrary subtree
+// (`subtree`). Used to graft the auto-opened terminal grid in place of the
+// Work seed's placeholder terminal (#3). Immutable rebuild.
+export function replaceLeaf(tree, leafId, subtree) {
+  function rec(node) {
+    if (!node) return node;
+    if (node.kind === 'leaf') return node.id === leafId ? subtree : node;
+    return { ...node, a: rec(node.a), b: rec(node.b) };
+  }
+  return rec(tree);
 }
 
 export function removeLeaf(tree, leafId) {
@@ -133,6 +181,17 @@ export function setSplitRatio(tree, splitId, ratio) {
   }
   return rec(tree);
 }
+// setSplitFixedPx updates the pixel width of a fixed-rail split (the value
+// set by dragging a fixed-rail divider). Clamped to a sane range.
+export function setSplitFixedPx(tree, splitId, px) {
+  const p = Math.max(140, Math.min(640, px));
+  function rec(node) {
+    if (!node || node.kind === 'leaf') return node;
+    if (node.id === splitId && (node.fixed === 'a' || node.fixed === 'b')) return { ...node, fixedPx: p };
+    return { ...node, a: rec(node.a), b: rec(node.b) };
+  }
+  return rec(tree);
+}
 
 export function parentOf(tree, leafId) {
   function rec(node) {
@@ -154,6 +213,18 @@ export function collapseLeaf(tree, leafId, makeSmall) {
   function rec(node) {
     if (!node || node.kind === 'leaf') return node;
     if (node.id === split.id) {
+      // Fixed-px rail: collapse/expand by toggling the pixel width of the
+      // fixed side (the renderer ignores ratio for fixed splits, so driving
+      // ratio alone would do nothing). Only the FIXED side collapses.
+      if (node.fixed === 'a' || node.fixed === 'b') {
+        if (side !== node.fixed) return node;   // flex side can't collapse a rail
+        if (makeSmall) {
+          return { ...node, fixedPx: 12, _prevFixedPx: typeof node.fixedPx === 'number' ? node.fixedPx : 260 };
+        }
+        const prevPx = typeof node._prevFixedPx === 'number' ? node._prevFixedPx : 260;
+        const { _prevFixedPx, ...rest } = node;
+        return { ...rest, fixedPx: prevPx };
+      }
       if (makeSmall) {
         const ratio = side === 'a' ? 0.04 : 0.96;
         return { ...node, ratio, _prevRatio: node.ratio ?? 0.5 };
@@ -169,6 +240,10 @@ export function collapseLeaf(tree, leafId, makeSmall) {
 }
 export function collapsedSide(split) {
   if (!split || split.kind === 'leaf') return '';
+  // Fixed-px rail: collapsed when the fixed side is driven to its sliver px.
+  if (split.fixed === 'a' || split.fixed === 'b') {
+    return (typeof split.fixedPx === 'number' && split.fixedPx <= 20) ? split.fixed : '';
+  }
   const r = split.ratio ?? 0.5;
   if (r <= 0.06) return 'a';
   if (r >= 0.94) return 'b';
@@ -188,9 +263,20 @@ export function sanitizeNode(node) {
     if (!a && !b) return null;
     if (!a) return b;
     if (!b) return a;
-    const ratio = typeof node.ratio === 'number' ? node.ratio : 0.5;
+    // Clamp the ratio away from the degenerate extremes (0 / 1 / NaN /
+    // negative) that would render ONE side at zero size → the "View is empty
+    // / unreadable" / blank-pane bug (#3). The [0.02,0.98] band still
+    // preserves the deliberate 0.04/0.96 collapse values.
+    let ratio = typeof node.ratio === 'number' && isFinite(node.ratio) ? node.ratio : 0.5;
+    ratio = Math.max(0.02, Math.min(0.98, ratio));
     const out = { kind: node.kind, id: typeof node.id === 'string' ? node.id : nextId('split'), a, b, ratio };
     if (typeof node._prevRatio === 'number') out._prevRatio = node._prevRatio;
+    // Preserve the fixed-pixel rail hint across persistence loads so the
+    // Sessions / Agent-Details widths survive a reload (#3/#4).
+    if ((node.fixed === 'a' || node.fixed === 'b') && typeof node.fixedPx === 'number') {
+      out.fixed = node.fixed; out.fixedPx = node.fixedPx;
+      if (typeof node._prevFixedPx === 'number') out._prevFixedPx = node._prevFixedPx;
+    }
     return out;
   }
   return null;
@@ -213,7 +299,11 @@ export function cloneTreeFreshIds(node) {
     if (!a) return b;
     if (!b) return a;
     const ratio = typeof node.ratio === 'number' ? node.ratio : 0.5;
-    return { kind: node.kind, id: nextId('split'), a, b, ratio };
+    const out = { kind: node.kind, id: nextId('split'), a, b, ratio };
+    if ((node.fixed === 'a' || node.fixed === 'b') && typeof node.fixedPx === 'number') {
+      out.fixed = node.fixed; out.fixedPx = node.fixedPx;
+    }
+    return out;
   }
   return defaultLayout();
 }
@@ -236,25 +326,40 @@ export function seedWorkspaces() {
     {
       id: nextId('ws'),
       name: 'Work',
-      layout: hsplit(
+      // Sessions(fixed 260px) | terminals-grid (auto-filled with up to 4
+      // live-agent terminals, #3) | Agent Details(fixed 340px). Both rails
+      // are FIXED px so they're identical across tabs. The centre starts as
+      // a single terminal carrying `autoTerminals:'work'` so the dashboard
+      // can replace it with the live-agent grid once sessions load.
+      layout: fixedSplit(
         leaf('sessions', {}),
-        hsplit(leaf('terminal', {}), leaf('inspector', {}), 0.738),
-        0.16,
+        fixedSplit(
+          leaf('terminal', { autoTerminals: 'work' }),
+          leaf('inspector', {}),
+          'b', AGENT_DETAILS_W,
+        ),
+        'a', SESSIONS_W,
       ),
     },
     {
       id: nextId('ws'),
       name: 'Overview',
-      layout: hsplit(
+      layout: fixedSplit(
         leaf('sessions', {}),
         hsplit(leaf('kanban', {}), leaf('events', {}), 0.6),
-        0.18,
+        'a', SESSIONS_W,
       ),
     },
     {
       id: nextId('ws'),
       name: 'Conversation',
-      layout: hsplit(leaf('transcript', {}), leaf('inspector', {}), 0.76),
+      // Conversation gets the SAME fixed Sessions rail as Work (#4), then a
+      // large Transcript with an Agent-Details rail on the right.
+      layout: fixedSplit(
+        leaf('sessions', {}),
+        fixedSplit(leaf('transcript', {}), leaf('inspector', {}), 'b', AGENT_DETAILS_W),
+        'a', SESSIONS_W,
+      ),
     },
   ];
 }
@@ -263,15 +368,24 @@ export function seedWorkspaces() {
 // Keyed so the data survives reloads. We persist the full workspace list,
 // the active index, and per-workspace focus/maximize hints.
 //
-// v3: the global first-run default changed (Work = Sessions|Terminal|Agent
-// Details; Overview; Conversation). Bumping the key re-seeds operators who
-// still carry an UNTOUCHED v2 seed, while operators who CUSTOMISED their v2
-// layout keep it (migrated forward) — see loadWorkspaces' v2 fallback. v2
-// itself re-seeded v1 operators (roster → Sessions pane).
-const STORE_KEY = 'ws-workspaces-v3';
-const ACTIVE_KEY = 'ws-active-v3';
+// v4: fixed-pixel Sessions / Agent-Details rails + auto-4-terminal Work seed
+// (#3/#4). Bumping the key re-seeds operators who still carry an UNTOUCHED
+// v3 seed, while operators who CUSTOMISED their v3 layout keep it (migrated
+// forward) — see loadWorkspaces' v3 fallback. v3 re-seeded v2 (Work three-
+// way split); v2 re-seeded v1 (roster → Sessions pane).
+const STORE_KEY = 'ws-workspaces-v4';
+const ACTIVE_KEY = 'ws-active-v4';
+const STORE_KEY_V3 = 'ws-workspaces-v3';
+const ACTIVE_KEY_V3 = 'ws-active-v3';
 const STORE_KEY_V2 = 'ws-workspaces-v2';
 const ACTIVE_KEY_V2 = 'ws-active-v2';
+
+// DEFAULT_VIEW_KEY persists the NAME of a saved view the operator marked as
+// their startup default (#3). When set + that view loads cleanly it takes
+// precedence over the hardcoded seeds on first paint.
+const DEFAULT_VIEW_KEY = 'ws-default-view-v4';
+export function loadDefaultViewName() { try { return localStorage.getItem(DEFAULT_VIEW_KEY) || ''; } catch { return ''; } }
+export function saveDefaultViewName(name) { try { if (name) localStorage.setItem(DEFAULT_VIEW_KEY, name); else localStorage.removeItem(DEFAULT_VIEW_KEY); } catch {} }
 
 // Structural fingerprint of a tree, id-independent: pane types + split axes +
 // rounded ratios. Lets us tell a PRISTINE old seed (re-seed it) from a layout
@@ -280,7 +394,8 @@ function fingerprint(node) {
   if (!node || typeof node !== 'object') return '∅';
   if (node.kind === 'leaf') return `L:${node.widget}`;
   const r = Math.round((typeof node.ratio === 'number' ? node.ratio : 0.5) * 100);
-  return `${node.kind}(${r},${fingerprint(node.a)},${fingerprint(node.b)})`;
+  const fx = (node.fixed === 'a' || node.fixed === 'b') ? `${node.fixed}${node.fixedPx || ''}` : '';
+  return `${node.kind}${fx}(${r},${fingerprint(node.a)},${fingerprint(node.b)})`;
 }
 function workspacesFingerprint(list) {
   if (!Array.isArray(list)) return '';
@@ -296,6 +411,17 @@ function v2SeedFingerprint() {
     { name: 'Talk',  layout: hsplit(leaf('sessions', {}), leaf('transcript', {}), 0.22) },
   ];
   return workspacesFingerprint(v2);
+}
+// The exact v3 pristine seed (Work three-way / Overview / Conversation, all
+// ratio-based, no fixed rails). A stored v3 list matching this was never
+// customised → safe to re-seed to v4.
+function v3SeedFingerprint() {
+  const v3 = [
+    { name: 'Work',         layout: hsplit(leaf('sessions', {}), hsplit(leaf('terminal', {}), leaf('inspector', {}), 0.738), 0.16) },
+    { name: 'Overview',     layout: hsplit(leaf('sessions', {}), hsplit(leaf('kanban', {}), leaf('events', {}), 0.6), 0.18) },
+    { name: 'Conversation', layout: hsplit(leaf('transcript', {}), leaf('inspector', {}), 0.76) },
+  ];
+  return workspacesFingerprint(v3);
 }
 
 function parseStored(raw) {
@@ -321,25 +447,41 @@ function parseStored(raw) {
 // names defaulted. Returns null when the input isn't a usable list. Shared so
 // server-loaded named views go through the exact same algebra as local ones.
 export function sanitizeWorkspaceList(list) {
-  if (!Array.isArray(list)) return null;
+  // Accept the canonical array shape AND tolerate two legacy/edge shapes a
+  // saved-view blob can take so a loaded view ALWAYS renders (#3 empty-view
+  // fix): an object wrapper `{workspaces:[…]}` and a single workspace object
+  // `{id,name,layout}`. Anything else → null (caller flashes + keeps current).
+  if (list && !Array.isArray(list) && typeof list === 'object') {
+    if (Array.isArray(list.workspaces)) list = list.workspaces;
+    else if (list.layout || list.name) list = [list];
+  }
+  if (!Array.isArray(list) || list.length === 0) return null;
   return parseStored(JSON.stringify(list));
 }
 
 export function loadWorkspaces() {
   try {
-    // Post-migration users: just load v3 (custom or freshly-seeded alike).
-    const v3 = localStorage.getItem(STORE_KEY);
-    if (v3) return parseStored(v3);
+    // Post-migration users: just load v4 (custom or freshly-seeded alike).
+    const v4 = localStorage.getItem(STORE_KEY);
+    if (v4) return parseStored(v4);
 
-    // No v3 yet. Look at the legacy v2 store to decide migrate-vs-reseed.
+    // No v4 yet. Try v3, then v2, deciding migrate-vs-reseed at each step.
+    const v3raw = localStorage.getItem(STORE_KEY_V3);
+    if (v3raw) {
+      const v3list = parseStored(v3raw);
+      if (!v3list) return null;                                // unparseable → seed v4
+      if (workspacesFingerprint(v3list) === v3SeedFingerprint()) return null; // pristine v3 → re-seed v4
+      return v3list;                                           // customised v3 → migrate forward
+    }
+
+    // No v3 either. Look at the legacy v2 store.
     const v2raw = localStorage.getItem(STORE_KEY_V2);
-    if (!v2raw) return null;                 // brand-new user → seed v3
+    if (!v2raw) return null;                 // brand-new user → seed v4
     const v2list = parseStored(v2raw);
-    if (!v2list) return null;                // unparseable → seed v3
-    // Untouched v2 default → discard, return null so the caller seeds v3.
+    if (!v2list) return null;                // unparseable → seed v4
+    // Untouched v2 default → discard, return null so the caller seeds v4.
     if (workspacesFingerprint(v2list) === v2SeedFingerprint()) return null;
-    // Customised v2 layout → migrate it forward (it persists under v3 on the
-    // next save). The operator keeps their desktops.
+    // Customised v2 layout → migrate it forward (persists under v4 on next save).
     return v2list;
   } catch { return null; }
 }
@@ -352,7 +494,7 @@ export function saveWorkspaces(workspaces) {
 }
 
 export function loadActiveId() {
-  try { return localStorage.getItem(ACTIVE_KEY) || localStorage.getItem(ACTIVE_KEY_V2) || ''; } catch { return ''; }
+  try { return localStorage.getItem(ACTIVE_KEY) || localStorage.getItem(ACTIVE_KEY_V3) || localStorage.getItem(ACTIVE_KEY_V2) || ''; } catch { return ''; }
 }
 export function saveActiveId(id) {
   try { localStorage.setItem(ACTIVE_KEY, id || ''); } catch {}
