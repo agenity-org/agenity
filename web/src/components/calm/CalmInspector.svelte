@@ -6,7 +6,6 @@
 <script>
   import { agentIdentity } from '../../lib/agentIdentity.js';
   import WidgetSpider from '../v08/widgets/WidgetSpider.svelte';
-  import WidgetAgentPrompt from '../v08/widgets/WidgetAgentPrompt.svelte';
 
   let { boundSession = null, sessions = [] } = $props();
 
@@ -15,8 +14,9 @@
   let actionError = $state('');
   let handoffOpen = $state(false);
   let handoffTarget = $state('');
-  let spiderOpen = $state(false);
-  let promptOpen = $state(false);
+  // Scorecard radar starts EXPANDED so the radar is visible without a click
+  // (#2). Still collapsible via its toggle.
+  let spiderOpen = $state(true);
 
   let s = $derived(boundSession);
   let id = $derived(s ? agentIdentity(s) : null);
@@ -149,7 +149,7 @@
 </script>
 
 <div class="inspector">
-  <div class="panel-head">Agent Details</div>
+  <div class="panel-head">Details</div>
   {#if !s}
     <div class="empty">
       <div class="empty-glyph">◉</div>
@@ -230,22 +230,15 @@
 
     {#if actionError}<div class="err">{actionError}</div>{/if}
 
-    <!-- Expandable operator surfaces for THIS agent: full scorecard radar
-         + a live prompt editor. Both hit the real endpoints (WidgetSpider
-         reads the scorecard; WidgetAgentPrompt POSTs poke-prompt). -->
+    <!-- Expandable operator surface for THIS agent: the full scorecard radar
+         (WidgetSpider reads the live scorecard). Default-expanded (#2). The
+         former Prompt editor lives in Settings, not here (#3). -->
     <div class="more">
       <button class="more-tog {spiderOpen ? 'on' : ''}" onclick={() => (spiderOpen = !spiderOpen)}>
         <span>Scorecard radar</span><span class="chev">{spiderOpen ? '▾' : '▸'}</span>
       </button>
       {#if spiderOpen}
         <div class="more-body spider"><WidgetSpider selectedAgent={s.name} {sessions} /></div>
-      {/if}
-
-      <button class="more-tog {promptOpen ? 'on' : ''}" onclick={() => (promptOpen = !promptOpen)}>
-        <span>Prompt</span><span class="chev">{promptOpen ? '▾' : '▸'}</span>
-      </button>
-      {#if promptOpen}
-        <div class="more-body prompt"><WidgetAgentPrompt agent={s} /></div>
       {/if}
     </div>
 
@@ -319,6 +312,4 @@
   .more-tog.on { color: var(--calm-fg); border-color: var(--calm-border-strong); }
   .more-tog .chev { color: var(--calm-fg-faint); }
   .more-body { border: 1px solid var(--calm-border); border-radius: 6px; overflow: hidden; background: var(--calm-surface-2); }
-  .more-body.prompt { height: 320px; display: flex; flex-direction: column; }
-  .more-body.prompt > :global(*) { flex: 1; min-height: 0; }
 </style>

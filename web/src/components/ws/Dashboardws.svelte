@@ -200,12 +200,13 @@
           selectedAgent = w.name;
           // Only bind into an EXISTING terminal pane. Never split a new
           // terminal as a side effect of a background refresh — a
-          // terminal-less workspace (seeded "Board" / "Talk", or any
-          // operator-composed one) must stay exactly as the operator left it.
-          // SKIP when the active Work view still holds an auto-terminal
-          // placeholder — the auto-fill effect (#3) will populate the grid
-          // with up to 4 agent terminals; binding here would clobber the tag.
-          if (activeWs && firstTerminalLeafId(activeWs.layout) && !findAutoWorkLeaf(activeWs.layout)) bindFocusedTerminal(w.name, false);
+          // terminal-less workspace (seeded "Overview", or any operator-
+          // composed one) must stay exactly as the operator left it.
+          // SKIP when the active workspace has an AUTO-managed terminal region
+          // that the operator hasn't taken over (#4) — syncAutoTerminalRegions
+          // owns the bindings there; binding here would race it.
+          const autoManaged = activeWs && !activeWs.workManual && !!T.findAutoRegionSplit(activeWs.layout);
+          if (activeWs && firstTerminalLeafId(activeWs.layout) && !autoManaged) bindFocusedTerminal(w.name, false);
         }
       }
     } catch {}
@@ -307,14 +308,20 @@
   function firstTerminalLeafId(layout) { const tl = T.leaves(layout).find((l) => l.widget === 'terminal'); return tl ? tl.id : ''; }
   function ensureFocusedLeaf(layout) { const all = T.leaves(layout); if (!all.find((l) => l.id === focusedLeafId)) setFocusedLeaf(all[0]?.id || ''); }
 
-  // ---- auto-open up to 4 live-agent terminals in the Work view (#3) ----
-  // The Work seed carries ONE terminal leaf tagged config.autoTerminals='work'
-  // as a placeholder. Once sessions load, replace that placeholder with a
-  // balanced grid of up-to-4 live, non-shepherd agent terminals (one per
-  // agent), so the Work tab opens MANY live terminals tiled — not a single
-  // focused one. Runs once per workspace (the tag is consumed on fill).
-  let autoFilledWork = $state({});   // workspaceId -> true once filled
+  // ---- DYNAMIC count-driven terminal region in the Work view (#4) ----
+  // The Work seed's centre column is an AUTO-managed region (its parent split
+  // carries autoRegion==='work', see layoutWs). The dashboard reactively
+  // rebuilds that region into a balanced grid of up-to-4 live, non-shepherd
+  // agent terminals — ONE pane per live agent, capped at 4 — as the roster
+  // changes:  0 agents → 1 empty "no agent yet" pane; 1→1; 2→2; 3→3; 4→4;
+  // 5+ → first 4. Each pane is auto-bound to a distinct agent. The instant the
+  // operator manually edits the Work layout (split / close / rebind / change a
+  // pane's widget) we set the per-workspace `workManual` flag and stop touching
+  // the region, so we never clobber their arrangement. The Sessions (left) and
+  // Details (right) rails are OUTSIDE the region and are never auto-managed.
 
+  // Up-to-4 live non-shepherd agent names, oldest-first (stable ordering so a
+  // given pane stays bound to the same agent across refreshes).
   function liveWorkAgents() {
     return sessions
       .filter((s) => !s.exited && s.live !== false && s.role !== 'shepherd')
@@ -323,29 +330,55 @@
       .map((s) => s.name);
   }
 
-  // Find a terminal leaf tagged autoTerminals==='work' anywhere in the tree.
-  function findAutoWorkLeaf(node) {
-    return T.leaves(node).find((l) => l.widget === 'terminal' && l.config?.autoTerminals === 'work') || null;
+  // The ordered list of agent names currently bound in a region subtree (its
+  // terminal leaves, left-to-right / top-to-bottom). Used to detect whether the
+  // region already matches the desired roster so we only rebuild on a real
+  // change (avoids churning node ids — and the operator's focus — every poll).
+  function regionAgentNames(node) {
+    return T.leaves(node).filter((l) => l.widget === 'terminal').map((l) => l.config?.agent || '');
   }
 
-  function maybeAutoFillWorkTerminals() {
+  // Mark a workspace's Work region as operator-managed: stop auto-filling it.
+  // Idempotent. Called from every explicit layout-editing handler below.
+  function markWorkManual(wsId) {
+    if (!wsId) return;
+    const w = workspaces.find((x) => x.id === wsId);
+    if (!w || w.workManual) return;
+    if (!T.findAutoRegionSplit(w.layout)) return;   // nothing auto-managed here
+    workspaces = workspaces.map((x) => (x.id === wsId ? { ...x, workManual: true } : x));
+  }
+
+  // Reactively reconcile every auto-region with the live roster. Builds the
+  // balanced grid for max(1, count≤4) agents and grafts it into the region's
+  // `a` child — but ONLY when the bound set actually differs, and never on a
+  // workspace the operator has taken manual control of.
+  function syncAutoTerminalRegions() {
     if (!persistReady) return;
+    const names = liveWorkAgents();                 // 0..4 live agents
     for (const w of workspaces) {
-      if (autoFilledWork[w.id]) continue;
-      const placeholder = findAutoWorkLeaf(w.layout);
-      if (!placeholder) { autoFilledWork = { ...autoFilledWork, [w.id]: true }; continue; }
-      const names = liveWorkAgents();
-      if (!names.length) continue;   // wait for at least one live agent
-      // Build the grid (1..4) and graft it in place of the placeholder leaf.
-      const grid = T.gridOf(names.map((n) => ({ agent: n })));
-      const nextLayout = T.replaceLeaf(w.layout, placeholder.id, grid);
+      if (w.workManual) continue;                   // operator owns this layout
+      const region = T.findAutoRegionSplit(w.layout);
+      if (!region) continue;                        // not a Work-style desktop
+      const have = regionAgentNames(region.a);
+      const want = names.slice();                   // [] when no agents
+      // Already in sync (same count + same bindings, in order)? Skip — don't
+      // churn ids/focus. The empty case: have===[''] (one unbound terminal),
+      // want===[] → rebuild to one empty pane only if not already a lone empty.
+      const wantBound = want;                       // bound terminals we want
+      const haveBound = have.filter(Boolean);       // currently-bound terminals
+      const sameCount = (want.length ? want.length : 1) === have.length;
+      const sameBindings = wantBound.length === haveBound.length
+        && wantBound.every((n, i) => n === haveBound[i]);
+      if (sameCount && sameBindings) continue;
+      const grid = T.gridOf(want.map((n) => ({ agent: n })));   // [] → one empty pane
+      const nextLayout = T.setAutoRegionChild(w.layout, grid);
       workspaces = workspaces.map((x) => (x.id === w.id ? { ...x, layout: nextLayout } : x));
-      autoFilledWork = { ...autoFilledWork, [w.id]: true };
-      // Seed focus to the first terminal of the new grid for this workspace.
-      const firstTermId = firstTerminalLeafId(nextLayout);
-      if (firstTermId) {
-        wsFocus = { ...wsFocus, [w.id]: firstTermId };
-        for (const n of names) pushTermMru(w.id, firstTermId);
+      // Keep focus valid: if the focused leaf vanished in the rebuild, move
+      // focus to the first terminal of the fresh grid.
+      const focused = wsFocus[w.id];
+      if (!focused || !T.findLeaf(nextLayout, focused)) {
+        const firstTermId = firstTerminalLeafId(nextLayout);
+        if (firstTermId) { wsFocus = { ...wsFocus, [w.id]: firstTermId }; pushTermMru(w.id, firstTermId); }
       }
     }
   }
@@ -353,6 +386,9 @@
   function selectAgent(name) {
     selectedAgent = name;
     pushMRU(name);
+    // Clicking a Sessions row to (re)bind a terminal is a manual override of
+    // the auto-managed region → stop auto-filling this Work view (#4).
+    markWorkManual(activeWs?.id);
     bindFocusedTerminal(name, true);
   }
 
@@ -401,6 +437,7 @@
 
   function openAgentInNewPane(name) {
     if (!activeWs) return;
+    markWorkManual(activeWs.id);   // explicit new pane = manual layout (#4)
     let layout = activeWs.layout;
     const base = wsFocus[activeWs.id] || T.leaves(layout)[0]?.id;
     if (!base) {
@@ -425,6 +462,7 @@
   function onSetRatio(splitId, ratio) { setCurLayout(T.setSplitRatio(curLayout(), splitId, ratio)); }
   function onSetFixed(splitId, px) { setCurLayout(T.setSplitFixedPx(curLayout(), splitId, px)); }
   function onSplit(leafId, dir) {
+    markWorkManual(activeWs?.id);   // manual split → stop auto-managing (#4)
     const cur = T.findLeaf(curLayout(), leafId);
     const cfg = cur?.widget === 'terminal' ? { agent: cur.config?.agent || selectedAgent } : {};
     const { tree, newId } = T.splitLeaf(curLayout(), leafId, dir, 'terminal', cfg);
@@ -432,16 +470,19 @@
   }
   function onCloseLeaf(leafId) {
     if (T.countLeaves(curLayout()) <= 1) { flash('At least one pane stays open'); return; }
+    markWorkManual(activeWs?.id);   // manual close → stop auto-managing (#4)
     if (maximizedLeafId === leafId) setMaxLeaf('');
     const next = T.removeLeaf(curLayout(), leafId);
     setCurLayout(next);
     if (!T.findLeaf(next, focusedLeafId)) setFocusedLeaf(T.leaves(next)[0]?.id || '');
   }
   function onSetAgent(leafId, name) {
+    markWorkManual(activeWs?.id);   // manual rebind → stop auto-managing (#4)
     setCurLayout(T.setLeafConfig(curLayout(), leafId, { agent: name }));
     setFocusedLeaf(leafId); selectedAgent = name; pushMRU(name);
   }
   function onSetWidget(leafId, widget) {
+    markWorkManual(activeWs?.id);   // manual widget change → stop auto-managing (#4)
     const cfg = widget === 'terminal' ? { agent: selectedAgent } : {};
     setCurLayout(T.setLeafWidget(curLayout(), leafId, widget, cfg));
     setFocusedLeaf(leafId);
@@ -530,7 +571,7 @@
   // Snapshot the live `workspaces` array (the full set) so the server stores
   // exactly what loadWorkspaces consumes — same {id,name,layout} shape.
   function viewSnapshot() {
-    return workspaces.map((w) => ({ id: w.id, name: w.name, layout: w.layout }));
+    return workspaces.map((w) => ({ id: w.id, name: w.name, layout: w.layout, ...(w.workManual ? { workManual: true } : {}) }));
   }
   async function loadSavedViewNames() {
     try {
@@ -921,7 +962,9 @@
   // initial load completes, so we never clobber stored data on first paint).
   $effect(() => {
     if (!persistReady) return;
-    const snap = workspaces.map((w) => ({ id: w.id, name: w.name, layout: w.layout }));
+    // Persist the manual flag too so an operator-owned Work layout stays
+    // operator-owned (no auto-fill resurrection) across reloads (#4).
+    const snap = workspaces.map((w) => ({ id: w.id, name: w.name, layout: w.layout, ...(w.workManual ? { workManual: true } : {}) }));
     T.saveWorkspaces(snap);
   });
   $effect(() => {
@@ -929,13 +972,23 @@
     T.saveActiveId(activeId);
   });
 
-  // Auto-fill the Work view's terminal grid once live agents are known (#3).
-  // Reacts to `sessions` so it fires on the first poll that returns agents.
+  // Keep the Work view's terminal region in sync with the live roster (#4).
+  // Reacts to the roster (count AND identities) and to new workspaces, so it
+  // grows 1→2→3→4 panes as a team spins up and rebinds when agents change —
+  // until the operator takes manual control (workManual). Re-runs whenever the
+  // set of live non-shepherd agent names changes, not just the count.
+  let liveWorkKey = $derived(
+    sessions
+      .filter((s) => !s.exited && s.live !== false && s.role !== 'shepherd')
+      .map((s) => s.name)
+      .sort()
+      .join('')
+  );
   $effect(() => {
     if (!persistReady) return;
-    // Touch sessions so this effect re-runs when the roster changes.
-    void sessions.length;
-    maybeAutoFillWorkTerminals();
+    void liveWorkKey;          // re-run when the live-agent set changes
+    void workspaces.length;    // …and when a workspace is added/duplicated
+    syncAutoTerminalRegions();
   });
 
   // Poll mesh/tasks only while a pane of that type exists.
