@@ -21,6 +21,73 @@
   let s = $derived(boundSession);
   let id = $derived(s ? agentIdentity(s) : null);
 
+  // Repo URL for THIS agent. Prefer an explicit session field; otherwise
+  // decode it from the cwd workspace path.
+  //
+  // chepherd's server.go sanitizeID() builds the workspace dir name from the
+  // clone URL by replacing EVERY non-[A-Za-z0-9-_] rune with a single '-'.
+  // So ':' '/' and '.' all collapse to '-', e.g.
+  //   https://github.com/ping-cash/ping-cash.git
+  //     → https---github-com-ping-cash-ping-cash-git
+  // We recover the scheme + host (host labels are known providers, so the
+  // dots are unambiguous) and rebuild the owner/repo path:
+  //   .../workspaces/https---github-com-ping-cash-ping-cash-git
+  //     → https://github.com/ping-cash/ping-cash
+  // Owner/repo names that themselves contain '-' (e.g. ping-cash) survive
+  // because we split the path into exactly two segments — owner = everything
+  // up to the last path slash, repo = the final segment — using the known
+  // provider host as the anchor. Returns '' when nothing usable can be
+  // derived (caller hides the row rather than show a broken link).
+  const KNOWN_HOSTS = [
+    'github.com', 'gitlab.com', 'bitbucket.org', 'codeberg.org',
+    'gitea.com', 'sr.ht', 'dev.azure.com',
+  ];
+  function decodeRepoFromCwd(cwd) {
+    if (!cwd || typeof cwd !== 'string') return '';
+    const seg = cwd.split('/').filter(Boolean).pop() || '';
+    // scheme is the first dash-group; the ':' '/' '/' became '---'.
+    const m = seg.match(/^(https?|git|ssh)---(.+)$/);
+    if (!m) return '';
+    const scheme = m[1] === 'http' ? 'https' : m[1];
+    let rest = m[2].replace(/-git$/, '');   // drop encoded ".git"
+    // Anchor on a known host: its dotted labels are encoded as dash-joined
+    // labels (github.com → github-com), so match that prefix and take the
+    // remainder as the path. This sidesteps the host '.'-vs-'/' ambiguity.
+    for (const host of KNOWN_HOSTS) {
+      const enc = host.replace(/[^A-Za-z0-9-_]/g, '-');   // github.com → github-com
+      const prefix = enc + '-';                            // path begins after host '-'
+      if (rest === enc) return `${scheme}://${host}`;      // host root, no repo → no link
+      if (rest.startsWith(prefix)) {
+        const pathEnc = rest.slice(prefix.length);         // owner/…/repo, '/'→'-'
+        if (!pathEnc) return '';
+        // GitHub-style repos are host/owner/repo. The remaining single '/'
+        // (the owner→repo boundary) was flattened to '-'; reconstruct the
+        // canonical two-segment path by splitting on the LAST '-' only when
+        // that yields two non-empty halves, so dash-bearing names survive.
+        const cut = pathEnc.lastIndexOf('-');
+        if (cut <= 0 || cut >= pathEnc.length - 1) {
+          // Single token (no resolvable owner/repo split) → host/token.
+          return `${scheme}://${host}/${pathEnc}`;
+        }
+        const owner = pathEnc.slice(0, cut);
+        const repo = pathEnc.slice(cut + 1);
+        return `${scheme}://${host}/${owner}/${repo}`;
+      }
+    }
+    return '';
+  }
+
+  let repoUrl = $derived.by(() => {
+    if (!s) return '';
+    const direct = s.repo_url || s.clone_url || s.html_url || s.github_url;
+    if (direct && /^(https?|git|ssh):\/\//.test(direct)) return direct;
+    return decodeRepoFromCwd(s.cwd);
+  });
+  // Compact display label for the repo link (drop scheme + trailing .git).
+  let repoLabel = $derived(
+    repoUrl ? repoUrl.replace(/^[a-z]+:\/\//, '').replace(/\.git$/, '') : ''
+  );
+
   // Scorecard geomean (G,V,F,E,D each 0..5-ish) → single 0..100 figure.
   const SCORE_KEYS = ['G', 'V', 'F', 'E', 'D'];
   let geomean = $derived.by(() => {
@@ -78,6 +145,7 @@
 </script>
 
 <div class="inspector">
+  <div class="panel-head">Agent Details</div>
   {#if !s}
     <div class="empty">
       <div class="empty-glyph">◉</div>
@@ -120,7 +188,12 @@
       <div class="fact"><span>Total</span><b>{fmtBytes(s.total_bytes)}</b></div>
       <div class="fact"><span>PID</span><b>{s.pid ?? '—'}</b></div>
       {#if s.branch}<div class="fact wide"><span>Branch</span><b class="mono">{s.branch}</b></div>{/if}
-      {#if s.cwd}<div class="fact wide"><span>CWD</span><b class="mono ellip" title={s.cwd}>{s.cwd}</b></div>{/if}
+      {#if repoUrl}
+        <div class="fact wide">
+          <span>Repo</span>
+          <a class="repo-link mono ellip" href={repoUrl} target="_blank" rel="noreferrer noopener" title={repoUrl}>{repoLabel} ↗</a>
+        </div>
+      {/if}
     </div>
 
     {#if s.last_verdict}
@@ -172,14 +245,12 @@
       {/if}
     </div>
 
-    {#if s.github_url}
-      <a class="link" href={s.github_url} target="_blank" rel="noreferrer">Open repo ↗</a>
-    {/if}
   {/if}
 </div>
 
 <style>
   .inspector { height: 100%; overflow: auto; padding: 0.9rem; display: flex; flex-direction: column; gap: 0.85rem; color: var(--calm-fg); }
+  .panel-head { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.09em; font-weight: 700; color: var(--calm-fg-faint); flex: 0 0 auto; }
   .empty { margin: auto; text-align: center; color: var(--calm-fg-faint); display: flex; flex-direction: column; gap: 0.3rem; }
   .empty-glyph { font-size: 2rem; opacity: 0.5; }
   .empty .hint { font-size: 0.78rem; }
@@ -228,8 +299,8 @@
   .handoff select { flex: 1; padding: 0.4rem; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-border); border-radius: 6px; font-size: 0.8rem; }
 
   .err { color: var(--calm-danger); font-size: 0.78rem; background: color-mix(in srgb, var(--calm-danger) 10%, transparent); border-radius: 8px; padding: 0.4rem 0.55rem; }
-  .link { color: var(--calm-accent-2); font-size: 0.8rem; text-decoration: none; }
-  .link:hover { text-decoration: underline; }
+  .repo-link { color: var(--calm-accent-2); text-decoration: none; display: block; }
+  .repo-link:hover { text-decoration: underline; }
 
   /* Expandable per-agent surfaces (radar + prompt editor). */
   .more { display: flex; flex-direction: column; gap: 0.4rem; }
