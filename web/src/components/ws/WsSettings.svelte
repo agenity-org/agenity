@@ -1,19 +1,21 @@
 <!--
   WsSettings — the CONFIG-ONLY operator console for the WORKSPACES layout.
 
-  HARD REQ #4 split: runtime INFO (Kanban / Events / Tasks / Mesh) are
-  WORKSPACE PANE TYPES, NOT here. This gear modal holds configuration +
-  operator-capability surfaces that are not a live workspace feed:
+  Observability (Kanban / Events / Tasks / Mesh / MCP Log) are WORKSPACE
+  PANE TYPES, NOT here — MCP Log moved out per the operator's punch-list
+  (#6). This modal holds CONFIGURATION only, reached from the 👤 user menu:
 
-    Workspace : Appearance, About
+    Workspace : Appearance (incl. text size), About
     Fleet     : Accounts & Providers, Roles, Grants
-    Agent     : Prompts, Skills, Canon, Review axes
-    Runtime   : Runtime / Global config (global-md + claude-profile +
-                claude-status), MCP Log
+    Agent     : Prompts, Skills (full catalogue), Canon (org default), Review axes
+    Runtime   : Runtime / Global config (global-md + claude-profile + claude-status)
 
-  The three previously-missing capabilities are first-class:
-    · Runtime/Global → GET /api/v1/runtime/{global-md,claude-profile,claude-status}
-    · Grants         → GET/POST /api/v1/grants, PATCH/DELETE /api/v1/grants/{id}
+  Notes:
+    · Skills (#8)   → GET /api/v1/skills shows the WHOLE catalogue, not just
+                       the focused agent's.
+    · Canon (#7)    → the DEFAULT / org-level canon teams inherit; per-team
+                       canon is edited via Team settings (right-click a team).
+    · Grants        → GET/POST /api/v1/grants, PATCH/DELETE /api/v1/grants/{id}
     · Review axes    → GET /api/v1/reviews/{target}/  (trailing slash — bare
                        /api/v1/reviews 301-redirects)
 
@@ -23,10 +25,8 @@
 <script>
   import WidgetAccounts from '../v08/widgets/WidgetAccounts.svelte';
   import WidgetRoleMatrix from '../v08/widgets/WidgetRoleMatrix.svelte';
-  import WidgetAgentSkills from '../v08/widgets/WidgetAgentSkills.svelte';
   import WidgetCanon from '../v08/widgets/WidgetCanon.svelte';
   import WidgetAgentPrompt from '../v08/widgets/WidgetAgentPrompt.svelte';
-  import WidgetMCPLog from '../v08/widgets/WidgetMCPLog.svelte';
 
   let {
     theme = 'dark',
@@ -116,9 +116,35 @@
     } catch (e) { reviewsErr = String(e); }
   }
 
+  // ---- Skills — the FULL catalogue (#8), not just the focused agent's ----
+  let allSkills = $state([]);
+  let skillsErr = $state('');
+  let skillsLoaded = $state(false);
+  let skillQuery = $state('');
+  async function loadSkills() {
+    skillsErr = '';
+    try {
+      const r = await fetch(`${API}/skills`);
+      if (r.ok) { const j = await r.json(); allSkills = Array.isArray(j) ? j : (j.skills || []); skillsLoaded = true; }
+      else skillsErr = `HTTP ${r.status}`;
+    } catch (e) { skillsErr = String(e); }
+  }
+  let skillsFiltered = $derived.by(() => {
+    const q = skillQuery.trim().toLowerCase();
+    const arr = [...allSkills].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.name || a.id || '').localeCompare(b.name || b.id || ''));
+    if (!q) return arr;
+    return arr.filter((s) =>
+      (s.name || '').toLowerCase().includes(q) ||
+      (s.id || '').toLowerCase().includes(q) ||
+      (s.description || '').toLowerCase().includes(q) ||
+      (s.tags || []).some((t) => String(t).toLowerCase().includes(q))
+    );
+  });
+
   $effect(() => {
     if (section === 'runtime' && !runtimeLoaded) loadRuntime();
     if (section === 'grants' && grants.length === 0 && !grantsErr) loadGrants();
+    if (section === 'skills' && !skillsLoaded && !skillsErr) loadSkills();
     if (section === 'reviews' && focusedSession && reviewTarget !== focusedSession.name) {
       reviewTarget = focusedSession.name;
       loadReviews(reviewTarget);
@@ -135,7 +161,7 @@
       { id: 'roles', label: 'Roles', glyph: '🜲' },
       { id: 'grants', label: 'Grants', glyph: '⇄' },
     ] },
-    { title: 'Focused agent', items: [
+    { title: 'Agent', items: [
       { id: 'prompts', label: 'Prompts', glyph: '✎' },
       { id: 'skills', label: 'Skills', glyph: '◇' },
       { id: 'canon', label: 'Canon', glyph: '❡' },
@@ -143,10 +169,9 @@
     ] },
     { title: 'Runtime', items: [
       { id: 'runtime', label: 'Runtime / Global', glyph: '⚙' },
-      { id: 'mcplog', label: 'MCP Log', glyph: '☷' },
     ] },
   ];
-  const WIDGET_SECTIONS = new Set(['accounts', 'roles', 'skills', 'canon', 'prompts', 'mcplog']);
+  const WIDGET_SECTIONS = new Set(['accounts', 'roles', 'canon', 'prompts']);
 
   function fmtTime(t) {
     if (!t) return '';
@@ -303,15 +328,35 @@
           <div class="widget-host"><WidgetAgentPrompt agent={focusedSession} /></div>
         {/if}
       {:else if section === 'skills'}
-        {#if !focusedSession}
-          <div class="widget-host pad"><div class="hollow">Focus an agent to edit its stat sheet.</div></div>
+        <h2>Skills</h2>
+        <p class="lede">The full skill catalogue available to the fleet — every built-in and user-defined skill, not just one agent's.</p>
+        <div class="skills-bar">
+          <input class="skills-search" placeholder="Filter skills…" bind:value={skillQuery} aria-label="Filter skills" />
+          <span class="skills-count">{skillsFiltered.length} / {allSkills.length}</span>
+          <button class="mini" title="Refresh" onclick={() => { skillsLoaded = false; loadSkills(); }}>↻</button>
+        </div>
+        {#if skillsErr}<div class="hollow">Note: {skillsErr}</div>{/if}
+        {#if allSkills.length === 0 && !skillsErr}
+          <div class="hollow">No skills reported.</div>
         {:else}
-          <div class="widget-host"><WidgetAgentSkills agent={focusedSession} /></div>
+          <div class="rows">
+            {#each skillsFiltered as sk (sk.id)}
+              <div class="srow">
+                <span class="skill-ic">{sk.icon || '◇'}</span>
+                <div class="srow-main">
+                  <div class="srow-name">{sk.name || sk.id}</div>
+                  {#if sk.description}<div class="srow-sub">{sk.description}</div>{/if}
+                  {#if sk.tags?.length}<div class="skill-tags">{#each sk.tags as tg}<span class="tag">{tg}</span>{/each}</div>{/if}
+                </div>
+                <span class="state-chip {sk.read_only ? 'pending' : 'approved'}">{sk.read_only ? 'built-in' : 'custom'}</span>
+              </div>
+            {/each}
+          </div>
         {/if}
       {:else if section === 'canon'}
-        <div class="widget-host"><WidgetCanon agent={focusedSession} {teams} /></div>
-      {:else if section === 'mcplog'}
-        <div class="widget-host"><WidgetMCPLog {events} /></div>
+        <h2>Canon (org default — teams inherit)</h2>
+        <p class="lede">The DEFAULT / org-level canon every team inherits. To edit a single team's canon, right-click that team in a Sessions pane → Team settings.</p>
+        <div class="widget-host canon-host"><WidgetCanon agent={focusedSession} {teams} /></div>
       {/if}
     </main>
   </div>
@@ -408,4 +453,14 @@
   .axk { display: block; font-size: 0.6rem; color: var(--calm-fg-faint); }
   .axv { display: block; font-weight: 700; font-size: 0.85rem; }
   .rev-note { font-size: 0.8rem; color: var(--calm-fg-muted); }
+
+  /* skills catalogue (#8) */
+  .skills-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; }
+  .skills-search { flex: 1; min-width: 0; padding: 0.45rem 0.6rem; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-border); border-radius: 6px; font-size: 0.82rem; }
+  .skills-search:focus { outline: none; border-color: var(--calm-accent); }
+  .skills-count { font-size: 0.72rem; color: var(--calm-fg-faint); white-space: nowrap; }
+  .skill-ic { font-size: 1.1rem; width: 1.4rem; text-align: center; flex: 0 0 auto; }
+  .skill-tags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.3rem; }
+  .tag { font-size: 0.62rem; color: var(--calm-fg-muted); background: var(--calm-chip); border: 1px solid var(--calm-border); border-radius: 5px; padding: 0.05rem 0.35rem; }
+  .canon-host { min-height: 22rem; }
 </style>

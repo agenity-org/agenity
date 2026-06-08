@@ -1,10 +1,11 @@
 <!--
-  WsStrip — the WORKSPACE STRIP in the header. Each chip is a whole saved
-  DESKTOP (not a content tab): clicking switches to that workspace, the
-  numeric badge hints its Ctrl+N shortcut (1..9). '+' adds a workspace;
-  double-click OR right-click renames; drag a chip to reorder (#strip).
-  Right-click opens a context menu: Rename / Duplicate / Move left / Move
-  right / Delete (#6).
+  WsStrip — the WORKSPACE STRIP in the header, styled as a CLEAR TAB BAR:
+  obvious tabs with a sit-on-the-baseline active treatment, and EVERY tab
+  the SAME FIXED WIDTH (uniform, not auto-sized to the label). Each tab is a
+  whole saved DESKTOP: clicking switches to it, the numeric badge hints its
+  Ctrl+N shortcut (1..9). '+' adds a workspace; double-click OR right-click
+  renames; drag a tab to reorder. Right-click opens a context menu: Rename /
+  Duplicate / Move left / Move right / Delete.
 
   The root owns the workspace array + all mutations; this component is a
   thin, controlled view that emits intents.
@@ -80,26 +81,43 @@
 </div>
 
 <style>
-  .strip { display: flex; align-items: center; gap: 0.25rem; overflow-x: auto; overflow-y: hidden; min-width: 0; padding-bottom: 2px; }
+  /* TAB BAR — tabs sit on a shared baseline so they read unmistakably as
+     tabs; the active one connects to the body below. */
+  .strip {
+    display: flex; align-items: flex-end; gap: 0.2rem;
+    overflow-x: auto; overflow-y: hidden; min-width: 0;
+    border-bottom: 1px solid var(--calm-border);
+  }
   .strip::-webkit-scrollbar { height: 0; }
 
+  /* Uniform FIXED-WIDTH tabs — same width regardless of label length. */
   .chip {
     display: inline-flex; align-items: center; gap: 0.35rem;
-    padding: 0.34rem 0.6rem;
-    background: var(--calm-chip); border: 1px solid var(--calm-border);
-    border-radius: 8px; cursor: pointer; font-size: 0.78rem; color: var(--calm-fg-muted);
-    white-space: nowrap; flex: 0 0 auto; max-width: 14rem;
+    box-sizing: border-box;
+    width: 9.5rem; flex: 0 0 9.5rem;
+    height: 30px; padding: 0 0.55rem;
+    background: var(--calm-surface-2); color: var(--calm-fg-muted);
+    border: 1px solid var(--calm-border); border-bottom: 0;
+    border-radius: 8px 8px 0 0; cursor: pointer; font-size: 0.78rem;
+    white-space: nowrap; position: relative; top: 1px;
     transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
   }
   .chip:hover { background: var(--calm-chip-hover); color: var(--calm-fg); }
-  .chip.active { color: var(--calm-fg); border-color: color-mix(in srgb, var(--calm-accent) 55%, var(--calm-border)); background: color-mix(in srgb, var(--calm-accent) 14%, var(--calm-surface)); font-weight: 600; }
+  .chip.active {
+    color: var(--calm-fg); font-weight: 600;
+    background: var(--calm-surface);
+    border-color: var(--calm-border-strong);
+    box-shadow: inset 0 2px 0 0 var(--calm-accent);
+  }
+  /* Mask the bar's baseline under the active tab so it "connects". */
+  .chip.active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--calm-surface); }
   .chip.dragging { opacity: 0.5; }
 
-  .chip-num { font-size: 0.6rem; font-weight: 700; color: var(--calm-fg-faint); background: var(--calm-surface-2); border: 1px solid var(--calm-border); border-radius: 5px; padding: 0.02rem 0.3rem; flex: 0 0 auto; }
+  .chip-num { font-size: 0.6rem; font-weight: 700; color: var(--calm-fg-faint); background: var(--calm-bg); border: 1px solid var(--calm-border); border-radius: 5px; padding: 0.02rem 0.3rem; flex: 0 0 auto; }
   .chip.active .chip-num { color: var(--calm-accent); border-color: color-mix(in srgb, var(--calm-accent) 40%, var(--calm-border)); }
-  .chip-name { overflow: hidden; text-overflow: ellipsis; }
-  .chip-rename { width: 8rem; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-accent); border-radius: 5px; font: inherit; font-size: 0.76rem; padding: 0.05rem 0.3rem; }
+  .chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .chip-rename { flex: 1; min-width: 0; width: 100%; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-accent); border-radius: 5px; font: inherit; font-size: 0.76rem; padding: 0.05rem 0.3rem; }
 
-  .strip-add { width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px dashed var(--calm-border-strong); color: var(--calm-fg-muted); border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
+  .strip-add { width: 28px; height: 28px; flex: 0 0 auto; align-self: center; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px dashed var(--calm-border-strong); color: var(--calm-fg-muted); border-radius: 8px; cursor: pointer; font-size: 0.9rem; margin-left: 0.2rem; }
   .strip-add:hover { color: var(--calm-accent); border-color: var(--calm-accent); }
 </style>

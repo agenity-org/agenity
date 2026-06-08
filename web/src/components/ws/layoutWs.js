@@ -12,8 +12,11 @@
 //   leaf  : { kind:'leaf', id, widget, config }
 //   split : { kind:'h'|'v', id, a, b, ratio }   // ratio = size of `a`
 //
-// PANE TYPES (leaf.widget): terminal | kanban | events | transcript |
-//   inspector | mesh | tasks. Terminal leaves carry config.agent.
+// PANE TYPES (leaf.widget): sessions | terminal | kanban | events |
+//   transcript | inspector | mesh | tasks | mcplog. Terminal leaves carry
+//   config.agent. There are NO special fixed regions — the former roster is
+//   now the `sessions` pane type and the former inspector is `inspector`, so
+//   the whole desktop is one uniform, resizable, content-changeable tree.
 //
 // This module is ws-local (no collision with calm/layoutTree.js) and owns
 // BOTH the tree algebra AND the per-user workspace persistence to
@@ -27,14 +30,19 @@ export function nextId(prefix = 'n') {
 }
 
 // ---- pane catalogue (single source of truth for menus + sanitize) ----
+// Sessions replaces the old fixed roster; MCP Log moved out of Settings to a
+// runtime pane. Every entry here is a generic, composable pane the operator
+// can put anywhere in the split-tree.
 export const PANE_TYPES = [
+  { id: 'sessions',   label: 'Sessions',   glyph: '☰' },
   { id: 'terminal',   label: 'Terminal',   glyph: '▦' },
+  { id: 'inspector',  label: 'Inspector',  glyph: '◉' },
   { id: 'kanban',     label: 'Kanban',     glyph: '☷' },
   { id: 'events',     label: 'Events',     glyph: '〜' },
   { id: 'transcript', label: 'Transcript', glyph: '✉' },
-  { id: 'inspector',  label: 'Inspector',  glyph: '◉' },
   { id: 'mesh',       label: 'Mesh',       glyph: '⇄' },
   { id: 'tasks',      label: 'Tasks',      glyph: '☑' },
+  { id: 'mcplog',     label: 'MCP Log',    glyph: '⛁' },
 ];
 const KNOWN = new Set(PANE_TYPES.map((p) => p.id));
 
@@ -49,7 +57,9 @@ export function leaf(widget = 'terminal', config = {}) {
 export function hsplit(a, b, ratio = 0.5) { return { kind: 'h', id: nextId('split'), a, b, ratio }; }
 export function vsplit(a, b, ratio = 0.5) { return { kind: 'v', id: nextId('split'), a, b, ratio }; }
 
-export function defaultLayout() { return leaf('terminal', {}); }
+// A fresh workspace leads with a Sessions pane beside a terminal so the
+// operator can immediately reach agents (no fixed roster exists anymore).
+export function defaultLayout() { return hsplit(leaf('sessions', {}), leaf('terminal', {}), 0.24); }
 
 // ---------------- tree algebra (immutable rebuilds → $state fires) ----
 export function leaves(node, out = []) {
@@ -210,26 +220,36 @@ export function cloneTreeFreshIds(node) {
 
 // ---------------- seed compositions ----------------
 // Three editable/deletable starting desktops. These are just compositions;
-// the operator can rebuild them freely.
-//   Terminals    — a 2-up split of agent terminals.
-//   Board        — kanban beside an events feed.
-//   Conversation — transcript beside a terminal.
+// the operator can rebuild them freely. Every seed leads with a Sessions
+// pane (the agent list — there is no longer a fixed roster) so agents are
+// reachable out of the box, then pairs it with a working surface.
+//   Work    — Sessions | (terminal over inspector).
+//   Board   — Sessions | (kanban beside an events feed).
+//   Talk    — Sessions | transcript.
 export function seedWorkspaces() {
   return [
     {
       id: nextId('ws'),
-      name: 'Terminals',
-      layout: hsplit(leaf('terminal', {}), leaf('terminal', {}), 0.5),
+      name: 'Work',
+      layout: hsplit(
+        leaf('sessions', {}),
+        vsplit(leaf('terminal', {}), leaf('inspector', {}), 0.66),
+        0.22,
+      ),
     },
     {
       id: nextId('ws'),
       name: 'Board',
-      layout: hsplit(leaf('kanban', {}), leaf('events', {}), 0.62),
+      layout: hsplit(
+        leaf('sessions', {}),
+        hsplit(leaf('kanban', {}), leaf('events', {}), 0.6),
+        0.22,
+      ),
     },
     {
       id: nextId('ws'),
-      name: 'Conversation',
-      layout: hsplit(leaf('transcript', {}), leaf('terminal', {}), 0.5),
+      name: 'Talk',
+      layout: hsplit(leaf('sessions', {}), leaf('transcript', {}), 0.22),
     },
   ];
 }
@@ -237,8 +257,11 @@ export function seedWorkspaces() {
 // ---------------- persistence (per-user → localStorage) ----------------
 // Keyed so the data survives reloads. We persist the full workspace list,
 // the active index, and per-workspace focus/maximize hints.
-const STORE_KEY = 'ws-workspaces-v1';
-const ACTIVE_KEY = 'ws-active-v1';
+// v2: roster removed → seeds now lead with a Sessions pane. Bumping the key
+// re-seeds operators whose v1 layouts predate the Sessions pane type (so they
+// aren't stranded without a way to reach agents).
+const STORE_KEY = 'ws-workspaces-v2';
+const ACTIVE_KEY = 'ws-active-v2';
 
 export function loadWorkspaces() {
   try {

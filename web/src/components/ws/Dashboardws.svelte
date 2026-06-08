@@ -20,35 +20,36 @@
     editable/deletable defaults (Terminals / Board / Conversation) on first
     run.
 
-  How each HARD REQUIREMENT is met:
-  #1 Arrow-collapse EVERY region — roster + inspector wrap in <WsPanel>
-     (chevron on the edge, no hamburger); each PANE keeps its own chevron.
-  #2 Full-screen EVERY pane — roster + inspector carry ⛶; each pane has its
-     own maximize/restore.
-  #3 FULLY RESPONSIVE — below the breakpoint side panels become slide-in
-     overlays, the pane grid reflows, headers never overflow (tight →
-     overflow menu). Holds at ~700 / ~1100 / ~1600.
-  #4 ZERO capability gaps — Kanban / Events / Tasks / Mesh are PANE TYPES,
-     not Settings. The gear modal (WsSettings) holds config only + the three
-     formerly-missing capabilities (Runtime/Global, Grants, Review-axes).
-  #5 Real data + live xterm — calm data layer (sessions/teams/memberships/
-     events @2.5s + EventSource) + WidgetTerminal; agentIdentity colors/icons
-     everywhere; both themes; user / sign-out menu.
-  #6 ESC closes popups/menus/modals/overlays in priority order; right-click
-     context menus on the workspace strip + on panes.
+  ONE GENERIC SPLIT-TREE — there are NO fixed roster/inspector regions. The
+  whole body is a single recursive tree of GENERIC panes; agents are reached
+  through a `sessions` pane (replacing the old roster). Every pane — including
+  the former side regions — is uniformly drag-resizable, collapsible,
+  maximizable AND content-changeable through its own content picker.
 
-  Self-contained under components/ws/. Reuses calm/* + v08 widgets read-only.
+  · Pane content types: Sessions / Inspector / Terminal / Kanban / Events /
+    Transcript / Mesh / Tasks / MCP Log. Click a pane to focus it; its picker
+    switches what it shows.
+  · Real data + live xterm — sessions/teams/memberships/events @2.5s +
+    EventSource + WidgetTerminal; agentIdentity colors/icons everywhere; both
+    --calm-* themes; user / sign-out menu (themed).
+  · Right-click an AGENT (in a Sessions pane) → "Agent settings" (reuses v08
+    AgentSettings). Right-click a TEAM → "Team settings" (reuses v08
+    TeamSettings). Right-click a pane header → split/collapse/maximize/close.
+  · ESC closes popups/menus/modals/overlays in priority order.
+  · Settings (WsSettings) is config-only, reached from the 👤 user menu (no
+    gear in the header). Font size lives there, under Appearance.
+
+  Self-contained under components/ws/. Reuses calm/* + v08 components read-only.
   Owns its own --calm-* tokens (two full palettes) so it never collides.
 -->
 <script>
   import { onMount } from 'svelte';
   import '@xterm/xterm/css/xterm.css';
   import WsPane from './WsPane.svelte';
-  import WsPanel from './WsPanel.svelte';
   import WsStrip from './WsStrip.svelte';
   import WsSettings from './WsSettings.svelte';
-  import CalmRail from '../calm/CalmRail.svelte';
-  import CalmInspector from '../calm/CalmInspector.svelte';
+  import AgentSettings from '../v08/AgentSettings.svelte';
+  import TeamSettings from '../v08/TeamSettings.svelte';
   import SpawnWizardV9 from '../v09/SpawnWizardV9.svelte';
   import { registerRoster } from '../../lib/agentIdentity.js';
   import * as T from './layoutWs.js';
@@ -100,11 +101,6 @@
   let focusedLeafId = $derived(activeWs ? (wsFocus[activeWs.id] || '') : '');
   let maximizedLeafId = $derived(activeWs ? (wsMax[activeWs.id] || '') : '');
 
-  // ---- persistent regions ----
-  let railOpen = $state(true);
-  let contextOpen = $state(true);
-  let maximizedRegion = $state('');    // '' | roster | inspector | canvas
-
   // ---- chrome / overlays ----
   let theme = $state('dark');
   let fontSize = $state(14);
@@ -116,11 +112,13 @@
   let overflowOpen = $state(false);
   let mounted = $state(false);
 
+  // ---- agent / team editors (reused v08, opened from context menus) ----
+  let editAgent = $state(null);        // session object | null
+  let editTeam = $state(null);         // team object | null
+
   // ---- responsive ----
   let narrow = $state(false);
   let tight = $state(false);
-  let railOverlay = $state(false);
-  let ctxOverlay = $state(false);
 
   // ---- rename + context menus ----
   let renamingId = $state('');
@@ -211,26 +209,38 @@
     selectedAgent = name;
     pushMRU(name);
     bindFocusedTerminal(name, true);
-    if (narrow) railOverlay = false;
   }
 
+  // Clicking an agent (in a Sessions pane) binds it to a terminal:
+  //   1. if the focused pane IS a terminal → rebind it;
+  //   2. else if any terminal pane exists → bind the first one;
+  //   3. else split a NEW terminal off the focused pane (never clobber a
+  //      Sessions / inspector / kanban pane by converting it).
   function bindFocusedTerminal(name, flashIt) {
     if (!activeWs) return;
     let layout = activeWs.layout;
     ensureFocusedLeaf(layout);
-    let fid = wsFocus[activeWs.id] || T.leaves(layout)[0]?.id || '';
-    let target = T.findLeaf(layout, fid);
-    if (!target || target.widget !== 'terminal') {
-      const tid = firstTerminalLeafId(layout);
-      if (tid) { fid = tid; target = T.findLeaf(layout, tid); }
-    }
-    if (target && target.widget === 'terminal') {
-      layout = T.setLeafConfig(layout, target.id, { agent: name });
-      wsFocus = { ...wsFocus, [activeWs.id]: target.id };
+    const fid = wsFocus[activeWs.id] || T.leaves(layout)[0]?.id || '';
+    const focused = T.findLeaf(layout, fid);
+
+    let targetId = (focused && focused.widget === 'terminal') ? focused.id : firstTerminalLeafId(layout);
+    if (targetId) {
+      layout = T.setLeafConfig(layout, targetId, { agent: name });
+      wsFocus = { ...wsFocus, [activeWs.id]: targetId };
       if (flashIt) flash(`Focus → ${name}`);
-    } else if (fid) {
-      layout = T.setLeafWidget(layout, fid, 'terminal', { agent: name });
-      wsFocus = { ...wsFocus, [activeWs.id]: fid };
+    } else {
+      // No terminal anywhere — split a new one off the focused pane so the
+      // Sessions list (or whatever is focused) is preserved.
+      const base = fid || T.leaves(layout)[0]?.id;
+      if (base) {
+        const { tree, newId } = T.splitLeaf(layout, base, 'h', 'terminal', { agent: name });
+        layout = tree;
+        wsFocus = { ...wsFocus, [activeWs.id]: newId };
+      } else {
+        layout = T.leaf('terminal', { agent: name });
+        wsFocus = { ...wsFocus, [activeWs.id]: T.leaves(layout)[0].id };
+      }
+      if (flashIt) flash(`Opened ${name}`);
     }
     workspaces = workspaces.map((w) => (w.id === activeWs.id ? { ...w, layout } : w));
   }
@@ -250,7 +260,6 @@
     workspaces = workspaces.map((w) => (w.id === activeWs.id ? { ...w, layout } : w));
     selectedAgent = name; pushMRU(name);
     flash(`Opened ${name} in a new pane`);
-    if (narrow) railOverlay = false;
   }
 
   // pane operations (active workspace)
@@ -294,15 +303,6 @@
     const small = T.collapsedSide(p.split);
     const isCollapsed = small === p.side;
     setCurLayout(T.collapseLeaf(layout, leafId, !isCollapsed));
-  }
-  function addPane() {
-    if (!activeWs) return;
-    let layout = activeWs.layout;
-    const base = wsFocus[activeWs.id] || T.leaves(layout)[0]?.id;
-    const agent = selectedAgent || (sessions.find((s) => !s.exited)?.name || '');
-    if (!base) { layout = T.leaf('terminal', { agent }); }
-    else { const { tree, newId } = T.splitLeaf(layout, base, 'h', 'terminal', { agent }); layout = tree; wsFocus = { ...wsFocus, [activeWs.id]: newId }; }
-    workspaces = workspaces.map((w) => (w.id === activeWs.id ? { ...w, layout } : w));
   }
 
   let focusedSession = $derived(sessions.find((s) => s.name === selectedAgent) || null);
@@ -371,16 +371,23 @@
   }
   function cancelRename() { renamingId = ''; renameVal = ''; }
 
-  // ---------------- region collapse + maximize ----------------
-  function toggleRail() {
-    if (narrow) { railOverlay = !railOverlay; ctxOverlay = false; return; }
-    railOpen = !railOpen; try { localStorage.setItem('ws-rail', railOpen ? '1' : '0'); } catch {}
+  // ---------------- agent / team editors (reuse v08 modals) ----------------
+  function openAgentSettings(name) {
+    const s = sessions.find((x) => x.name === name);
+    if (!s) { flash(`No session “${name}”`); return; }
+    closeAllMenus();
+    editTeam = null;
+    editAgent = s;
   }
-  function toggleContext() {
-    if (narrow) { ctxOverlay = !ctxOverlay; railOverlay = false; return; }
-    contextOpen = !contextOpen; try { localStorage.setItem('ws-context', contextOpen ? '1' : '0'); } catch {}
+  function openTeamSettings(teamName) {
+    const t = teams.find((x) => (x.name || x) === teamName) || { name: teamName, topology: 'hub' };
+    closeAllMenus();
+    editAgent = null;
+    editTeam = t;
   }
-  function maximizeRegion(region) { maximizedRegion = maximizedRegion === region ? '' : region; }
+  let editTeamMembers = $derived(
+    editTeam ? memberships.filter((m) => (m.team || m.team_name) === editTeam.name) : []
+  );
 
   // ---------------- login ----------------
   let loginInput = $state('');
@@ -434,6 +441,29 @@
       ],
     };
   }
+  // Right-click an AGENT row (in any Sessions pane) → Agent settings (#11).
+  function openAgentMenu(name, x, y) {
+    closeAllMenus();
+    const s = sessions.find((x2) => x2.name === name);
+    ctxMenu = {
+      x, y,
+      items: [
+        { label: 'Agent settings', onpick: () => openAgentSettings(name) },
+        { label: 'Open in new pane', onpick: () => openAgentInNewPane(name) },
+        { label: 'Focus terminal', disabled: !s, onpick: () => selectAgent(name) },
+      ],
+    };
+  }
+  // Right-click a TEAM label (in any Sessions pane) → Team settings (#11).
+  function openTeamMenu(teamName, x, y) {
+    closeAllMenus();
+    ctxMenu = {
+      x, y,
+      items: [
+        { label: 'Team settings', onpick: () => openTeamSettings(teamName) },
+      ],
+    };
+  }
   function pickCtx(item) { if (item.disabled) return; ctxMenu = null; item.onpick(); }
   function closeAllMenus() { userMenuOpen = false; overflowOpen = false; ctxMenu = null; }
 
@@ -447,14 +477,14 @@
       if (e.key === 'Tab') { e.preventDefault(); cycleWorkspace(e.shiftKey ? -1 : 1); return; }
     }
     if (e.key !== 'Escape') return;
-    // ESC priority order (#6).
+    // ESC priority order: menus → modals → rename → maximize.
     if (ctxMenu) { ctxMenu = null; return; }
+    if (editAgent) { editAgent = null; return; }
+    if (editTeam) { editTeam = null; return; }
     if (showWizard) { showWizard = false; refresh(); return; }
     if (showSettings) { showSettings = false; return; }
     if (userMenuOpen || overflowOpen) { closeAllMenus(); return; }
     if (renamingId) { cancelRename(); return; }
-    if (railOverlay || ctxOverlay) { railOverlay = false; ctxOverlay = false; return; }
-    if (maximizedRegion) { maximizedRegion = ''; return; }
     if (maximizedLeafId) { setMaxLeaf(''); return; }
   }
   function onGlobalClick() { if (ctxMenu) ctxMenu = null; }
@@ -465,7 +495,6 @@
       const w = window.innerWidth;
       narrow = w < 980;
       tight = w < 720;
-      if (!narrow) { railOverlay = false; ctxOverlay = false; }
     } catch {}
   }
 
@@ -506,9 +535,6 @@
     try { f = +(localStorage.getItem('chepherd-font') || 14) || 14; } catch {}
     fontSize = Math.max(9, Math.min(22, f));
     try { document.documentElement.style.setProperty('--ws-font', fontSize + 'px'); } catch {}
-
-    try { railOpen = localStorage.getItem('ws-rail') !== '0'; } catch {}
-    try { contextOpen = localStorage.getItem('ws-context') !== '0'; } catch {}
 
     // ?token= ingest.
     try {
@@ -577,7 +603,6 @@
     <header class="topbar">
       <div class="top-left">
         <span class="brand"><span class="brand-dot"></span>workspaces<span class="brand-ver">{version}</span></span>
-        <button class="reg-toggle" class:on={narrow ? railOverlay : railOpen} onclick={(e) => { e.stopPropagation(); toggleRail(); }} title="Roster" aria-label="Toggle roster">{(narrow ? railOverlay : railOpen) ? '◀' : '▶'} Roster</button>
       </div>
 
       <div class="top-center">
@@ -597,31 +622,26 @@
       </div>
 
       <div class="top-right">
+        <!-- #5 no A−/A+ in header (font lives in Settings → Appearance).
+             #9 no gear in header (Settings reached from 👤 menu).
+             #12 no +Pane in header (panes added by splitting + per-pane picker). -->
         {#if tight}
           <div class="overflow-wrap">
             <button class="icon-btn" onclick={(e) => { e.stopPropagation(); overflowOpen = !overflowOpen; }} title="More" aria-label="More controls">⋯</button>
             {#if overflowOpen}
-              <div class="overflow-menu" role="menu">
-                <button role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; addPane(); }}>＋ Pane</button>
-                <button role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; showWizard = true; }}>✦ Spawn</button>
-                <button role="menuitem" onclick={(e) => { e.stopPropagation(); applyFont(-1); }}>A− Smaller</button>
-                <button role="menuitem" onclick={(e) => { e.stopPropagation(); applyFont(1); }}>A+ Larger</button>
-                <button role="menuitem" onclick={(e) => { e.stopPropagation(); toggleTheme(); }}>{theme === 'dark' ? '☀ Light' : '☾ Dark'}</button>
-                <button role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; toggleContext(); }}>⫶ Inspector</button>
-                <button role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; showSettings = true; }}>⚙ Settings</button>
-                <button role="menuitem" class="danger" onclick={(e) => { e.stopPropagation(); signOut(); }}>⎋ Sign out</button>
+              <div class="user-menu" role="menu">
+                <button class="um-item" role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; showWizard = true; }}>✦ Spawn agents</button>
+                <button class="um-item" role="menuitem" onclick={(e) => { e.stopPropagation(); toggleTheme(); }}>{theme === 'dark' ? '☀ Light theme' : '☾ Dark theme'}</button>
+                <div class="um-sep"></div>
+                <div class="um-head">Signed in</div>
+                <button class="um-item" role="menuitem" onclick={(e) => { e.stopPropagation(); overflowOpen = false; showSettings = true; }}>⚙ Settings</button>
+                <button class="um-item danger" role="menuitem" onclick={(e) => { e.stopPropagation(); signOut(); }}>⎋ Sign out</button>
               </div>
             {/if}
           </div>
         {:else}
-          <button class="pill-btn" onclick={addPane} title="Add a terminal pane to this workspace">＋ Pane</button>
           <button class="pill-btn accent" onclick={() => (showWizard = true)} title="Spawn agents">✦ Spawn</button>
-          <div class="divider-y"></div>
-          <button class="icon-btn" onclick={() => applyFont(-1)} title="Smaller text" aria-label="Smaller text">A−</button>
-          <button class="icon-btn" onclick={() => applyFont(1)} title="Larger text" aria-label="Larger text">A+</button>
           <button class="icon-btn" onclick={toggleTheme} title="Toggle light / dark" aria-label="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
-          <button class="icon-btn" class:on={narrow ? ctxOverlay : contextOpen} onclick={(e) => { e.stopPropagation(); toggleContext(); }} title="Toggle inspector" aria-label="Toggle inspector">⫶</button>
-          <button class="icon-btn" onclick={() => (showSettings = true)} title="Settings" aria-label="Settings">⚙</button>
           <div class="divider-y"></div>
           <div class="user-wrap">
             <button class="icon-btn" onclick={(e) => { e.stopPropagation(); userMenuOpen = !userMenuOpen; }} title="Account" aria-label="Account menu" aria-haspopup="menu" aria-expanded={userMenuOpen}>👤</button>
@@ -637,82 +657,40 @@
       </div>
     </header>
 
-    <!-- ===================== BODY ===================== -->
-    <div class="body" class:max-active={!!maximizedRegion}>
-      <!-- LEFT: roster -->
-      {#if !narrow}
-        <aside class="region rail-region" class:collapsed={!railOpen} class:hidden-by-max={maximizedRegion && maximizedRegion !== 'roster'} class:is-max={maximizedRegion === 'roster'}>
-          <WsPanel title="Roster" glyph="☰" side="left" collapsed={!railOpen} maximized={maximizedRegion === 'roster'} badge={`${sessions.filter((s) => !s.exited).length}`} oncollapse={toggleRail} onmaximize={() => maximizeRegion('roster')}>
-            <div class="rail-host"><CalmRail {sessions} {teams} {memberships} {selectedAgent} onselect={selectAgent} onopennew={openAgentInNewPane} /></div>
-          </WsPanel>
-        </aside>
-      {/if}
-
-      <!-- CENTER: the active workspace desktop -->
-      <main class="center" class:hidden-by-max={maximizedRegion && maximizedRegion !== 'canvas'} class:is-max={maximizedRegion === 'canvas'}>
-        <section class="canvas">
-          <header class="canvas-head">
-            <span class="canvas-title"><span class="canvas-glyph">▦</span>{activeWs?.name || 'Workspace'}</span>
-            <div class="canvas-ctl">
-              <button class="ctl" title="Add a terminal pane" aria-label="Add pane" onclick={addPane}>＋ Pane</button>
-              <button class="ctl" title={maximizedRegion === 'canvas' ? 'Restore' : 'Maximize desktop'} aria-label="Maximize desktop" onclick={() => maximizeRegion('canvas')}>{maximizedRegion === 'canvas' ? '🗗' : '⛶'}</button>
+    <!-- ===================== BODY — ONE GENERIC SPLIT-TREE ===================== -->
+    <!-- No fixed roster/inspector regions. The whole desktop is a single
+         recursive tree of generic, resizable, content-changeable panes. -->
+    <main class="center">
+      <div class="canvas-body">
+        {#if activeWs}
+          {#key activeWs.id}
+            <div class="stage-grid">
+              <WsPane
+                node={maximizedLeafId && T.findLeaf(activeWs.layout, maximizedLeafId) ? T.findLeaf(activeWs.layout, maximizedLeafId) : activeWs.layout}
+                {sessions} {teams} {memberships} {events} {peers} {tasks} {focusedSession} {selectedAgent}
+                {focusedLeafId} {maximizedLeafId}
+                onfocusleaf={onFocusLeaf}
+                onsetratio={onSetRatio}
+                onsplit={onSplit}
+                onclose={onCloseLeaf}
+                onsetagent={onSetAgent}
+                onsetwidget={onSetWidget}
+                onmaximize={onMaximizeLeaf}
+                oncollapse={onCollapseLeaf}
+                onleafctxmenu={openPaneMenu}
+                onpickagent={selectAgent}
+                onopenagentnew={openAgentInNewPane}
+                onagentctxmenu={openAgentMenu}
+                onteamctxmenu={openTeamMenu}
+                canClose={T.countLeaves(activeWs.layout) > 1}
+              />
             </div>
-          </header>
-          <div class="canvas-body">
-            {#if activeWs}
-              {#key activeWs.id}
-                <div class="stage-grid">
-                  <WsPane
-                    node={maximizedLeafId && T.findLeaf(activeWs.layout, maximizedLeafId) ? T.findLeaf(activeWs.layout, maximizedLeafId) : activeWs.layout}
-                    {sessions} {events} {peers} {tasks} {focusedSession}
-                    {focusedLeafId} {maximizedLeafId}
-                    onfocusleaf={onFocusLeaf}
-                    onsetratio={onSetRatio}
-                    onsplit={onSplit}
-                    onclose={onCloseLeaf}
-                    onsetagent={onSetAgent}
-                    onsetwidget={onSetWidget}
-                    onmaximize={onMaximizeLeaf}
-                    oncollapse={onCollapseLeaf}
-                    onleafctxmenu={openPaneMenu}
-                    canClose={T.countLeaves(activeWs.layout) > 1}
-                  />
-                </div>
-              {/key}
-            {/if}
-          </div>
-        </section>
-      </main>
+          {/key}
+        {/if}
+      </div>
+    </main>
 
-      <!-- RIGHT: inspector -->
-      {#if !narrow}
-        <aside class="region ctx-region" class:collapsed={!contextOpen} class:hidden-by-max={maximizedRegion && maximizedRegion !== 'inspector'} class:is-max={maximizedRegion === 'inspector'}>
-          <WsPanel title="Inspector" glyph="◉" side="right" collapsed={!contextOpen} maximized={maximizedRegion === 'inspector'} oncollapse={toggleContext} onmaximize={() => maximizeRegion('inspector')}>
-            <div class="ctx-host"><CalmInspector boundSession={focusedSession} {sessions} /></div>
-          </WsPanel>
-        </aside>
-      {/if}
-    </div>
-
-    <!-- ===================== RESPONSIVE OVERLAYS ===================== -->
-    {#if narrow && railOverlay}
-      <button class="scrim" aria-label="Close roster" onclick={() => (railOverlay = false)}></button>
-      <aside class="overlay-panel left">
-        <WsPanel title="Roster" glyph="☰" side="left" collapsed={false} maximized={false} badge={`${sessions.filter((s) => !s.exited).length}`} oncollapse={() => (railOverlay = false)} onmaximize={() => {}}>
-          <div class="rail-host"><CalmRail {sessions} {teams} {memberships} {selectedAgent} onselect={selectAgent} onopennew={openAgentInNewPane} /></div>
-        </WsPanel>
-      </aside>
-    {/if}
-    {#if narrow && ctxOverlay}
-      <button class="scrim" aria-label="Close inspector" onclick={() => (ctxOverlay = false)}></button>
-      <aside class="overlay-panel right">
-        <WsPanel title="Inspector" glyph="◉" side="right" collapsed={false} maximized={false} oncollapse={() => (ctxOverlay = false)} onmaximize={() => {}}>
-          <div class="ctx-host"><CalmInspector boundSession={focusedSession} {sessions} /></div>
-        </WsPanel>
-      </aside>
-    {/if}
-
-    <!-- ===================== CONTEXT MENU (#6) ===================== -->
+    <!-- ===================== CONTEXT MENU ===================== -->
     {#if ctxMenu}
       <div class="ctx-menu" role="menu" style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`}>
         {#each ctxMenu.items as it}
@@ -729,6 +707,14 @@
 
     {#if showWizard}
       <div class="wizard-overlay" role="dialog" aria-label="Spawn agents"><SpawnWizardV9 onclose={onWizardClose} /></div>
+    {/if}
+
+    <!-- #11 reuse v08 editors, opened from agent/team right-click menus -->
+    {#if editAgent}
+      <AgentSettings agent={editAgent} {teams} onClose={() => { editAgent = null; refresh(); }} />
+    {/if}
+    {#if editTeam}
+      <TeamSettings team={editTeam} members={editTeamMembers} onClose={() => (editTeam = null)} onChanged={refresh} />
     {/if}
   {/if}
 </div>
@@ -788,14 +774,13 @@
   .brand-dot { width: 9px; height: 9px; border-radius: 50%; align-self: center; background: linear-gradient(135deg, var(--calm-accent), var(--calm-accent-2)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--calm-accent) 20%, transparent); }
   .brand-ver { font-size: 0.62rem; font-weight: 600; color: var(--calm-fg-faint); background: var(--calm-chip); padding: 0.1rem 0.4rem; border-radius: 6px; }
 
-  .reg-toggle { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.55rem; background: var(--calm-chip); border: 1px solid var(--calm-border); color: var(--calm-fg-muted); border-radius: 7px; font-size: 0.74rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
-  .reg-toggle:hover { background: var(--calm-chip-hover); color: var(--calm-fg); }
-  .reg-toggle.on { color: var(--calm-accent); }
-
-  .overflow-menu, .user-menu, .ctx-menu { position: absolute; z-index: 80; min-width: 11rem; background: var(--calm-surface); border: 1px solid var(--calm-border-strong); border-radius: 8px; padding: 0.3rem; box-shadow: var(--calm-shadow-lg); display: flex; flex-direction: column; gap: 0.1rem; }
-  .overflow-menu button, .user-menu .um-item, .ctx-menu .ctx-item { display: flex; align-items: center; gap: 0.4rem; padding: 0.45rem 0.55rem; border-radius: 6px; background: transparent; border: 0; color: var(--calm-fg); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; width: 100%; }
-  .overflow-menu button:hover, .user-menu .um-item:hover, .ctx-menu .ctx-item:hover:not(:disabled) { background: var(--calm-chip-hover); }
-  .overflow-menu .danger, .user-menu .um-item.danger, .ctx-menu .ctx-item.danger { color: var(--calm-danger); }
+  /* #10 — user / overflow menus fully tokened so they match light AND dark. */
+  .user-menu, .ctx-menu { position: absolute; z-index: 80; min-width: 11rem; background: var(--calm-surface); color: var(--calm-fg); border: 1px solid var(--calm-border-strong); border-radius: 8px; padding: 0.3rem; box-shadow: var(--calm-shadow-lg); display: flex; flex-direction: column; gap: 0.1rem; }
+  .user-menu .um-item, .ctx-menu .ctx-item { display: flex; align-items: center; gap: 0.4rem; padding: 0.45rem 0.55rem; border-radius: 6px; background: transparent; border: 0; color: var(--calm-fg); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; width: 100%; }
+  .user-menu .um-item:hover, .ctx-menu .ctx-item:hover:not(:disabled) { background: var(--calm-chip-hover); }
+  .user-menu .um-item.danger, .ctx-menu .ctx-item.danger { color: var(--calm-danger); }
+  .user-menu .um-item.danger:hover { background: color-mix(in srgb, var(--calm-danger) 14%, transparent); }
+  .um-sep { height: 1px; background: var(--calm-border); margin: 0.25rem 0.2rem; }
   .ctx-menu .ctx-item:disabled { opacity: 0.4; cursor: not-allowed; }
 
   .icon-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px solid transparent; color: var(--calm-fg-muted); border-radius: 6px; cursor: pointer; font-size: 0.88rem; font-weight: 600; transition: background 0.14s ease, color 0.14s ease; }
@@ -808,44 +793,13 @@
   .divider-y { width: 1px; height: 20px; background: var(--calm-border); margin: 0 0.15rem; }
 
   .user-wrap, .overflow-wrap { position: relative; }
-  .user-menu, .overflow-menu { top: calc(100% + 8px); right: 0; }
+  .user-menu { top: calc(100% + 8px); right: 0; }
   .um-head { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--calm-fg-faint); font-weight: 700; padding: 0.35rem 0.55rem 0.25rem; }
 
-  /* ===================== BODY ===================== */
-  .body { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; }
-
-  .region { flex: 0 0 var(--ws-side-w); width: var(--ws-side-w); min-height: 0; overflow: hidden; }
-  .rail-region { border-right: 1px solid var(--calm-border); }
-  .ctx-region { border-left: 1px solid var(--calm-border); }
-  .region.collapsed { flex: 0 0 38px; width: 38px; }
-
-  .rail-host, .ctx-host { height: 100%; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-  .rail-host > :global(*), .ctx-host > :global(*) { flex: 1; min-height: 0; }
-  .ctx-host { overflow: auto; }
-
-  .center { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 0.55rem; }
-
-  .canvas { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--calm-surface); border: 1px solid var(--calm-border); border-radius: 8px; overflow: hidden; box-shadow: var(--calm-shadow-sm); }
-  .canvas-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.45rem 0.35rem 0.7rem; border-bottom: 1px solid var(--calm-border); background: var(--calm-surface-2); }
-  .canvas-title { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--calm-fg-muted); font-weight: 700; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .canvas-glyph { color: var(--calm-accent-2); }
-  .canvas-ctl { display: flex; align-items: center; gap: 0.1rem; flex: 0 0 auto; }
-  .ctl { display: inline-flex; align-items: center; gap: 0.25rem; height: 26px; padding: 0 0.5rem; background: transparent; border: 1px solid transparent; color: var(--calm-fg-muted); border-radius: 6px; cursor: pointer; font-size: 0.76rem; font-weight: 600; white-space: nowrap; }
-  .ctl:hover { background: var(--calm-chip-hover); color: var(--calm-fg); }
+  /* ===================== BODY — ONE GENERIC TREE ===================== */
+  .center { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 0.45rem; }
   .canvas-body { flex: 1; min-height: 0; min-width: 0; overflow: hidden; position: relative; background: var(--calm-bg); }
-  .stage-grid { width: 100%; height: 100%; min-height: 0; min-width: 0; padding: 0.45rem; }
-
-  /* region maximize */
-  .region.hidden-by-max, .center.hidden-by-max { display: none; }
-  .region.is-max { flex: 1; width: auto; }
-  .region.is-max :global(.panel), .center.is-max .canvas { box-shadow: var(--calm-shadow-lg); }
-
-  /* ===================== RESPONSIVE OVERLAYS ===================== */
-  .scrim { position: fixed; inset: 0; z-index: 90; background: color-mix(in srgb, var(--calm-bg) 55%, transparent); border: 0; cursor: pointer; }
-  .overlay-panel { position: fixed; top: 0; bottom: 0; z-index: 95; width: min(86vw, 340px); background: var(--calm-surface); box-shadow: var(--calm-shadow-lg); display: flex; flex-direction: column; }
-  .overlay-panel.left { left: 0; border-right: 1px solid var(--calm-border-strong); }
-  .overlay-panel.right { right: 0; border-left: 1px solid var(--calm-border-strong); }
-  .overlay-panel :global(.panel) { height: 100%; }
+  .stage-grid { width: 100%; height: 100%; min-height: 0; min-width: 0; }
 
   /* ===================== CONTEXT MENU ===================== */
   .ctx-menu { position: fixed; z-index: 1300; min-width: 12rem; }

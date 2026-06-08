@@ -1,24 +1,23 @@
 <!--
-  WsLeaf — a single framed pane in a workspace's split-tree. Unlike the
-  calm leaf (terminal/inspector/transcript only), a workspace pane can be
-  ANY of the 7 pane TYPES (#4 — Kanban/Events/Tasks/Mesh are pane types,
-  not Settings): terminal | kanban | events | transcript | inspector |
-  mesh | tasks.
+  WsLeaf — a single framed GENERIC pane in a workspace's split-tree. A pane
+  can be ANY content type — there are no special fixed regions:
+    sessions | terminal | inspector | kanban | events | transcript | mesh |
+    tasks | mcplog.
 
   Header (low-chrome):
-    · a pane-type switcher (button + menu),
-    · for terminals an inline agent picker (#5 — operator chooses which
-      agent's LIVE terminal this pane shows; every glyph via
-      agentIdentity.js, never hardcoded),
-    · split-right / split-down, collapse chevron (#1), maximize (#2),
-      close controls.
-  Right-click anywhere on the header opens a context menu mirroring those
-  actions (#6 — split/dock/collapse/maximize/close).
+    · a pane-type switcher (button + menu) — the per-pane CONTENT PICKER;
+    · for terminals an inline agent picker (operator chooses which agent's
+      LIVE terminal this pane shows; every glyph via agentIdentity.js);
+    · split-right / split-down, collapse chevron, maximize, close controls.
+  Right-click the header opens a pane context menu (split/collapse/
+  maximize/close).
 
-  Body hosts the chosen pane. terminal → live WidgetTerminal; kanban →
-  WidgetKanban; events → WidgetMCPLog over the live event stream; tasks /
-  mesh → live A2A inbox / federation peers; transcript → TeamTranscript;
-  inspector → CalmInspector.
+  Body hosts the chosen content. sessions → the agent list (replaces the old
+  roster): click a row to focus its terminal, + to open in a new pane,
+  right-click an agent or a team label for the settings menus; terminal →
+  live WidgetTerminal; kanban → WidgetKanban; events / mcplog → WidgetMCPLog
+  over the live event stream; tasks / mesh → live A2A inbox / federation
+  peers; transcript → TeamTranscript; inspector → CalmInspector.
 -->
 <script>
   import WidgetTerminal from '../v08/widgets/WidgetTerminal.svelte';
@@ -26,16 +25,20 @@
   import WidgetMCPLog from '../v08/widgets/WidgetMCPLog.svelte';
   import TeamTranscript from '../TeamTranscript.svelte';
   import CalmInspector from '../calm/CalmInspector.svelte';
+  import CalmRail from '../calm/CalmRail.svelte';
   import { agentIdentity } from '../../lib/agentIdentity.js';
   import { PANE_TYPES, paneMeta } from './layoutWs.js';
 
   let {
     node,
     sessions = [],
+    teams = [],
+    memberships = [],
     events = [],
     peers = [],
     tasks = [],
     focusedSession = null,
+    selectedAgent = '',
     focused = false,
     canClose = true,
     maximized = false,
@@ -47,7 +50,11 @@
     onsetwidget = () => {},
     onmaximize = () => {},
     oncollapse = () => {},
-    onctxmenu = () => {},      // (clientX, clientY) → root opens the menu
+    onctxmenu = () => {},      // (clientX, clientY) → root opens the pane menu
+    onpickagent = () => {},    // Sessions pane: click row → focus terminal
+    onopenagentnew = () => {}, // Sessions pane: + → open in new pane
+    onagentctxmenu = () => {}, // Sessions pane: right-click agent → menu
+    onteamctxmenu = () => {},  // Sessions pane: right-click team → menu
   } = $props();
 
   let pickerOpen = $state(false);
@@ -84,6 +91,55 @@
     return 'live';
   }
   function fmtTime(t) { if (!t) return ''; try { return new Date(t).toLocaleTimeString(); } catch { return String(t); } }
+
+  // ---------------- Sessions pane (replaces the old roster) ----------------
+  const API = '/api/v1';
+  let sQuery = $state('');
+  let busy = $state({});          // name -> 'pause'|'stop' while in flight
+  let pendingStop = $state('');   // inline-confirm for destructive stop
+
+  // Build team → [session] groups (same shape as the former roster).
+  let sessionGroups = $derived.by(() => {
+    const q = sQuery.trim().toLowerCase();
+    const match = (s) => !q || (s.name || '').toLowerCase().includes(q) || (s.role || '').toLowerCase().includes(q);
+    const byTeam = new Map();
+    for (const tn of teams.map((t) => t.name || t)) byTeam.set(tn, []);
+    for (const s of sessions) {
+      if (!match(s)) continue;
+      const tn = s.team || '—';
+      if (!byTeam.has(tn)) byTeam.set(tn, []);
+      byTeam.get(tn).push(s);
+    }
+    const out = [];
+    for (const [tn, arr] of byTeam) {
+      if (!arr.length) continue;
+      arr.sort((a, b) => {
+        const al = a.exited ? 1 : 0, bl = b.exited ? 1 : 0;
+        if (al !== bl) return al - bl;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      out.push({ team: tn, agents: arr });
+    }
+    out.sort((a, b) => a.team.localeCompare(b.team));
+    return out;
+  });
+  let liveCount = $derived(sessions.filter((s) => !s.exited && s.live !== false).length);
+
+  async function lifecycle(e, name, kind, paused) {
+    e.stopPropagation();
+    if (busy[name]) return;
+    if (kind === 'stop' && pendingStop !== name) {
+      pendingStop = name;
+      setTimeout(() => { if (pendingStop === name) pendingStop = ''; }, 4000);
+      return;
+    }
+    busy = { ...busy, [name]: kind };
+    let url, method = 'POST', body = null;
+    if (kind === 'pause') { url = `${API}/sessions/${name}/pause`; body = JSON.stringify({ paused }); }
+    else if (kind === 'stop') { url = `${API}/sessions/${name}`; method = 'DELETE'; pendingStop = ''; }
+    try { await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body }); } catch {}
+    const { [name]: _, ...rest } = busy; busy = rest;
+  }
 </script>
 
 <div class="leaf {focused ? 'is-focused' : ''}" data-leaf-id={node.id} onmousedown={onfocus} oncontextmenu={(e) => { e.preventDefault(); onctxmenu(e.clientX, e.clientY); }} role="presentation">
@@ -149,7 +205,62 @@
   </header>
 
   <div class="leaf-body">
-    {#if node.widget === 'terminal'}
+    {#if node.widget === 'sessions'}
+      <div class="sessions">
+        <div class="sess-search">
+          <input type="text" placeholder="Filter agents…" bind:value={sQuery} aria-label="Filter agents" onclick={(e) => e.stopPropagation()} />
+          <span class="sess-count">{liveCount} live</span>
+        </div>
+        <div class="sess-scroll">
+          {#if sessionGroups.length === 0}
+            <div class="hollow sm">{sessions.length ? 'No matches' : 'No agents yet'}</div>
+          {/if}
+          {#each sessionGroups as g (g.team)}
+            <div class="sess-team">
+              <!-- #11 right-click a team label → Team settings -->
+              <button
+                class="team-label"
+                title={`${g.team} — right-click for team settings`}
+                oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); onteamctxmenu(g.team, e.clientX, e.clientY); }}
+                onclick={(e) => e.stopPropagation()}
+              >{g.team}</button>
+              {#each g.agents as s (s.name)}
+                {@const sid = agentIdentity(s)}
+                {@const st = statusLabel(s)}
+                <!-- #11 right-click an agent → Agent settings -->
+                <div
+                  class="srow {selectedAgent === s.name ? 'is-sel' : ''}"
+                  role="button"
+                  tabindex="0"
+                  onclick={(e) => { e.stopPropagation(); onpickagent(s.name); }}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onpickagent(s.name); } }}
+                  oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); onagentctxmenu(s.name, e.clientX, e.clientY); }}
+                  title={`${s.name} — ${s.role || 'agent'} — ${st} · right-click for agent settings`}
+                >
+                  <span class="srow-ic" style={`color:${sid.color}`}>{sid.icon}</span>
+                  <span class="srow-text">
+                    <span class="srow-name">{s.name}</span>
+                    <span class="srow-role">{s.role || 'agent'}</span>
+                  </span>
+                  <span class="srow-dot {st}" title={st}></span>
+                  <span class="srow-acts">
+                    {#if !s.exited}
+                      {#if s.paused}
+                        <button class="srow-act" title="Resume" aria-label={`Resume ${s.name}`} disabled={!!busy[s.name]} onclick={(e) => lifecycle(e, s.name, 'pause', false)}>{busy[s.name] === 'pause' ? '…' : '▶'}</button>
+                      {:else}
+                        <button class="srow-act" title="Pause" aria-label={`Pause ${s.name}`} disabled={!!busy[s.name]} onclick={(e) => lifecycle(e, s.name, 'pause', true)}>{busy[s.name] === 'pause' ? '…' : '⏸'}</button>
+                      {/if}
+                      <button class="srow-act danger {pendingStop === s.name ? 'confirm' : ''}" title={pendingStop === s.name ? 'Click again to stop' : 'Stop'} aria-label={`Stop ${s.name}`} disabled={!!busy[s.name]} onclick={(e) => lifecycle(e, s.name, 'stop')}>{busy[s.name] === 'stop' ? '…' : (pendingStop === s.name ? '✓?' : '■')}</button>
+                    {/if}
+                    <button class="srow-act" title="Open in a new pane" aria-label={`Open ${s.name} in a new pane`} onclick={(e) => { e.stopPropagation(); onopenagentnew(s.name); }}>＋</button>
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {:else if node.widget === 'terminal'}
       {#key node.id + '|' + (boundName || '')}
         <WidgetTerminal selectedAgent={boundName} {sessions} {node} />
       {/key}
@@ -157,7 +268,7 @@
       {#if kanbanAgent?.github_url}
         <div class="widget-host"><WidgetKanban agent={kanbanAgent} {sessions} team={kanbanAgent?.team} /></div>
       {:else}
-        <div class="hollow">No agent with a linked repository. Bind a github_url-bearing agent (focus one in the rail) to see its board.</div>
+        <div class="hollow">No agent with a linked repository. Bind a github_url-bearing agent (focus one in a Sessions pane) to see its board.</div>
       {/if}
     {:else if node.widget === 'events'}
       <div class="widget-host"><WidgetMCPLog {events} /></div>
@@ -196,6 +307,8 @@
           {/each}
         {/if}
       </div>
+    {:else if node.widget === 'mcplog'}
+      <div class="widget-host"><WidgetMCPLog {events} /></div>
     {/if}
   </div>
 </div>
@@ -243,6 +356,36 @@
 
   .hollow { color: var(--calm-fg-faint); font-size: 0.84rem; padding: 1.4rem; margin: 0.7rem; text-align: center; background: var(--calm-surface-2); border: 1px dashed var(--calm-border); border-radius: 6px; }
   .hollow.sm { padding: 0.9rem; }
+
+  /* ---- Sessions pane (the agent list; replaces the old roster) ---- */
+  .sessions { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .sess-search { flex: 0 0 auto; padding: 0.5rem 0.55rem; display: flex; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--calm-border); }
+  .sess-search input { flex: 1; min-width: 0; padding: 0.38rem 0.55rem; background: var(--calm-input); color: var(--calm-fg); border: 1px solid var(--calm-border); border-radius: 6px; font-size: 0.78rem; }
+  .sess-search input::placeholder { color: var(--calm-fg-faint); }
+  .sess-search input:focus { outline: none; border-color: var(--calm-accent); }
+  .sess-count { font-size: 0.64rem; color: var(--calm-fg-faint); white-space: nowrap; }
+  .sess-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0.4rem 0.4rem 1rem; }
+  .sess-team { margin-bottom: 0.55rem; }
+  .team-label { display: block; width: 100%; text-align: left; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--calm-fg-faint); font-weight: 700; padding: 0.35rem 0.5rem 0.25rem; background: transparent; border: 0; cursor: context-menu; }
+  .team-label:hover { color: var(--calm-fg-muted); }
+  .srow { display: flex; align-items: center; gap: 0.5rem; padding: 0.42rem 0.5rem; border-radius: 6px; cursor: pointer; transition: background 0.13s ease; }
+  .srow:hover { background: var(--calm-chip-hover); }
+  .srow.is-sel { background: color-mix(in srgb, var(--calm-accent) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--calm-accent) 40%, transparent); }
+  .srow-ic { font-size: 1rem; width: 1.2rem; text-align: center; flex: 0 0 auto; }
+  .srow-text { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.15; }
+  .srow-name { font-size: 0.83rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--calm-fg); }
+  .srow-role { font-size: 0.67rem; color: var(--calm-fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  .srow-dot.live { background: var(--calm-ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--calm-ok) 22%, transparent); }
+  .srow-dot.paused { background: var(--calm-warn); }
+  .srow-dot.exited, .srow-dot.offline { background: var(--calm-fg-faint); }
+  .srow-acts { display: inline-flex; align-items: center; gap: 0.1rem; flex: 0 0 auto; }
+  .srow-act { width: 22px; height: 22px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px solid transparent; color: var(--calm-fg-muted); border-radius: 6px; cursor: pointer; font-size: 0.8rem; line-height: 1; opacity: 0; transition: opacity 0.13s ease, background 0.13s ease, color 0.13s ease; }
+  .srow:hover .srow-act { opacity: 1; }
+  .srow-act:hover:not(:disabled) { background: var(--calm-chip); color: var(--calm-accent); }
+  .srow-act:disabled { cursor: progress; opacity: 0.5; }
+  .srow-act.danger:hover:not(:disabled) { color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 14%, transparent); }
+  .srow-act.confirm { opacity: 1; color: var(--calm-danger); background: color-mix(in srgb, var(--calm-danger) 16%, transparent); font-size: 0.68rem; font-weight: 700; }
 
   .feed { height: 100%; overflow: auto; padding: 0.7rem; display: flex; flex-direction: column; gap: 0.4rem; color: var(--calm-fg); }
   .feed-lede { color: var(--calm-fg-muted); font-size: 0.78rem; margin-bottom: 0.2rem; }

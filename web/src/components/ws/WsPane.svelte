@@ -17,10 +17,13 @@
   let {
     node,
     sessions = [],
+    teams = [],
+    memberships = [],
     events = [],
     peers = [],
     tasks = [],
     focusedSession = null,
+    selectedAgent = '',
     focusedLeafId = '',
     maximizedLeafId = '',
     parentSplit = null,
@@ -34,6 +37,10 @@
     onmaximize = () => {},
     oncollapse = () => {},
     onleafctxmenu = () => {},
+    onpickagent = () => {},
+    onopenagentnew = () => {},
+    onagentctxmenu = () => {},
+    onteamctxmenu = () => {},
     canClose = true,
   } = $props();
 
@@ -75,10 +82,13 @@
   <WsLeaf
     {node}
     {sessions}
+    {teams}
+    {memberships}
     {events}
     {peers}
     {tasks}
     {focusedSession}
+    {selectedAgent}
     focused={focusedLeafId === node.id}
     {canClose}
     maximized={maximizedLeafId === node.id}
@@ -91,16 +101,20 @@
     onmaximize={() => onmaximize(node.id)}
     oncollapse={() => oncollapse(node.id)}
     onctxmenu={(x, y) => onleafctxmenu(node.id, x, y)}
+    {onpickagent}
+    {onopenagentnew}
+    {onagentctxmenu}
+    {onteamctxmenu}
   />
 {:else}
   <div class="split {node.kind === 'h' ? 'split-h' : 'split-v'}" bind:this={container}>
     <div class="split-side" style={node.kind === 'h' ? `width:${aPct}%` : `height:${aPct}%`}>
       <svelte:self
         node={node.a}
-        {sessions} {events} {peers} {tasks} {focusedSession}
+        {sessions} {teams} {memberships} {events} {peers} {tasks} {focusedSession} {selectedAgent}
         {focusedLeafId} {maximizedLeafId}
         parentSplit={node} parentSide="a"
-        {onfocusleaf} {onsetratio} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu}
+        {onfocusleaf} {onsetratio} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu} {onpickagent} {onopenagentnew} {onagentctxmenu} {onteamctxmenu}
         canClose={true}
       />
     </div>
@@ -110,10 +124,10 @@
     <div class="split-side" style={node.kind === 'h' ? `width:${100 - aPct}%` : `height:${100 - aPct}%`}>
       <svelte:self
         node={node.b}
-        {sessions} {events} {peers} {tasks} {focusedSession}
+        {sessions} {teams} {memberships} {events} {peers} {tasks} {focusedSession} {selectedAgent}
         {focusedLeafId} {maximizedLeafId}
         parentSplit={node} parentSide="b"
-        {onfocusleaf} {onsetratio} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu}
+        {onfocusleaf} {onsetratio} {onsplit} {onclose} {onsetagent} {onsetwidget} {onmaximize} {oncollapse} {onleafctxmenu} {onpickagent} {onopenagentnew} {onagentctxmenu} {onteamctxmenu}
         canClose={true}
       />
     </div>
