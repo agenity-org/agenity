@@ -36,7 +36,7 @@ export function nextId(prefix = 'n') {
 export const PANE_TYPES = [
   { id: 'sessions',   label: 'Sessions',   glyph: '☰' },
   { id: 'terminal',   label: 'Terminal',   glyph: '▦' },
-  { id: 'inspector',  label: 'Agent Details', glyph: '◉' },
+  { id: 'inspector',  label: 'Details', glyph: '◉' },
   { id: 'kanban',     label: 'Kanban',     glyph: '☷' },
   { id: 'events',     label: 'Events',     glyph: '〜' },
   { id: 'transcript', label: 'Transcript', glyph: '✉' },
@@ -56,11 +56,17 @@ export function paneMeta(widget) {
 // (#3/#4 — operator-reported "Sessions width varies per tab"). It's a
 // pixel constant, not a ratio, because ratios scale with the viewport and
 // therefore differ between a 16%-Work-split and a 24%-Conversation-split.
-// AGENT_DETAILS_W is the matching fixed width for the right Agent-Details
-// rail. Splits carrying `fixed:'a'|'b'` + `fixedPx` render that side at a
-// fixed px width (the other side flexes) — see WsPane.
+// DETAILS_W is the matching fixed width for the right Details rail. It is
+// deliberately EQUAL to SESSIONS_W so the left (Sessions) and right (Details)
+// rails render at identical px — a symmetric frame around the terminal region
+// (operator-reported "Details rail wider than Sessions"). Splits carrying
+// `fixed:'a'|'b'` + `fixedPx` render that side at a fixed px width (the other
+// side flexes) — see WsPane.
 export const SESSIONS_W = 260;
-export const AGENT_DETAILS_W = 340;
+export const DETAILS_W = SESSIONS_W;
+// Back-compat alias: older call sites referenced AGENT_DETAILS_W. Kept equal
+// to DETAILS_W so any lingering reference still yields the symmetric width.
+export const AGENT_DETAILS_W = DETAILS_W;
 
 // ---------------- tree constructors ----------------
 export function leaf(widget = 'terminal', config = {}) {
@@ -78,10 +84,13 @@ export function fixedSplit(a, b, which, px) {
   return { kind: 'h', id: nextId('split'), a, b, ratio: which === 'a' ? 0.2 : 0.8, fixed: which, fixedPx: px };
 }
 
-// gridOf tiles 1..4 terminal leaves in a BALANCED grid (the auto-opened
-// live-agent terminals for the Work view, #3). 1→single, 2→side-by-side,
+// gridOf tiles 1..4 terminal leaves in a BALANCED grid (the auto-managed
+// live-agent terminals for the Work view). 1→single, 2→side-by-side,
 // 3→one-over-a-pair, 4→2×2. Each config carries the agent name (or {} when
 // no agent is available so the pane still renders its "pick agent" state).
+// With zero configs it returns ONE empty terminal leaf — the "no agent yet"
+// placeholder — so the Work view always shows exactly one terminal pane when
+// the team is empty (never the old hardcoded 3).
 export function gridOf(configs) {
   const c = (configs && configs.length) ? configs : [{}];
   const L = (cfg) => leaf('terminal', cfg || {});
@@ -90,6 +99,37 @@ export function gridOf(configs) {
   if (c.length === 3) return vsplit(hsplit(L(c[0]), L(c[1]), 0.5), L(c[2]), 0.5);
   // 4 (and any overflow, capped by the caller) → 2×2.
   return vsplit(hsplit(L(c[0]), L(c[1]), 0.5), hsplit(L(c[2]), L(c[3]), 0.5), 0.5);
+}
+
+// AUTO_REGION marks the split whose `a` side is the DASHBOARD-MANAGED terminal
+// region of the Work view — the centre column between the Sessions (left) and
+// Details (right) rails. The dashboard reactively rebuilds that `a` subtree to
+// a balanced grid of up-to-4 live, non-shepherd agent terminals as the roster
+// changes (count-driven auto-fill). The marker rides on the SPLIT (not a leaf)
+// so it survives the subtree being rebuilt out from under it. It is dropped
+// the moment the operator manually edits the Work layout (per-workspace manual
+// flag) so we never clobber their arrangement.
+export const AUTO_REGION = 'work';
+
+// findAutoRegionSplit returns the split node carrying autoRegion === AUTO_REGION
+// (the managed terminal region's parent), or null. The managed terminal subtree
+// is that split's `a` child.
+export function findAutoRegionSplit(node) {
+  if (!node || node.kind === 'leaf') return null;
+  if (node.autoRegion === AUTO_REGION) return node;
+  return findAutoRegionSplit(node.a) || findAutoRegionSplit(node.b);
+}
+
+// setAutoRegionChild replaces the `a` child of the auto-region split with
+// `subtree` (the freshly-built terminal grid), immutably. No-op (returns the
+// tree unchanged) when there is no auto-region split.
+export function setAutoRegionChild(tree, subtree) {
+  function rec(node) {
+    if (!node || node.kind === 'leaf') return node;
+    if (node.autoRegion === AUTO_REGION) return { ...node, a: subtree };
+    return { ...node, a: rec(node.a), b: rec(node.b) };
+  }
+  return rec(tree);
 }
 
 // A fresh workspace leads with a Sessions pane beside a terminal so the
@@ -277,6 +317,9 @@ export function sanitizeNode(node) {
       out.fixed = node.fixed; out.fixedPx = node.fixedPx;
       if (typeof node._prevFixedPx === 'number') out._prevFixedPx = node._prevFixedPx;
     }
+    // Preserve the auto-managed-terminal-region marker across reloads so the
+    // count-driven Work auto-fill keeps targeting the right split (#4).
+    if (node.autoRegion === AUTO_REGION) out.autoRegion = AUTO_REGION;
     return out;
   }
   return null;
@@ -303,9 +346,26 @@ export function cloneTreeFreshIds(node) {
     if ((node.fixed === 'a' || node.fixed === 'b') && typeof node.fixedPx === 'number') {
       out.fixed = node.fixed; out.fixedPx = node.fixedPx;
     }
+    if (node.autoRegion === AUTO_REGION) out.autoRegion = AUTO_REGION;
     return out;
   }
   return defaultLayout();
+}
+
+// workSeedLayout builds the Work view's split-tree:
+//   Sessions(fixed 260px) | [ AUTO-REGION: terminals | Details(fixed 260px) ]
+// Both rails are FIXED px and EQUAL width so they frame the centre
+// symmetrically across every tab. The centre column (the auto-region split's
+// `a` child) starts as a SINGLE empty terminal — the "no agent yet"
+// placeholder — and the dashboard reactively rebuilds it into a balanced grid
+// of up-to-4 live-agent terminals as the roster grows (count-driven), until
+// the operator manually edits the Work layout. The inner split carries
+// autoRegion === AUTO_REGION so the dashboard can find + rebuild the region
+// without disturbing either rail.
+function workSeedLayout() {
+  const inner = fixedSplit(leaf('terminal', {}), leaf('inspector', {}), 'b', DETAILS_W);
+  inner.autoRegion = AUTO_REGION;
+  return fixedSplit(leaf('sessions', {}), inner, 'a', SESSIONS_W);
 }
 
 // ---------------- seed compositions ----------------
@@ -313,33 +373,19 @@ export function cloneTreeFreshIds(node) {
 // for every new operator. Just compositions; the operator can rebuild them
 // freely. Every seed leads with a Sessions pane (the agent list — there is no
 // longer a fixed roster) so agents are reachable out of the box.
-//   Work (active on load) — Sessions(16%) | Terminal(62%) | Agent Details(22%).
-//     A three-way horizontal split: agent list on the far left, the live
-//     terminal of the auto-focused agent in the centre, its Agent Details on
-//     the right. Encoded as Sessions | (Terminal | AgentDetails). With the
-//     outer ratio 0.16 the right group gets 84%; split that 0.738 so the
-//     terminal occupies 0.84·0.738 ≈ 0.62 and details 0.84·0.262 ≈ 0.22.
-//   Overview — Sessions(18%) | (Kanban | Events).
-//   Conversation — Transcript (large) | Agent Details(24%).
+//   Work (active on load) — Sessions(260px) | terminals | Details(260px).
+//     Agent list on the far left, the dashboard-managed live-terminal region
+//     in the centre (1 pane empty, growing to a balanced up-to-4 grid as the
+//     team grows), the focused agent's Details on the right. Both rails are
+//     fixed + equal width.
+//   Overview — Sessions(260px) | (Kanban | Events).
+//   Conversation — Sessions(260px) | (Transcript | Details(260px)).
 export function seedWorkspaces() {
   return [
     {
       id: nextId('ws'),
       name: 'Work',
-      // Sessions(fixed 260px) | terminals-grid (auto-filled with up to 4
-      // live-agent terminals, #3) | Agent Details(fixed 340px). Both rails
-      // are FIXED px so they're identical across tabs. The centre starts as
-      // a single terminal carrying `autoTerminals:'work'` so the dashboard
-      // can replace it with the live-agent grid once sessions load.
-      layout: fixedSplit(
-        leaf('sessions', {}),
-        fixedSplit(
-          leaf('terminal', { autoTerminals: 'work' }),
-          leaf('inspector', {}),
-          'b', AGENT_DETAILS_W,
-        ),
-        'a', SESSIONS_W,
-      ),
+      layout: workSeedLayout(),
     },
     {
       id: nextId('ws'),
@@ -353,11 +399,11 @@ export function seedWorkspaces() {
     {
       id: nextId('ws'),
       name: 'Conversation',
-      // Conversation gets the SAME fixed Sessions rail as Work (#4), then a
-      // large Transcript with an Agent-Details rail on the right.
+      // Conversation gets the SAME fixed Sessions rail as Work, then a
+      // large Transcript with a Details rail (equal width) on the right.
       layout: fixedSplit(
         leaf('sessions', {}),
-        fixedSplit(leaf('transcript', {}), leaf('inspector', {}), 'b', AGENT_DETAILS_W),
+        fixedSplit(leaf('transcript', {}), leaf('inspector', {}), 'b', DETAILS_W),
         'a', SESSIONS_W,
       ),
     },
@@ -368,13 +414,16 @@ export function seedWorkspaces() {
 // Keyed so the data survives reloads. We persist the full workspace list,
 // the active index, and per-workspace focus/maximize hints.
 //
-// v4: fixed-pixel Sessions / Agent-Details rails + auto-4-terminal Work seed
-// (#3/#4). Bumping the key re-seeds operators who still carry an UNTOUCHED
-// v3 seed, while operators who CUSTOMISED their v3 layout keep it (migrated
-// forward) — see loadWorkspaces' v3 fallback. v3 re-seeded v2 (Work three-
-// way split); v2 re-seeded v1 (roster → Sessions pane).
-const STORE_KEY = 'ws-workspaces-v4';
-const ACTIVE_KEY = 'ws-active-v4';
+// v5: equal-width Sessions/Details rails + COUNT-DRIVEN auto-managed terminal
+// region (#4 — replaces the v4 single-shot autoTerminals placeholder that froze
+// at 3 panes). Bumping the key re-seeds operators who still carry an UNTOUCHED
+// v4 seed, while operators who CUSTOMISED their v4 layout keep it (migrated
+// forward) — see loadWorkspaces' v4 fallback. v4 re-seeded v3 (ratio rails →
+// fixed rails); v3 re-seeded v2 (Work three-way split); v2 re-seeded v1.
+const STORE_KEY = 'ws-workspaces-v5';
+const ACTIVE_KEY = 'ws-active-v5';
+const STORE_KEY_V4 = 'ws-workspaces-v4';
+const ACTIVE_KEY_V4 = 'ws-active-v4';
 const STORE_KEY_V3 = 'ws-workspaces-v3';
 const ACTIVE_KEY_V3 = 'ws-active-v3';
 const STORE_KEY_V2 = 'ws-workspaces-v2';
@@ -395,7 +444,8 @@ function fingerprint(node) {
   if (node.kind === 'leaf') return `L:${node.widget}`;
   const r = Math.round((typeof node.ratio === 'number' ? node.ratio : 0.5) * 100);
   const fx = (node.fixed === 'a' || node.fixed === 'b') ? `${node.fixed}${node.fixedPx || ''}` : '';
-  return `${node.kind}${fx}(${r},${fingerprint(node.a)},${fingerprint(node.b)})`;
+  const ar = node.autoRegion === AUTO_REGION ? `@${AUTO_REGION}` : '';
+  return `${node.kind}${fx}${ar}(${r},${fingerprint(node.a)},${fingerprint(node.b)})`;
 }
 function workspacesFingerprint(list) {
   if (!Array.isArray(list)) return '';
@@ -423,6 +473,29 @@ function v3SeedFingerprint() {
   ];
   return workspacesFingerprint(v3);
 }
+// The exact v4 pristine seed (fixed 260/340 rails + a single autoTerminals
+// placeholder in the centre). A stored v4 list matching this was never
+// customised → safe to re-seed to v5 (count-driven terminal region). Built
+// inline so it can't drift from this module's history.
+function v4SeedFingerprint() {
+  const railA = (a, b, px) => ({ kind: 'h', a, b, ratio: 0.2, fixed: 'a', fixedPx: px });
+  const railB = (a, b, px) => ({ kind: 'h', a, b, ratio: 0.8, fixed: 'b', fixedPx: px });
+  const v4 = [
+    { name: 'Work', layout: railA(
+        leaf('sessions', {}),
+        railB(leaf('terminal', { autoTerminals: 'work' }), leaf('inspector', {}), 340),
+        260) },
+    { name: 'Overview', layout: railA(
+        leaf('sessions', {}),
+        hsplit(leaf('kanban', {}), leaf('events', {}), 0.6),
+        260) },
+    { name: 'Conversation', layout: railA(
+        leaf('sessions', {}),
+        railB(leaf('transcript', {}), leaf('inspector', {}), 340),
+        260) },
+  ];
+  return workspacesFingerprint(v4);
+}
 
 function parseStored(raw) {
   try {
@@ -431,11 +504,16 @@ function parseStored(raw) {
     const out = [];
     for (const w of parsed) {
       const layout = sanitizeNode(w?.layout) || defaultLayout();
-      out.push({
+      const ws = {
         id: typeof w?.id === 'string' ? w.id : nextId('ws'),
         name: (typeof w?.name === 'string' && w.name.trim()) ? w.name : 'Workspace',
         layout,
-      });
+      };
+      // workManual: once the operator manually edits a Work-style layout, the
+      // count-driven terminal auto-fill (#4) stops touching it. Persist the
+      // flag so the arrangement survives a reload as the operator left it.
+      if (w?.workManual === true) ws.workManual = true;
+      out.push(ws);
     }
     return out.length ? out : null;
   } catch { return null; }
@@ -461,27 +539,35 @@ export function sanitizeWorkspaceList(list) {
 
 export function loadWorkspaces() {
   try {
-    // Post-migration users: just load v4 (custom or freshly-seeded alike).
-    const v4 = localStorage.getItem(STORE_KEY);
-    if (v4) return parseStored(v4);
+    // Post-migration users: just load v5 (custom or freshly-seeded alike).
+    const v5 = localStorage.getItem(STORE_KEY);
+    if (v5) return parseStored(v5);
 
-    // No v4 yet. Try v3, then v2, deciding migrate-vs-reseed at each step.
+    // No v5 yet. Try v4, v3, then v2, deciding migrate-vs-reseed at each step.
+    const v4raw = localStorage.getItem(STORE_KEY_V4);
+    if (v4raw) {
+      const v4list = parseStored(v4raw);
+      if (!v4list) return null;                                // unparseable → seed v5
+      if (workspacesFingerprint(v4list) === v4SeedFingerprint()) return null; // pristine v4 → re-seed v5
+      return v4list;                                           // customised v4 → migrate forward
+    }
+
     const v3raw = localStorage.getItem(STORE_KEY_V3);
     if (v3raw) {
       const v3list = parseStored(v3raw);
-      if (!v3list) return null;                                // unparseable → seed v4
-      if (workspacesFingerprint(v3list) === v3SeedFingerprint()) return null; // pristine v3 → re-seed v4
+      if (!v3list) return null;                                // unparseable → seed v5
+      if (workspacesFingerprint(v3list) === v3SeedFingerprint()) return null; // pristine v3 → re-seed v5
       return v3list;                                           // customised v3 → migrate forward
     }
 
     // No v3 either. Look at the legacy v2 store.
     const v2raw = localStorage.getItem(STORE_KEY_V2);
-    if (!v2raw) return null;                 // brand-new user → seed v4
+    if (!v2raw) return null;                 // brand-new user → seed v5
     const v2list = parseStored(v2raw);
-    if (!v2list) return null;                // unparseable → seed v4
-    // Untouched v2 default → discard, return null so the caller seeds v4.
+    if (!v2list) return null;                // unparseable → seed v5
+    // Untouched v2 default → discard, return null so the caller seeds v5.
     if (workspacesFingerprint(v2list) === v2SeedFingerprint()) return null;
-    // Customised v2 layout → migrate it forward (persists under v4 on next save).
+    // Customised v2 layout → migrate it forward (persists under v5 on next save).
     return v2list;
   } catch { return null; }
 }
@@ -494,7 +580,7 @@ export function saveWorkspaces(workspaces) {
 }
 
 export function loadActiveId() {
-  try { return localStorage.getItem(ACTIVE_KEY) || localStorage.getItem(ACTIVE_KEY_V3) || localStorage.getItem(ACTIVE_KEY_V2) || ''; } catch { return ''; }
+  try { return localStorage.getItem(ACTIVE_KEY) || localStorage.getItem(ACTIVE_KEY_V4) || localStorage.getItem(ACTIVE_KEY_V3) || localStorage.getItem(ACTIVE_KEY_V2) || ''; } catch { return ''; }
 }
 export function saveActiveId(id) {
   try { localStorage.setItem(ACTIVE_KEY, id || ''); } catch {}
