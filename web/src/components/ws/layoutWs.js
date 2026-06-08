@@ -52,10 +52,10 @@ export function paneMeta(widget) {
 
 // ---------------- shared layout constants ----------------
 // SESSIONS_W is the FIXED pixel width of the left Sessions pane in EVERY
-// seed (Work, Overview, Conversation) so it reads identically tab-to-tab
+// seed that has one (Work, Talk) so it reads identically tab-to-tab
 // (#3/#4 — operator-reported "Sessions width varies per tab"). It's a
 // pixel constant, not a ratio, because ratios scale with the viewport and
-// therefore differ between a 16%-Work-split and a 24%-Conversation-split.
+// therefore differ between a 16%-Work-split and a 24%-Talk-split.
 // DETAILS_W is the matching fixed width for the right Details rail. It is
 // deliberately EQUAL to SESSIONS_W so the left (Sessions) and right (Details)
 // rails render at identical px — a symmetric frame around the terminal region
@@ -354,32 +354,51 @@ export function cloneTreeFreshIds(node) {
 
 // workSeedLayout builds the Work view's split-tree:
 //   Sessions(fixed 260px) | [ AUTO-REGION: terminals | Details(fixed 260px) ]
-// Both rails are FIXED px and EQUAL width so they frame the centre
-// symmetrically across every tab. The centre column (the auto-region split's
-// `a` child) starts as a SINGLE empty terminal — the "no agent yet"
-// placeholder — and the dashboard reactively rebuilds it into a balanced grid
-// of up-to-4 live-agent terminals as the roster grows (count-driven), until
-// the operator manually edits the Work layout. The inner split carries
-// autoRegion === AUTO_REGION so the dashboard can find + rebuild the region
-// without disturbing either rail.
+// Both rails are FIXED px and EQUAL width (SESSIONS_W === DETAILS_W) so they
+// frame the centre symmetrically across every tab. The centre column (the
+// auto-region split's `a` child) starts as a SINGLE empty terminal — the
+// "no agent yet" placeholder — and the dashboard reactively rebuilds it into a
+// balanced grid of up-to-4 live-agent terminals as the roster grows
+// (count-driven), until the operator manually edits the Work layout. The inner
+// split carries autoRegion === AUTO_REGION so the dashboard can find + rebuild
+// the region without disturbing either rail.
 function workSeedLayout() {
   const inner = fixedSplit(leaf('terminal', {}), leaf('inspector', {}), 'b', DETAILS_W);
   inner.autoRegion = AUTO_REGION;
   return fixedSplit(leaf('sessions', {}), inner, 'a', SESSIONS_W);
 }
 
+// terminalSeedLayout is a FULL-WIDTH pure auto-region terminal grid (no rails).
+// The whole tab is the count-driven live-agent grid — the split's `a` child is
+// the managed grid, `b` is a thin zero-width sentinel the renderer collapses so
+// the grid fills the tab. We mark a wrapping split (not a bare leaf) so the
+// autoRegion marker can ride a split and survive the subtree being rebuilt.
+function terminalSeedLayout() {
+  // Wrap the managed grid as the `a` side of a vertical split whose `b` is a
+  // tiny collapsed events strip; this gives the autoRegion marker a split to
+  // ride while keeping the terminals dominant. Operators can grow `b` if they
+  // want a log under the grid.
+  const inner = vsplit(leaf('terminal', {}), leaf('events', {}), 0.82);
+  inner.autoRegion = AUTO_REGION;
+  return inner;
+}
+
 // ---------------- seed compositions ----------------
-// Three editable/deletable starting desktops — the global first-run default
-// for every new operator. Just compositions; the operator can rebuild them
-// freely. Every seed leads with a Sessions pane (the agent list — there is no
-// longer a fixed roster) so agents are reachable out of the box.
+// The editable/deletable starting desktops — the global first-run default for
+// EVERY operator (installed fresh on the v6 re-seed; see loadWorkspaces). Just
+// compositions; the operator can rebuild them freely. Work + Talk lead with a
+// Sessions pane (the agent list — there is no longer a fixed roster) so agents
+// are reachable out of the box; Terminal is a pure agent wall and Board is the
+// planning surface.
 //   Work (active on load) — Sessions(260px) | terminals | Details(260px).
 //     Agent list on the far left, the dashboard-managed live-terminal region
 //     in the centre (1 pane empty, growing to a balanced up-to-4 grid as the
 //     team grows), the focused agent's Details on the right. Both rails are
-//     fixed + equal width.
-//   Overview — Sessions(260px) | (Kanban | Events).
-//   Conversation — Sessions(260px) | (Transcript | Details(260px)).
+//     fixed + EQUAL width (SESSIONS_W === DETAILS_W).
+//   Terminal — a full-width pure auto-region terminal grid (same count-driven
+//     centre, no rails) for an at-a-glance wall of live agents.
+//   Talk — Sessions(260px) | Transcript. Same Sessions rail width as Work.
+//   Board — Kanban | (Events / MCP Log).
 export function seedWorkspaces() {
   return [
     {
@@ -389,22 +408,28 @@ export function seedWorkspaces() {
     },
     {
       id: nextId('ws'),
-      name: 'Overview',
+      name: 'Terminal',
+      layout: terminalSeedLayout(),
+    },
+    {
+      id: nextId('ws'),
+      name: 'Talk',
+      // Talk gets the SAME fixed Sessions rail as Work, then a large
+      // Transcript filling the rest.
       layout: fixedSplit(
         leaf('sessions', {}),
-        hsplit(leaf('kanban', {}), leaf('events', {}), 0.6),
+        leaf('transcript', {}),
         'a', SESSIONS_W,
       ),
     },
     {
       id: nextId('ws'),
-      name: 'Conversation',
-      // Conversation gets the SAME fixed Sessions rail as Work, then a
-      // large Transcript with a Details rail (equal width) on the right.
-      layout: fixedSplit(
-        leaf('sessions', {}),
-        fixedSplit(leaf('transcript', {}), leaf('inspector', {}), 'b', DETAILS_W),
-        'a', SESSIONS_W,
+      name: 'Board',
+      // Kanban on the left, Events over MCP Log on the right.
+      layout: hsplit(
+        leaf('kanban', {}),
+        vsplit(leaf('events', {}), leaf('mcplog', {}), 0.5),
+        0.62,
       ),
     },
   ];
@@ -414,19 +439,23 @@ export function seedWorkspaces() {
 // Keyed so the data survives reloads. We persist the full workspace list,
 // the active index, and per-workspace focus/maximize hints.
 //
-// v5: equal-width Sessions/Details rails + COUNT-DRIVEN auto-managed terminal
-// region (#4 — replaces the v4 single-shot autoTerminals placeholder that froze
-// at 3 panes). Bumping the key re-seeds operators who still carry an UNTOUCHED
-// v4 seed, while operators who CUSTOMISED their v4 layout keep it (migrated
-// forward) — see loadWorkspaces' v4 fallback. v4 re-seeded v3 (ratio rails →
-// fixed rails); v3 re-seeded v2 (Work three-way split); v2 re-seeded v1.
-const STORE_KEY = 'ws-workspaces-v5';
-const ACTIVE_KEY = 'ws-active-v5';
-const STORE_KEY_V4 = 'ws-workspaces-v4';
+// v6: FORCE-RESEED to the canonical dynamic default for EVERY operator. The
+// pre-v6 "migrate the customised local layout forward" path is the bug: an
+// operator's hand-arranged / migrated-forward layout carries NO
+// autoRegion==='work' marker, so syncAutoTerminalRegions skips it and the
+// terminal grid stays frozen (the operator's reported "stuck at 3 panes"). On
+// v6 absence we therefore ALWAYS install the fresh canonical seed (Work /
+// Terminal / Talk / Board — all dynamic where it matters) and DROP the
+// migrate-forward branches entirely. The operator's durable, server-saved
+// named views are untouched and still loadable separately via the Views menu.
+// v5 was equal-width rails + count-driven region but only ever reached
+// fresh-cleared users; v4..v2 are the older shapes whose migrate-forward path
+// we are now deliberately abandoning.
+const STORE_KEY = 'ws-workspaces-v6';
+const ACTIVE_KEY = 'ws-active-v6';
+const ACTIVE_KEY_V5 = 'ws-active-v5';
 const ACTIVE_KEY_V4 = 'ws-active-v4';
-const STORE_KEY_V3 = 'ws-workspaces-v3';
 const ACTIVE_KEY_V3 = 'ws-active-v3';
-const STORE_KEY_V2 = 'ws-workspaces-v2';
 const ACTIVE_KEY_V2 = 'ws-active-v2';
 
 // DEFAULT_VIEW_KEY persists the NAME of a saved view the operator marked as
@@ -435,67 +464,6 @@ const ACTIVE_KEY_V2 = 'ws-active-v2';
 const DEFAULT_VIEW_KEY = 'ws-default-view-v4';
 export function loadDefaultViewName() { try { return localStorage.getItem(DEFAULT_VIEW_KEY) || ''; } catch { return ''; } }
 export function saveDefaultViewName(name) { try { if (name) localStorage.setItem(DEFAULT_VIEW_KEY, name); else localStorage.removeItem(DEFAULT_VIEW_KEY); } catch {} }
-
-// Structural fingerprint of a tree, id-independent: pane types + split axes +
-// rounded ratios. Lets us tell a PRISTINE old seed (re-seed it) from a layout
-// the operator edited (migrate it forward).
-function fingerprint(node) {
-  if (!node || typeof node !== 'object') return '∅';
-  if (node.kind === 'leaf') return `L:${node.widget}`;
-  const r = Math.round((typeof node.ratio === 'number' ? node.ratio : 0.5) * 100);
-  const fx = (node.fixed === 'a' || node.fixed === 'b') ? `${node.fixed}${node.fixedPx || ''}` : '';
-  const ar = node.autoRegion === AUTO_REGION ? `@${AUTO_REGION}` : '';
-  return `${node.kind}${fx}${ar}(${r},${fingerprint(node.a)},${fingerprint(node.b)})`;
-}
-function workspacesFingerprint(list) {
-  if (!Array.isArray(list)) return '';
-  return list.map((w) => `${w?.name || ''}=${fingerprint(w?.layout)}`).join('|');
-}
-// The exact v2 pristine seed shape (Work/Board/Talk). Generated, not hand-
-// typed, so it can't drift from the algebra. Any stored v2 list whose
-// fingerprint matches this was never customised → safe to re-seed to v3.
-function v2SeedFingerprint() {
-  const v2 = [
-    { name: 'Work',  layout: hsplit(leaf('sessions', {}), vsplit(leaf('terminal', {}), leaf('inspector', {}), 0.66), 0.22) },
-    { name: 'Board', layout: hsplit(leaf('sessions', {}), hsplit(leaf('kanban', {}), leaf('events', {}), 0.6), 0.22) },
-    { name: 'Talk',  layout: hsplit(leaf('sessions', {}), leaf('transcript', {}), 0.22) },
-  ];
-  return workspacesFingerprint(v2);
-}
-// The exact v3 pristine seed (Work three-way / Overview / Conversation, all
-// ratio-based, no fixed rails). A stored v3 list matching this was never
-// customised → safe to re-seed to v4.
-function v3SeedFingerprint() {
-  const v3 = [
-    { name: 'Work',         layout: hsplit(leaf('sessions', {}), hsplit(leaf('terminal', {}), leaf('inspector', {}), 0.738), 0.16) },
-    { name: 'Overview',     layout: hsplit(leaf('sessions', {}), hsplit(leaf('kanban', {}), leaf('events', {}), 0.6), 0.18) },
-    { name: 'Conversation', layout: hsplit(leaf('transcript', {}), leaf('inspector', {}), 0.76) },
-  ];
-  return workspacesFingerprint(v3);
-}
-// The exact v4 pristine seed (fixed 260/340 rails + a single autoTerminals
-// placeholder in the centre). A stored v4 list matching this was never
-// customised → safe to re-seed to v5 (count-driven terminal region). Built
-// inline so it can't drift from this module's history.
-function v4SeedFingerprint() {
-  const railA = (a, b, px) => ({ kind: 'h', a, b, ratio: 0.2, fixed: 'a', fixedPx: px });
-  const railB = (a, b, px) => ({ kind: 'h', a, b, ratio: 0.8, fixed: 'b', fixedPx: px });
-  const v4 = [
-    { name: 'Work', layout: railA(
-        leaf('sessions', {}),
-        railB(leaf('terminal', { autoTerminals: 'work' }), leaf('inspector', {}), 340),
-        260) },
-    { name: 'Overview', layout: railA(
-        leaf('sessions', {}),
-        hsplit(leaf('kanban', {}), leaf('events', {}), 0.6),
-        260) },
-    { name: 'Conversation', layout: railA(
-        leaf('sessions', {}),
-        railB(leaf('transcript', {}), leaf('inspector', {}), 340),
-        260) },
-  ];
-  return workspacesFingerprint(v4);
-}
 
 function parseStored(raw) {
   try {
@@ -539,36 +507,18 @@ export function sanitizeWorkspaceList(list) {
 
 export function loadWorkspaces() {
   try {
-    // Post-migration users: just load v5 (custom or freshly-seeded alike).
-    const v5 = localStorage.getItem(STORE_KEY);
-    if (v5) return parseStored(v5);
-
-    // No v5 yet. Try v4, v3, then v2, deciding migrate-vs-reseed at each step.
-    const v4raw = localStorage.getItem(STORE_KEY_V4);
-    if (v4raw) {
-      const v4list = parseStored(v4raw);
-      if (!v4list) return null;                                // unparseable → seed v5
-      if (workspacesFingerprint(v4list) === v4SeedFingerprint()) return null; // pristine v4 → re-seed v5
-      return v4list;                                           // customised v4 → migrate forward
-    }
-
-    const v3raw = localStorage.getItem(STORE_KEY_V3);
-    if (v3raw) {
-      const v3list = parseStored(v3raw);
-      if (!v3list) return null;                                // unparseable → seed v5
-      if (workspacesFingerprint(v3list) === v3SeedFingerprint()) return null; // pristine v3 → re-seed v5
-      return v3list;                                           // customised v3 → migrate forward
-    }
-
-    // No v3 either. Look at the legacy v2 store.
-    const v2raw = localStorage.getItem(STORE_KEY_V2);
-    if (!v2raw) return null;                 // brand-new user → seed v5
-    const v2list = parseStored(v2raw);
-    if (!v2list) return null;                // unparseable → seed v5
-    // Untouched v2 default → discard, return null so the caller seeds v5.
-    if (workspacesFingerprint(v2list) === v2SeedFingerprint()) return null;
-    // Customised v2 layout → migrate it forward (persists under v5 on next save).
-    return v2list;
+    // v6 FORCE-RESEED. Only a v6 store is honoured: a v6 store is EITHER the
+    // freshly-installed canonical seed OR an arrangement the operator made
+    // AFTER v6 shipped (both correct, both carry the autoRegion marker on the
+    // Work/Terminal tabs). When there is NO v6 store yet — including every
+    // operator carrying a stale v5/v4/v3/v2 layout — we return null so the
+    // caller installs the fresh canonical seed. We deliberately DROP the
+    // pre-v6 migrate-forward path: those layouts are the static, marker-less
+    // trees that froze the terminal grid. The operator's durable named views
+    // (server-side) are unaffected and still loadable from the Views menu.
+    const v6 = localStorage.getItem(STORE_KEY);
+    if (v6) return parseStored(v6);
+    return null;   // no v6 store → caller seeds the canonical dynamic default
   } catch { return null; }
 }
 
@@ -580,7 +530,7 @@ export function saveWorkspaces(workspaces) {
 }
 
 export function loadActiveId() {
-  try { return localStorage.getItem(ACTIVE_KEY) || localStorage.getItem(ACTIVE_KEY_V4) || localStorage.getItem(ACTIVE_KEY_V3) || localStorage.getItem(ACTIVE_KEY_V2) || ''; } catch { return ''; }
+  try { return localStorage.getItem(ACTIVE_KEY) || localStorage.getItem(ACTIVE_KEY_V5) || localStorage.getItem(ACTIVE_KEY_V4) || localStorage.getItem(ACTIVE_KEY_V3) || localStorage.getItem(ACTIVE_KEY_V2) || ''; } catch { return ''; }
 }
 export function saveActiveId(id) {
   try { localStorage.setItem(ACTIVE_KEY, id || ''); } catch {}
