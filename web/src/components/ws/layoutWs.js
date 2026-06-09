@@ -383,6 +383,48 @@ function terminalSeedLayout() {
   return inner;
 }
 
+// retrofitAutoRegion upgrades a layout that predates the autoRegion marker
+// (e.g. a server-saved "Default" view stored before v6) so the count-driven
+// terminal auto-fill (syncAutoTerminalRegions) can manage its terminals. The
+// pre-v6 blobs carry NO autoRegion marker, so without this their terminals are
+// static (the frozen-grid bug). Returns a NEW layout (immutable); the input is
+// not mutated.
+//
+// IDEMPOTENT: if the layout already carries an autoRegion split anywhere, it's
+// returned UNCHANGED — a v6+ blob is already correct.
+//
+// RULE:
+//   PURE-terminal layout (every leaf is a `terminal`, like the "Terminal" tab
+//     h(terminal | v(terminal | terminal))): the WHOLE region is the managed
+//     grid. We wrap the existing tree as the `a` child of a fresh split that
+//     carries autoRegion === AUTO_REGION — matching the shape
+//     terminalSeedLayout() produces and that syncAutoTerminalRegions expects
+//     (it rebuilds the marked split's `a` child into gridOf(liveAgents)). The
+//     wrapper's `b` is a thin collapsed events strip so the grid dominates.
+//   MIXED layout (terminals beside transcript/inspector/etc., like "Work"):
+//     left as-is — a single bound terminal, NOT a forced grid inside a mixed
+//     pane. (We do NOT guess which terminal inside a composed desktop should
+//     become the auto-region; forcing a grid there would clobber the operator's
+//     deliberate composition.)
+export function retrofitAutoRegion(layout) {
+  if (!layout || typeof layout !== 'object') return layout;
+  // Already marked anywhere → v6+ shape; leave untouched (idempotent).
+  if (findAutoRegionSplit(layout)) return layout;
+
+  const all = leaves(layout);
+  if (!all.length) return layout;
+  const pureTerminal = all.every((l) => l.widget === 'terminal');
+  if (!pureTerminal) return layout;   // MIXED → single bound terminal, as-is
+
+  // PURE-terminal → make the whole region the auto-managed grid. Mirror
+  // terminalSeedLayout(): a vsplit whose `a` is the managed grid (the existing
+  // pure-terminal tree, which syncAutoTerminalRegions will rebuild count-driven)
+  // and whose `b` is a thin collapsed events strip, carrying the marker.
+  const wrapped = vsplit(layout, leaf('events', {}), 0.82);
+  wrapped.autoRegion = AUTO_REGION;
+  return wrapped;
+}
+
 // ---------------- seed compositions ----------------
 // The editable/deletable starting desktops — the global first-run default for
 // EVERY operator (installed fresh on the v6 re-seed; see loadWorkspaces). Just
