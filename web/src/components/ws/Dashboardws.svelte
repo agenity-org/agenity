@@ -654,6 +654,44 @@
     } catch {}
   }
 
+  // For a GENUINELY-NEW user (no v6 local store) with no starred local default,
+  // adopt the operator's server-saved "Default" view as the initial working set
+  // instead of the hardcoded canonical seed. The pre-v6 "Default" blob carries
+  // no autoRegion marker, so each workspace is mapped through retrofitAutoRegion
+  // to re-enable count-driven terminal grids (the Terminal tab becomes the
+  // managed grid; mixed tabs like Work keep their single bound terminal).
+  //
+  // SAFETY — never clobbers an existing arrangement:
+  //   * caller only invokes this when T.loadWorkspaces() returned null/empty
+  //     (no v6 store ⇒ genuinely new), and
+  //   * we re-check at apply time that no v6 store appeared meanwhile, and
+  //   * we only replace the interim SEED — if the operator already edited the
+  //     interim seed (workManual on any ws, or a v6 store now exists) we bail.
+  // On fetch failure / 404 / invalid blob the interim canonical seed stays.
+  async function applyServerDefaultForNewUser() {
+    if (!getToken()) return;
+    try {
+      const r = await fetch(`${API}/workspaces/Default`);
+      if (!r.ok) return;                      // 404 / error → keep canonical seed
+      const blob = await r.json();
+      const sanitized = T.sanitizeWorkspaceList(blob);
+      if (!sanitized || !sanitized.length) return;   // invalid → keep seed
+      // Re-confirm still a new user: a v6 store appearing (or the operator
+      // having taken manual control of the interim seed) means do NOT overwrite.
+      if (T.loadWorkspaces()) return;
+      if (workspaces.some((w) => w.workManual)) return;
+      const next = sanitized.map((w) => ({ ...w, layout: T.retrofitAutoRegion(w.layout) }));
+      workspaces = next;
+      const focusSeed = {};
+      for (const w of workspaces) focusSeed[w.id] = T.leaves(w.layout)[0]?.id || '';
+      wsFocus = focusSeed;
+      wsMax = {};
+      activeId = workspaces[0].id;
+      T.saveWorkspaces(viewSnapshot());       // persist so it sticks (now a v6 store)
+      T.saveActiveId(activeId);
+    } catch {}
+  }
+
   function toggleViewsMenu(e) {
     e.stopPropagation();
     closeAllMenus();
@@ -699,8 +737,13 @@
     needLogin = false; loginError = ''; loginInput = '';
     startLiveLoop();
     // First-run login with a starred default view but no local layout yet:
-    // apply it now that we have a token (#3).
-    if (defaultViewName && !T.loadWorkspaces()) applyDefaultViewOnStartup(defaultViewName);
+    // apply it now that we have a token (#3). With no starred default and still
+    // no v6 store (genuinely-new user), adopt the operator's server "Default"
+    // view (retrofitted) over the interim canonical seed installed at mount.
+    if (!T.loadWorkspaces()) {
+      if (defaultViewName) applyDefaultViewOnStartup(defaultViewName);
+      else applyServerDefaultForNewUser();
+    }
   }
   function signOut() {
     userMenuOpen = false;
@@ -1041,9 +1084,16 @@
     // the operator has starred a saved view, load it (server-side) as the
     // initial working set. Only do this when there was NO customised local
     // layout to migrate (loaded == null) so we never clobber unsaved edits.
+    // FALLBACK for a genuinely-new user with NO local starred default: adopt
+    // the operator's server-saved "Default" view (retrofitted for the dynamic
+    // grid) over the hardcoded canonical seed. The seed installed above is the
+    // interim — applyServerDefaultForNewUser replaces it async on success and
+    // is a no-op (keeping the seed) on 404 / failure / invalid blob.
     defaultViewName = T.loadDefaultViewName();
     if (defaultViewName && !(loaded && loaded.length)) {
       applyDefaultViewOnStartup(defaultViewName);
+    } else if (!defaultViewName && !(loaded && loaded.length)) {
+      applyServerDefaultForNewUser();
     }
 
     applyResponsive();
