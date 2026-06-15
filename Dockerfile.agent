@@ -36,11 +36,26 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
 # claude-code
 RUN npm install -g @anthropic-ai/claude-code
 
-# qwen-code (optional — best-effort)
-RUN npm install -g qwen-code 2>/dev/null || true
+# qwen-code — npm pkg @qwen-code/qwen-code ships binary `qwen`, but the
+# agentcatalog slug expects /usr/local/bin/qwen-code. Pin + symlink to
+# reconcile binary↔catalog. (Old `qwen-code` pkg name was wrong; #741.)
+RUN npm install -g @qwen-code/qwen-code@0.18.1 \
+ && ln -sf "$(command -v qwen)" /usr/local/bin/qwen-code
 
-# opencode (optional — best-effort)
-RUN npm install -g opencode-ai 2>/dev/null || true
+# gemini-cli — npm pkg @google/gemini-cli ships binary `gemini`. Symlink
+# into /usr/local/bin to match the agentcatalog Binary path. (#741)
+RUN npm install -g @google/gemini-cli@0.46.0 \
+ && ln -sf "$(command -v gemini)" /usr/local/bin/gemini
+
+# github copilot CLI — npm pkg @github/copilot ships binary `copilot`.
+# Symlink into /usr/local/bin to match the agentcatalog Binary path. (#741)
+RUN npm install -g @github/copilot@1.0.62 \
+ && ln -sf "$(command -v copilot)" /usr/local/bin/copilot
+
+# opencode — npm pkg opencode-ai ships binary `opencode`. Symlink into
+# /usr/local/bin to match the agentcatalog Binary path. (#741)
+RUN npm install -g opencode-ai \
+ && ln -sf "$(command -v opencode)" /usr/local/bin/opencode
 
 # Non-root agent user (UID 1000) — required by chepherd's spawn contract.
 # Host UID 1000 in rootless Podman maps to container root; the actual

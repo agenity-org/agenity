@@ -85,8 +85,17 @@
     return agentAccountOverrides[a.label] || typeAccounts[agentTypeFor(a)] || '';
   }
 
+  // #741 — OAuth host-mount flavors (gemini-cli / qwen-code / copilot) get
+  // their credential from the host login dir the backend auto-mounts
+  // (~/.gemini / ~/.qwen / ~/.config/gh), so they need NO vault account and
+  // must NOT block Launch. Keep this list in sync with Stage4Accounts'
+  // TYPE_GUIDANCE oauth entries. claude-code / codex-cli / aider / opencode
+  // still require a concrete account.
+  const OAUTH_HOST_MOUNT_TYPES = new Set(['gemini-cli', 'qwen-code', 'copilot']);
+
   const allAgentsHaveAccount = $derived.by(() =>
-    agents.length > 0 && agents.every(a => !!accountFor(a))
+    agents.length > 0 &&
+    agents.every(a => !!accountFor(a) || OAUTH_HOST_MOUNT_TYPES.has(agentTypeFor(a)))
   );
 
   const canAdvance = $derived.by(() => {

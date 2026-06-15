@@ -655,6 +655,12 @@ type agentAuthEnvSpec struct {
 //
 // Refs #225 row H1.
 var agentAuthEnvTable = map[string][]agentAuthEnvSpec{
+	"gemini-cli": {
+		// Gemini API key (Google AI Studio). The gemini-cli CLI reads
+		// GEMINI_API_KEY for key-based auth; OAuth (Google login) is the
+		// orthogonal channel handled by agentOAuthCredsTable below.
+		{envVar: "GEMINI_API_KEY", vaultProvider: "google-api"},
+	},
 	"qwen-code": {
 		// Alibaba DashScope key. qwen-code's CLI also reads
 		// OPENAI_API_KEY when configured against an OpenAI-compatible
@@ -662,15 +668,102 @@ var agentAuthEnvTable = map[string][]agentAuthEnvSpec{
 		{envVar: "DASHSCOPE_API_KEY", vaultProvider: "dashscope-api"},
 		{envVar: "OPENAI_API_KEY", vaultProvider: "openai-api"},
 	},
+	"opencode": {
+		// opencode auto-loads any well-known provider whose API key is
+		// present in env. We wire the free/fast providers first (groq,
+		// cerebras) then the paid fallbacks (openai, anthropic). The
+		// model selection lives in agent-entrypoint.sh (TASK C), keyed
+		// off whichever of these keys actually got a value.
+		{envVar: "GROQ_API_KEY", vaultProvider: "groq-api"},
+		{envVar: "CEREBRAS_API_KEY", vaultProvider: "cerebras-api"},
+		{envVar: "OPENAI_API_KEY", vaultProvider: "openai-api"},
+		{envVar: "ANTHROPIC_API_KEY", vaultProvider: "anthropic-api"},
+	},
 	"aider": {
 		// aider accepts Anthropic or OpenAI by env. Both wired; the
 		// --model flag (DefaultArgs) selects at request time.
 		{envVar: "ANTHROPIC_API_KEY", vaultProvider: "anthropic-api"},
 		{envVar: "OPENAI_API_KEY", vaultProvider: "openai-api"},
 	},
-	"gemini-cli": {
-		{envVar: "GOOGLE_API_KEY", vaultProvider: "google-api"},
+	// copilot is OAuth-only (no env-key channel) — see
+	// agentOAuthCredsTable for its ~/.config/gh/hosts.yml mount.
+}
+
+// agentOAuthCredsSpec describes the OAuth-credential file channel for one
+// agent flavor: which vault provider holds the operator-captured OAuth
+// blob, what filename to drop it under in the per-spawn /run/secrets dir,
+// and where the agent-entrypoint.sh copies it inside the container $HOME.
+//
+// This generalizes the historically Claude-only credential-materialization
+// flow (#225/#254/#369/#374) so every flavor whose CLI authenticates via
+// an OAuth file (claude-code, gemini-cli, qwen-code, copilot) can carry a
+// vault-stored login into the container, with the SAME source-priority
+// chain Claude has always used:
+//
+//  1. spec.ClaudeTokenID set            → that exact vault credential
+//  2. else vault has oauthVaultProvider → most-recently-updated entry
+//  3. else host autodetect dir/file     → host's existing login
+//
+// (spec.ClaudeTokenID is the only operator-pinned token id today; it is
+// honored for whichever flavor is being spawned. The other two tiers are
+// flavor-specific.)
+type agentOAuthCredsSpec struct {
+	flavor             string // AgentSlug this row applies to
+	oauthVaultProvider string // VaultCredMeta.Provider key for the OAuth blob
+	secretFileName     string // filename under /run/secrets/<...>
+	destPath           string // ~-relative dest inside the agent container $HOME
+	hostFallbackPath   string // ~-relative host dir/file probed as tier-3
+}
+
+// agentOAuthCredsTable drives materializeAgentSecrets. claude-code is the
+// FIRST row and reproduces today's exact behaviour byte-for-byte (the
+// refresh-on-spawn, host-vs-vault freshness compare, and ~/.claude.json
+// onboarding stub are claude-only extras layered on top of this row — see
+// materializeAgentSecrets). Subsequent rows reuse the same resolve→write
+// machinery without the claude-only extras.
+//
+// The host fallback paths are dirs/files under the operator's $HOME that
+// hostOAuthCredsPath() probes when neither vault tier produced a payload.
+var agentOAuthCredsTable = []agentOAuthCredsSpec{
+	{
+		flavor:             "claude-code",
+		oauthVaultProvider: "claude-oauth",
+		secretFileName:     "claude-credentials",
+		destPath:           "~/.claude/.credentials.json",
+		hostFallbackPath:   "~/.claude/.credentials.json",
 	},
+	{
+		flavor:             "gemini-cli",
+		oauthVaultProvider: "gemini-oauth",
+		secretFileName:     "gemini-creds",
+		destPath:           "~/.gemini/oauth_creds.json",
+		hostFallbackPath:   "~/.gemini/oauth_creds.json",
+	},
+	{
+		flavor:             "qwen-code",
+		oauthVaultProvider: "qwen-oauth",
+		secretFileName:     "qwen-creds",
+		destPath:           "~/.qwen/oauth_creds.json",
+		hostFallbackPath:   "~/.qwen/oauth_creds.json",
+	},
+	{
+		flavor:             "copilot",
+		oauthVaultProvider: "copilot-oauth",
+		secretFileName:     "copilot-creds",
+		destPath:           "~/.config/gh/hosts.yml",
+		hostFallbackPath:   "~/.config/gh/hosts.yml",
+	},
+}
+
+// oauthCredsSpecFor returns the agentOAuthCredsTable row for a flavor, or
+// nil if the flavor has no OAuth-file channel.
+func oauthCredsSpecFor(flavor string) *agentOAuthCredsSpec {
+	for i := range agentOAuthCredsTable {
+		if agentOAuthCredsTable[i].flavor == flavor {
+			return &agentOAuthCredsTable[i]
+		}
+	}
+	return nil
 }
 
 // StateDir returns the root state directory for this runtime
@@ -2639,7 +2732,107 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	dst := filepath.Join(dir, "claude-credentials")
+
+	// Dispatch on flavor. claude-code is the first row of
+	// agentOAuthCredsTable and keeps its full, byte-identical behaviour
+	// (refresh-on-spawn, host-vs-vault freshness compare, the
+	// ~/.claude.json onboarding stub, and the hard "Spawn will refuse"
+	// when no credential is found). Every other OAuth-file flavor
+	// (gemini-cli, qwen-code, copilot) runs the generic resolve→write
+	// using the SAME source-priority chain but WITHOUT the claude-only
+	// extras, and skips silently when no credential is available (its
+	// key-path or in-container OAuth may apply instead). Key-only flavors
+	// (aider, opencode) have no OAuth-file row → no file is written here.
+	//
+	// An empty AgentSlug defaults to claude-code: the historical
+	// (pre-#741) materializeAgentSecrets did Claude resolution
+	// unconditionally, so legacy callers + tests that omit AgentSlug keep
+	// the exact same behaviour.
+	slug := spec.AgentSlug
+	if slug == "" {
+		slug = "claude-code"
+	}
+	flavorSpec := oauthCredsSpecFor(slug)
+	if flavorSpec == nil || flavorSpec.flavor != "claude-code" {
+		if flavorSpec != nil {
+			r.materializeGenericOAuthSecrets(spec, dir, *flavorSpec)
+		}
+		// Best-effort GC of prior per-spawn dirs (see below).
+		go cleanupStaleSecretsDirs(parent, dir)
+		return dir, nil
+	}
+
+	if err := r.materializeClaudeSecrets(spec, dir, *flavorSpec); err != nil {
+		return "", err
+	}
+	// Best-effort GC: nuke prior per-spawn dirs whose contents are now
+	// owned by a container-namespace UID. `podman unshare` enters the
+	// rootless user-namespace where the container-UID maps to UID 0.
+	go cleanupStaleSecretsDirs(parent, dir)
+	return dir, nil
+}
+
+// materializeGenericOAuthSecrets resolves an OAuth-file flavor's
+// credential blob (gemini-cli, qwen-code, copilot) using the same
+// source-priority chain claude-code uses — spec.ClaudeTokenID (vault) →
+// most-recent vault entry of the flavor's oauthVaultProvider → host
+// autodetect file — and writes it to dir/<secretFileName>. No refresh, no
+// onboarding stub, no hard refuse: if no source produces a payload the
+// agent simply boots without this file (key-path or in-container OAuth
+// applies). Best-effort; logs which source won.
+func (r *Runtime) materializeGenericOAuthSecrets(spec SpawnSpec, dir string, fs agentOAuthCredsSpec) {
+	var payload, src string
+	if r.vault != nil {
+		if spec.ClaudeTokenID != "" && spec.ClaudeTokenID != "__none__" {
+			if v, err := r.vault.GetValue(spec.ClaudeTokenID); err == nil {
+				payload = v
+				src = "vault:by-token-id:" + spec.ClaudeTokenID
+			}
+		}
+		if payload == "" {
+			creds := r.vault.ListByProvider(fs.oauthVaultProvider)
+			if len(creds) > 0 {
+				latest := creds[len(creds)-1]
+				if v, err := r.vault.GetValue(latest.ID); err == nil {
+					payload = v
+					src = "vault:fallback-most-recent-" + fs.oauthVaultProvider + ":" + latest.ID
+				}
+			}
+		}
+	}
+	if payload == "" {
+		if hostSrc := hostOAuthCredsPath(fs); hostSrc != "" {
+			if b, err := os.ReadFile(hostSrc); err == nil {
+				payload = string(b)
+				src = "host-fallback:" + hostSrc
+			}
+		}
+	}
+	if payload == "" {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: no %s OAuth credential available (vault=%v provider=%q host=%q) — skipping %s mount; agent may use key-path or in-container OAuth\n",
+			spec.Name, fs.flavor, r.vault != nil, fs.oauthVaultProvider, hostOAuthCredsPath(fs), fs.secretFileName)
+		return
+	}
+	dst := filepath.Join(dir, fs.secretFileName)
+	if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: WRITE FAILED to %s: %v\n", spec.Name, dst, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: %s payload from %s (%d bytes) → %s\n", spec.Name, fs.flavor, src, len(payload), dst)
+}
+
+// materializeClaudeSecrets is the claude-code row of agentOAuthCredsTable.
+// Its body is the original (pre-#741) materializeAgentSecrets logic moved
+// verbatim, so claude-code output is byte-identical: same __none__
+// sentinel short-circuit, same vault→host freshness compare (#369), same
+// #374 host-pin gate, same refresh-on-spawn under claudeRefreshMu (#264),
+// same 0o644 writes of claude-credentials + claude-onboarding, and the
+// same hard refuse when no credential is found. The only change is that
+// the filenames/providers/paths now read from the table row (whose values
+// are exactly the historical "claude-credentials" / "claude-oauth" /
+// hostClaudeCredentialsPath constants).
+func (r *Runtime) materializeClaudeSecrets(spec SpawnSpec, dir string, fs agentOAuthCredsSpec) error {
+	dst := filepath.Join(dir, fs.secretFileName)
 
 	var payload string
 	var src string
@@ -2649,7 +2842,7 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 	// vault and host fallbacks in that case.
 	if spec.ClaudeTokenID == "__none__" {
 		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: ClaudeTokenID=__none__ — empty creds dir intentional (OAuth-capture)\n", spec.Name)
-		return dir, nil
+		return nil
 	}
 	if r.vault != nil {
 		if spec.ClaudeTokenID != "" {
@@ -2661,7 +2854,7 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 		if payload == "" {
 			// Most recently updated claude-oauth entry (list returns
 			// creation-order; vault re-orders on Set so most-recent is last).
-			creds := r.vault.ListByProvider("claude-oauth")
+			creds := r.vault.ListByProvider(fs.oauthVaultProvider)
 			if len(creds) > 0 {
 				latest := creds[len(creds)-1]
 				if v, err := r.vault.GetValue(latest.ID); err == nil {
@@ -2678,7 +2871,7 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 	// → operator can't use the agent. Picking the fresher source preserves
 	// the existing v0.5–v0.7 host-fallback semantics AND handles the
 	// refreshed-on-host-but-stale-in-vault case the architect surfaced.
-	if hostSrc := hostClaudeCredentialsPath(); hostSrc != "" {
+	if hostSrc := hostOAuthCredsPath(fs); hostSrc != "" {
 		if b, err := os.ReadFile(hostSrc); err == nil {
 			hostPayload := string(b)
 			hostExp := claudeCredsExpiresAt(hostPayload)
@@ -2704,8 +2897,8 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 	// path didn't exist. Now the log line says exactly which source won.
 	if payload == "" {
 		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: NO CREDENTIAL SOURCE produced a payload — vault=%v ClaudeTokenID=%q claude-oauth-fallback=tried host-fallback=%q. Spawn will refuse.\n",
-			spec.Name, r.vault != nil, spec.ClaudeTokenID, hostClaudeCredentialsPath())
-		return "", fmt.Errorf("materializeAgentSecrets: no Claude credential available for spawn (set claude_token_id in spawn POST OR seed ~/.claude/.credentials.json on the chepherd host)")
+			spec.Name, r.vault != nil, spec.ClaudeTokenID, hostOAuthCredsPath(fs))
+		return fmt.Errorf("materializeAgentSecrets: no Claude credential available for spawn (set claude_token_id in spawn POST OR seed ~/.claude/.credentials.json on the chepherd host)")
 	}
 	fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: payload from %s (%d bytes)\n", spec.Name, src, len(payload))
 	if payload != "" {
@@ -2763,7 +2956,7 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 		r.claudeRefreshMu.Unlock()
 		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: WRITE FAILED to %s: %v\n", spec.Name, dst, err)
-			return "", err
+			return err
 		}
 		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: wrote %d-byte credentials.json to %s\n", spec.Name, len(payload), dst)
 		// Also write the onboarding stub claude-code v2.1.150 requires
@@ -2776,11 +2969,7 @@ func (r *Runtime) materializeAgentSecrets(spec SpawnSpec) (string, error) {
 			_ = os.WriteFile(filepath.Join(dir, "claude-onboarding"), []byte(onboarding), 0o644)
 		}
 	}
-	// Best-effort GC: nuke prior per-spawn dirs whose contents are now
-	// owned by a container-namespace UID. `podman unshare` enters the
-	// rootless user-namespace where the container-UID maps to UID 0.
-	go cleanupStaleSecretsDirs(parent, dir)
-	return dir, nil
+	return nil
 }
 
 // buildClaudeOnboardingStub returns the bytes that should go to

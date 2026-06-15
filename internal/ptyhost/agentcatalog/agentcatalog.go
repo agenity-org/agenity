@@ -106,11 +106,27 @@ var Builtin = []Agent{
 		Notes:       "Anthropic Claude Code CLI. The Bypass-permissions confirmation dialog is suppressed via autoPermissionsNotificationCount=99 written into the agent's ~/.claude.json by chepherd's secrets materializer.",
 	},
 	{
+		Slug:        "copilot",
+		Binary:      "/usr/local/bin/copilot",
+		DefaultArgs: []string{"--allow-all-tools"},
+		DefaultCwd:  "/workspace",
+		RequiredEnv: nil,
+		Notes:       "GitHub Copilot CLI (@github/copilot). --allow-all-tools auto-approves all tool executions (documented; --allow-all/--yolo additionally bundles --allow-all-paths/--allow-all-urls). RequiredEnv empty: auth is GitHub-OAuth login (copilot-oauth provider).",
+	},
+	{
 		Slug:        "cursor-agent",
 		Binary:      "/usr/local/bin/cursor-agent",
 		DefaultArgs: []string{},
 		DefaultCwd:  "/workspace",
 		RequiredEnv: []string{"LLM_GATEWAY_URL"},
+	},
+	{
+		Slug:        "gemini-cli",
+		Binary:      "/usr/local/bin/gemini",
+		DefaultArgs: []string{"--yolo"},
+		DefaultCwd:  "/workspace",
+		RequiredEnv: nil,
+		Notes:       "Google Gemini CLI (@google/gemini-cli). --yolo auto-approves all tool calls (the documented full-autonomy approval mode). RequiredEnv is empty by design: the free path is Google-OAuth login dir (gemini-oauth provider, file-mount) — a GEMINI_API_KEY (google-api provider) is the alternative, so neither is mandatory at create() time.",
 	},
 	{
 		Slug:        "little-coder",
@@ -129,10 +145,10 @@ var Builtin = []Agent{
 	{
 		Slug:        "qwen-code",
 		Binary:      "/usr/local/bin/qwen-code",
-		DefaultArgs: []string{},
+		DefaultArgs: []string{"--yolo"},
 		DefaultCwd:  "/workspace",
-		RequiredEnv: []string{"OPENAI_BASE_URL", "OPENAI_API_KEY"},
-		Notes:       "Reads OpenAI-compatible base URL; bp-newapi exposes that.",
+		RequiredEnv: nil,
+		Notes:       "Qwen Code CLI (@qwen-code/qwen-code, a gemini-cli fork; npm binary `qwen` symlinked to /usr/local/bin/qwen-code). --yolo auto-approves all tool calls. RequiredEnv cleared (#741): the free path is Qwen-OAuth login (qwen-oauth provider, file-mount); a DASHSCOPE_API_KEY (dashscope-api) or OpenAI-compatible base URL are alternatives — none mandatory at create() time.",
 	},
 	{
 		Slug:        "sovereign-shell",
