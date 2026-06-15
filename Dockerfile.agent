@@ -15,7 +15,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o /chepherd .
 FROM ubuntu:22.04
 
 ARG CLAUDE_VERSION=latest
-ARG NODE_VERSION=20
+# node 22: @qwen-code/qwen-code requires node>=22 (EBADENGINE on 20). gemini-cli,
+# copilot, claude-code, opencode all support 22 (LTS). (#741)
+ARG NODE_VERSION=22
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/agent

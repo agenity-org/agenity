@@ -1189,7 +1189,14 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// are your siblings" with claude-code's local subagent catalog
 	// (Explore, Plan, statusline-setup) instead of the actual peer
 	// list. Best-effort: failures log + spawn continues.
-	materializeAgentBriefing(spec, agentHomeDir, r.snapshotPeersForBriefing(spec.Team, spec.Name))
+	materializeAgentBriefing(spec, agentHomeDir, r.snapshotPeersForBriefing(spec.Team, spec.Name), r.teamCanonBody(spec.Team))
+	// #741 — for non-claude flavors, register chepherd's MCP server in
+	// the CLI's NATIVE config under the agent home dir (gemini-cli /
+	// qwen-code settings.json, opencode.json, copilot mcp-config.json).
+	// claude-code's .mcp.json is written by writeMCPConfig above and is
+	// untouched here. Done after agentHomeDir + the HTTP MCP URL are
+	// resolved so the HTTP transport stanza points at the real endpoint.
+	r.writeFlavorMCPConfig(spec, agentHomeDir)
 	// #172 — mint the Agent UUID BEFORE the spawner runs so its PVC
 	// handle can be threaded into the container env. The container
 	// runtime sees CHEPHERD_PVC_HANDLE and provisions /workspace from
@@ -2701,6 +2708,180 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		"CHEPHERD_MCP_URL=" + mcpURL,
 		"CHEPHERD_MCP_CONFIG=" + cfgPath,
 	}, cfgPath, nil
+}
+
+// chepherdMCPToken returns the bearer token the agent uses to authenticate
+// to chepherd's MCP HTTP transport, sourced from the same operator-registered
+// agent-env overlay writeMCPConfig reads. "" when no token is registered.
+func (r *Runtime) chepherdMCPToken() string {
+	r.extraEnvMu.RLock()
+	defer r.extraEnvMu.RUnlock()
+	if r.extraAgentEnv != nil {
+		if tok, ok := r.extraAgentEnv["CHEPHERD_TOKEN"]; ok {
+			return tok
+		}
+	}
+	return ""
+}
+
+// writeFlavorMCPConfig registers the chepherd MCP server in a non-claude
+// flavor's NATIVE config file, reusing the SAME server details
+// writeMCPConfig computes for claude-code (the HTTP transport URL +
+// bearer token + X-Chepherd-Agent header). Each CLI reads a different
+// config file with a different schema (docs fetched 2026-06-16):
+//
+//   - gemini-cli → ~/.gemini/settings.json — mcpServers.chepherd with
+//     "httpUrl" (StreamableHTTPClientTransport) + "headers"
+//     (google-gemini/gemini-cli docs/tools/mcp-server.md).
+//   - qwen-code  → ~/.qwen/settings.json — same schema (gemini fork;
+//     QwenLM/qwen-code docs/users/features/mcp.md).
+//   - opencode   → ~/.config/opencode/opencode.json — top-level "mcp"
+//     key, type "remote", "url", "enabled", "headers" (opencode.ai/
+//     docs/mcp-servers). The daemon writes the COMPLETE file (model +
+//     mcp) so it doesn't clobber the entrypoint's model-only write —
+//     see the model-merge note + the agent-entrypoint.sh coordination
+//     callout in the PR.
+//   - copilot    → ~/.copilot/mcp-config.json — mcpServers.chepherd with
+//     "type":"http", "url", "headers", "tools":["*"] (GitHub Copilot
+//     CLI docs + github/github-mcp-server install-copilot-cli.md).
+//
+// claude-code is handled by writeMCPConfig (.mcp.json) and is NOT
+// touched here. This write requires the HTTP transport URL
+// (CHEPHERD_AGENT_MCP_URL, injected by the runner once it binds its
+// loopback listener); when absent (legacy stdio-bridge path / unit-test
+// mode) the non-claude flavors have no usable HTTP endpoint, so the
+// write is skipped with a loud stderr note rather than emitting a
+// stdio-bridge stanza these CLIs can't drive. Best-effort: failures log
+// + the spawn continues.
+func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
+	flavor := spec.AgentSlug
+	if flavor == "" || flavor == "claude-code" {
+		return
+	}
+	httpURL := os.Getenv("CHEPHERD_AGENT_MCP_URL")
+	if httpURL == "" {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: flavor=%s but CHEPHERD_AGENT_MCP_URL unset — no HTTP endpoint to register, skipping native MCP config (#741)\n", spec.Name, flavor)
+		return
+	}
+	token := r.chepherdMCPToken()
+	headers := map[string]any{"X-Chepherd-Agent": spec.Name}
+	if token != "" {
+		headers["Authorization"] = "Bearer " + token
+	}
+
+	var rel string
+	var cfg map[string]any
+	switch flavor {
+	case "gemini-cli", "qwen-code":
+		// gemini settings.json / qwen settings.json (qwen is a gemini
+		// fork → identical schema). httpUrl selects the streamable-HTTP
+		// transport; headers carry bearer + agent identity.
+		if flavor == "gemini-cli" {
+			rel = filepath.Join(".gemini", "settings.json")
+		} else {
+			rel = filepath.Join(".qwen", "settings.json")
+		}
+		cfg = map[string]any{
+			"mcpServers": map[string]any{
+				"chepherd": map[string]any{
+					"httpUrl": httpURL,
+					"headers": headers,
+				},
+			},
+		}
+	case "copilot":
+		rel = filepath.Join(".copilot", "mcp-config.json")
+		cfg = map[string]any{
+			"mcpServers": map[string]any{
+				"chepherd": map[string]any{
+					"type":    "http",
+					"url":     httpURL,
+					"headers": headers,
+					"tools":   []string{"*"},
+				},
+			},
+		}
+	case "opencode":
+		rel = filepath.Join(".config", "opencode", "opencode.json")
+		// opencode's MCP block: top-level "mcp" key, remote shape.
+		mcp := map[string]any{
+			"chepherd": map[string]any{
+				"type":    "remote",
+				"url":     httpURL,
+				"enabled": true,
+				"headers": headers,
+			},
+		}
+		cfg = map[string]any{
+			"$schema": "https://opencode.ai/config.json",
+			"mcp":     mcp,
+		}
+		// COORDINATION (#741): the daemon writes the COMPLETE
+		// opencode.json (schema + model + mcp) so it doesn't clobber —
+		// or get clobbered by — the entrypoint's model-only write.
+		// scripts/agent-entrypoint.sh's opencode.json write MUST be
+		// removed (flagged in the PR; not edited here — image build in
+		// flight). Model selection logic is preserved verbatim:
+		// OPENCODE_MODEL > GROQ → groq/llama-3.3-70b-versatile >
+		// CEREBRAS → cerebras/llama-3.3-70b. The daemon DOES see these
+		// env vars (they ride spec.Env / the agent-env overlay), so it
+		// resolves the model here too.
+		if model := opencodeModelFromEnv(spec); model != "" {
+			cfg["model"] = model
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: no native MCP schema for flavor %q — skipping (#741)\n", spec.Name, flavor)
+		return
+	}
+
+	dest := filepath.Join(agentHomeDir, rel)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: mkdir %s: %v\n", spec.Name, filepath.Dir(dest), err)
+		return
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: marshal %s config: %v\n", spec.Name, flavor, err)
+		return
+	}
+	if err := os.WriteFile(dest, b, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: write %s: %v\n", spec.Name, dest, err)
+		return
+	}
+	_ = os.Chmod(dest, 0o644)
+	fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: wrote %s (flavor=%s, chepherd MCP via HTTP) (#741)\n", spec.Name, rel, flavor)
+}
+
+// opencodeModelFromEnv resolves the opencode provider/model string from
+// the spawn env, mirroring scripts/agent-entrypoint.sh's selection EXACTLY:
+//
+//	OPENCODE_MODEL (operator override) > GROQ_API_KEY → groq/llama-3.3-70b-versatile
+//	> CEREBRAS_API_KEY → cerebras/llama-3.3-70b
+//
+// Reads from spec.Env first (per-spawn), then the agent-env overlay +
+// process env (operator-registered keys). Returns "" when none apply —
+// opencode then auto-resolves from any provider key present at runtime.
+func opencodeModelFromEnv(spec SpawnSpec) string {
+	lookup := func(key string) string {
+		prefix := key + "="
+		// per-spawn env wins
+		for i := len(spec.Env) - 1; i >= 0; i-- {
+			if strings.HasPrefix(spec.Env[i], prefix) {
+				return strings.TrimPrefix(spec.Env[i], prefix)
+			}
+		}
+		return os.Getenv(key)
+	}
+	if m := lookup("OPENCODE_MODEL"); m != "" {
+		return m
+	}
+	if lookup("GROQ_API_KEY") != "" {
+		return "groq/llama-3.3-70b-versatile"
+	}
+	if lookup("CEREBRAS_API_KEY") != "" {
+		return "cerebras/llama-3.3-70b"
+	}
+	return ""
 }
 
 // materializeAgentSecrets prepares the per-agent secrets directory that

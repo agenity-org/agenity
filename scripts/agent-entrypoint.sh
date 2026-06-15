@@ -58,33 +58,12 @@ copy_secret gemini-creds       "~/.gemini/oauth_creds.json"
 copy_secret qwen-creds         "~/.qwen/oauth_creds.json"
 copy_secret copilot-creds      "~/.config/gh/hosts.yml"
 
-# #741 TASK C — opencode provider/model selection.
-#
-# opencode (sst/opencode) reads ~/.config/opencode/opencode.json. The
-# "model" field uses "provider/model" form and opencode auto-loads any
-# well-known provider whose API key is present in the environment
-# (GROQ_API_KEY, CEREBRAS_API_KEY, OPENAI_API_KEY, ...). chepherd's
-# agentAuthEnvTable injects whichever of those keys the operator stored in
-# the vault. Here we point opencode at the matching FREE provider's model:
-#   GROQ_API_KEY     → groq/llama-3.3-70b-versatile
-#   CEREBRAS_API_KEY → cerebras/llama-3.3-70b
-# An explicit OPENCODE_MODEL env wins over both (operator override).
-#
-# We only write the config when a groq/cerebras key (or OPENCODE_MODEL) is
-# present — that combination only happens for opencode agents, and writing
-# the file is a no-op for any other flavor (nothing else reads it).
-opencode_model=""
-if [ -n "${OPENCODE_MODEL:-}" ]; then
-    opencode_model="$OPENCODE_MODEL"
-elif [ -n "${GROQ_API_KEY:-}" ]; then
-    opencode_model="groq/llama-3.3-70b-versatile"
-elif [ -n "${CEREBRAS_API_KEY:-}" ]; then
-    opencode_model="cerebras/llama-3.3-70b"
-fi
-if [ -n "$opencode_model" ]; then
-    mkdir -p "$HOME/.config/opencode"
-    printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "model": "%s"\n}\n' \
-        "$opencode_model" > "$HOME/.config/opencode/opencode.json"
-fi
+# #741 — opencode.json (model + MCP) is written by the DAEMON
+# (writeFlavorMCPConfig) to the bind-mounted home BEFORE this entrypoint runs.
+# We must NOT write it here: a boot-time write runs AFTER the mount and would
+# clobber the daemon's `mcp` block. Model selection is preserved in the daemon
+# (opencodeModelFromEnv: OPENCODE_MODEL > GROQ_API_KEY > CEREBRAS_API_KEY); if a
+# provider key is only present at container runtime, opencode auto-resolves the
+# model from it. Nothing to do here.
 
 exec "$@"
