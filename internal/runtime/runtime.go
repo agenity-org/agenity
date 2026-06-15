@@ -2796,7 +2796,13 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		if httpURL != "" {
 			entry = map[string]any{"httpUrl": httpURL, "headers": headers}
 		}
-		cfg = map[string]any{"mcpServers": map[string]any{"chepherd": entry}}
+		cfg = map[string]any{
+			"mcpServers": map[string]any{"chepherd": entry},
+			// #741 — disable the gemini-cli/qwen folder-trust prompt so a
+			// sandboxed agent boots straight to ready (+ connects MCP) instead
+			// of stalling on the interactive "Trust this folder?" dialog.
+			"security": map[string]any{"folderTrust": map[string]any{"enabled": false}},
+		}
 	case "copilot":
 		rel = filepath.Join(".copilot", "mcp-config.json")
 		entry := map[string]any{"type": "local", "command": chepBin, "args": stdioArgs, "env": stdioEnv, "tools": []string{"*"}}
