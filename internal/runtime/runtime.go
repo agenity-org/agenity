@@ -2758,15 +2758,26 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 	if flavor == "" || flavor == "claude-code" {
 		return
 	}
+	// #741 fix — two transports, mirroring claude's .mcp.json: HTTP when the
+	// runner injects CHEPHERD_AGENT_MCP_URL, else the stdio bridge
+	// (chepBin mcp --url <ws>) every current host deploy uses. Previously this
+	// skipped when the HTTP env was unset, leaving these flavors MCP-blind.
 	httpURL := os.Getenv("CHEPHERD_AGENT_MCP_URL")
-	if httpURL == "" {
-		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: flavor=%s but CHEPHERD_AGENT_MCP_URL unset — no HTTP endpoint to register, skipping native MCP config (#741)\n", spec.Name, flavor)
-		return
+	mcpURL := os.Getenv("CHEPHERD_MCP_URL")
+	if mcpURL == "" {
+		mcpURL = r.deriveAgentMCPURL()
 	}
+	chepBin, _ := os.Executable()
+	if chepBin == "" {
+		chepBin = "chepherd"
+	}
+	stdioArgs := []string{"mcp", "--url", mcpURL}
 	token := r.chepherdMCPToken()
 	headers := map[string]any{"X-Chepherd-Agent": spec.Name}
+	stdioEnv := map[string]any{"CHEPHERD_AGENT_NAME": spec.Name}
 	if token != "" {
 		headers["Authorization"] = "Bearer " + token
+		stdioEnv["CHEPHERD_TOKEN"] = token
 	}
 
 	var rel string
@@ -2781,40 +2792,34 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		} else {
 			rel = filepath.Join(".qwen", "settings.json")
 		}
-		cfg = map[string]any{
-			"mcpServers": map[string]any{
-				"chepherd": map[string]any{
-					"httpUrl": httpURL,
-					"headers": headers,
-				},
-			},
+		entry := map[string]any{"command": chepBin, "args": stdioArgs, "env": stdioEnv}
+		if httpURL != "" {
+			entry = map[string]any{"httpUrl": httpURL, "headers": headers}
 		}
+		cfg = map[string]any{"mcpServers": map[string]any{"chepherd": entry}}
 	case "copilot":
 		rel = filepath.Join(".copilot", "mcp-config.json")
-		cfg = map[string]any{
-			"mcpServers": map[string]any{
-				"chepherd": map[string]any{
-					"type":    "http",
-					"url":     httpURL,
-					"headers": headers,
-					"tools":   []string{"*"},
-				},
-			},
+		entry := map[string]any{"type": "local", "command": chepBin, "args": stdioArgs, "env": stdioEnv, "tools": []string{"*"}}
+		if httpURL != "" {
+			entry = map[string]any{"type": "http", "url": httpURL, "headers": headers, "tools": []string{"*"}}
 		}
+		cfg = map[string]any{"mcpServers": map[string]any{"chepherd": entry}}
 	case "opencode":
 		rel = filepath.Join(".config", "opencode", "opencode.json")
-		// opencode's MCP block: top-level "mcp" key, remote shape.
-		mcp := map[string]any{
-			"chepherd": map[string]any{
-				"type":    "remote",
-				"url":     httpURL,
-				"enabled": true,
-				"headers": headers,
-			},
+		// opencode's MCP block: top-level "mcp" key. remote (http) or local
+		// (stdio bridge: command is an ARRAY, env key is "environment").
+		chepEntry := map[string]any{
+			"type":        "local",
+			"command":     append([]string{chepBin}, stdioArgs...),
+			"enabled":     true,
+			"environment": stdioEnv,
+		}
+		if httpURL != "" {
+			chepEntry = map[string]any{"type": "remote", "url": httpURL, "enabled": true, "headers": headers}
 		}
 		cfg = map[string]any{
 			"$schema": "https://opencode.ai/config.json",
-			"mcp":     mcp,
+			"mcp":     map[string]any{"chepherd": chepEntry},
 		}
 		// COORDINATION (#741): the daemon writes the COMPLETE
 		// opencode.json (schema + model + mcp) so it doesn't clobber —
