@@ -2796,12 +2796,16 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		if httpURL != "" {
 			entry = map[string]any{"httpUrl": httpURL, "headers": headers}
 		}
+		// #741 — security block: disable the folder-trust prompt (both flavors),
+		// and for gemini pin auth to the API key so it doesn't fall into the
+		// OAuth "Enter the authorization code" flow despite GEMINI_API_KEY set.
+		security := map[string]any{"folderTrust": map[string]any{"enabled": false}}
+		if flavor == "gemini-cli" {
+			security["auth"] = map[string]any{"selectedType": "gemini-api-key"}
+		}
 		cfg = map[string]any{
 			"mcpServers": map[string]any{"chepherd": entry},
-			// #741 — disable the gemini-cli/qwen folder-trust prompt so a
-			// sandboxed agent boots straight to ready (+ connects MCP) instead
-			// of stalling on the interactive "Trust this folder?" dialog.
-			"security": map[string]any{"folderTrust": map[string]any{"enabled": false}},
+			"security":   security,
 		}
 	case "copilot":
 		rel = filepath.Join(".copilot", "mcp-config.json")
