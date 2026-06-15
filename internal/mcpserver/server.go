@@ -229,11 +229,12 @@ func (s *Server) dispatch(req *rpcReq) rpcResp {
 		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": tools}}
 	}
 	if req.Method == "tools/call" {
+		summary := toolCallSummary(req.Params) // #741 — log tool name + peer target for comms visibility
 		resp := s.toolCall(req)
 		if resp.Error != nil {
-			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: tools/call → ERROR %d: %s\n", caller, resp.Error.Code, resp.Error.Message)
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: tools/call %s → ERROR %d: %s\n", caller, summary, resp.Error.Code, resp.Error.Message)
 		} else {
-			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: tools/call → OK\n", caller)
+			fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: tools/call %s → OK\n", caller, summary)
 		}
 		return resp
 	}
@@ -482,6 +483,40 @@ func (s *Server) toolList() []map[string]any {
 			"required":   []string{"from", "to"},
 		}},
 	}
+}
+
+// toolCallSummary extracts the tool name (+ peer target for send-style tools)
+// from a tools/call params blob so the daemon log makes agent→agent comms
+// visible — e.g. "tools/call chepherd.send_to_session→m-coder → OK". (#741)
+func toolCallSummary(params json.RawMessage) string {
+	var p struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || p.Name == "" {
+		return "?"
+	}
+	out := p.Name
+	if strings.Contains(p.Name, "send_to_session") || strings.Contains(p.Name, "get_peer_card") || strings.Contains(p.Name, "peer_status") || strings.Contains(p.Name, "get_task") {
+		var a struct {
+			Name    string `json:"name"`
+			Session string `json:"session"`
+			To      string `json:"to"`
+		}
+		if json.Unmarshal(p.Arguments, &a) == nil {
+			tgt := a.Name
+			if tgt == "" {
+				tgt = a.Session
+			}
+			if tgt == "" {
+				tgt = a.To
+			}
+			if tgt != "" {
+				out += "→" + tgt
+			}
+		}
+	}
+	return out
 }
 
 // toolCall handles MCP-style tools/call requests. Per the MCP spec the
