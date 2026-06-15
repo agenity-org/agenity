@@ -111,7 +111,10 @@
       keyAdd: { provider: 'google-api', env_var: 'GEMINI_API_KEY', keyLabel: 'AI Studio API key', getKeyUrl: 'https://aistudio.google.com/app/apikey' },
     },
     'qwen-code': {
-      getFree: [{ label: 'Get it free →', url: 'https://chat.qwen.ai' }],
+      getFree: [
+        { label: 'Free OAuth (qwen.ai account) →', url: 'https://chat.qwen.ai' },
+        { label: 'API key (DashScope) →', url: 'https://dashscope.console.aliyun.com' },
+      ],
       oauth: { cmd: 'qwen' },
       keyAdd: { provider: 'dashscope-api', env_var: 'DASHSCOPE_API_KEY', keyLabel: 'DashScope API key', getKeyUrl: 'https://dashscope.console.aliyun.com' },
     },
