@@ -30,7 +30,44 @@ import (
 // spawn continues (the alternative — failing the spawn entirely on
 // a docs write — would punish operators in dev/test envs more than
 // it would help).
-func materializeAgentBriefing(spec SpawnSpec, agentHomeDir string, peers []PeerBrief) {
+//
+// #741 — FLAVOR-AWARE delivery. claude-code gets the historical
+// ~/.claude/CLAUDE.md + ~/.claude/skills/<name>/SKILL.md treatment
+// (BYTE-IDENTICAL — the regression anchor). Every other supported
+// flavor reads a DIFFERENT context file and has no /skills subdir
+// system, so for those we write the SAME briefing body to the file
+// that flavor actually reads, with the skills MIMICKED as an embedded
+// "## Available skills" section and the team canon embedded as a
+// "## Team canon" section. Result: gemini-cli, qwen-code, opencode and
+// copilot agents get the same chepherd awareness claude-code has.
+//
+// teamCanon is the current team-canon markdown (the body
+// materializeTeamCanon wrote to the team's CanonPath). Optional +
+// variadic so the legacy 3-arg call sites + tests keep compiling
+// unchanged; only the first element is consulted. claude-code does NOT
+// embed canon (it reads the team CLAUDE.md via chepherd.read_canon /
+// the mounted canon file already), so this only affects non-claude
+// flavors.
+func materializeAgentBriefing(spec SpawnSpec, agentHomeDir string, peers []PeerBrief, teamCanon ...string) {
+	canon := ""
+	if len(teamCanon) > 0 {
+		canon = teamCanon[0]
+	}
+	flavor := spec.AgentSlug
+	if flavor == "" {
+		flavor = "claude-code"
+	}
+	if flavor == "claude-code" {
+		materializeClaudeBriefing(spec, agentHomeDir, peers)
+		return
+	}
+	materializeFlavorBriefing(spec, agentHomeDir, peers, flavor, canon)
+}
+
+// materializeClaudeBriefing is the historical claude-code write path,
+// unchanged from the pre-#741 body of materializeAgentBriefing. Kept
+// byte-identical: ~/.claude/CLAUDE.md + ~/.claude/skills/<name>/SKILL.md.
+func materializeClaudeBriefing(spec SpawnSpec, agentHomeDir string, peers []PeerBrief) {
 	claudeDir := filepath.Join(agentHomeDir, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: mkdir .claude: %v\n", spec.Name, err)
@@ -68,6 +105,106 @@ func materializeAgentBriefing(spec SpawnSpec, agentHomeDir string, peers []PeerB
 		}
 	}
 	fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: wrote skills/<name>/SKILL.md (#396 P0 reopened — subdir format)\n", spec.Name)
+}
+
+// flavorContextFile maps an agent flavor (catalog slug) to the
+// home-relative path of the global context/instructions file that CLI
+// auto-loads on startup. Sources (docs fetched 2026-06-16):
+//   - gemini-cli: ~/.gemini/GEMINI.md — global context, default
+//     contextFileName "GEMINI.md" (google-gemini/gemini-cli
+//     docs/cli/gemini-md.md).
+//   - qwen-code: ~/.qwen/QWEN.md — gemini fork; QWEN.md in the .qwen
+//     dir is the default system prompt for all projects (QwenLM/
+//     qwen-code docs).
+//   - opencode: ~/.config/opencode/AGENTS.md — global rules file, with
+//     ~/.claude/CLAUDE.md as a documented fallback (opencode.ai/docs/
+//     rules).
+//   - copilot: ~/.copilot/copilot-instructions.md — home-directory
+//     global instructions (GitHub Copilot CLI docs: "create a file at
+//     $HOME/.copilot/copilot-instructions.md").
+//
+// claude-code intentionally absent — it has its own dedicated write
+// path (materializeClaudeBriefing) that must stay byte-identical.
+func flavorContextFile(flavor string) string {
+	switch flavor {
+	case "gemini-cli":
+		return filepath.Join(".gemini", "GEMINI.md")
+	case "qwen-code":
+		return filepath.Join(".qwen", "QWEN.md")
+	case "opencode":
+		return filepath.Join(".config", "opencode", "AGENTS.md")
+	case "copilot":
+		return filepath.Join(".copilot", "copilot-instructions.md")
+	default:
+		return ""
+	}
+}
+
+// materializeFlavorBriefing writes the chepherd briefing to a
+// non-claude flavor's context file. The briefing body is reused
+// verbatim from renderAgentClaudeMD (same role/peers/team orientation
+// claude-code gets); the selected skills are MIMICKED as an embedded
+// "## Available skills" section (these flavors have no /skills subdir
+// system), and the team canon rides along as a "## Team canon"
+// section. Best-effort: a write failure logs + the spawn continues.
+func materializeFlavorBriefing(spec SpawnSpec, agentHomeDir string, peers []PeerBrief, flavor, canon string) {
+	rel := flavorContextFile(flavor)
+	if rel == "" {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: no context-file mapping for flavor %q — skipping briefing\n", spec.Name, flavor)
+		return
+	}
+	dest := filepath.Join(agentHomeDir, rel)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: mkdir %s: %v\n", spec.Name, filepath.Dir(dest), err)
+		return
+	}
+	body := renderFlavorBriefing(spec, peers, flavor, canon)
+	if err := os.WriteFile(dest, []byte(body), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: write %s: %v\n", spec.Name, dest, err)
+		return
+	}
+	_ = os.Chmod(dest, 0o644)
+	fmt.Fprintf(os.Stderr, "[chepherd-spawn-briefing] %s: wrote %s (flavor=%s, %d peers, embedded skills+canon) (#741)\n", spec.Name, rel, flavor, len(peers))
+}
+
+// renderFlavorBriefing builds the full context-file body for a
+// non-claude flavor: the shared chepherd briefing + an embedded
+// skills section + an embedded team-canon section.
+func renderFlavorBriefing(spec SpawnSpec, peers []PeerBrief, flavor, canon string) string {
+	var b strings.Builder
+	b.WriteString(renderAgentClaudeMD(spec, peers))
+
+	// Embedded skills — these flavors have no /skills subdir surface, so
+	// inline the SAME skill bodies claude-code gets as discoverable
+	// recipes the agent can follow verbatim.
+	b.WriteString("\n## Available skills\n\n")
+	b.WriteString("Your runtime does not expose a `/skills` command the way claude-code does, so the chepherd skill recipes are embedded inline below. Treat each as a procedure you can follow when the situation matches its description.\n\n")
+	skills := renderSkillSet(spec)
+	names := make([]string, 0, len(skills))
+	for name := range skills {
+		names = append(names, name)
+	}
+	sort.Strings(names) // stable, reproducible ordering across reruns
+	for _, name := range names {
+		fmt.Fprintf(&b, "### skill: %s\n\n", name)
+		b.WriteString(skills[name])
+		b.WriteString("\n")
+	}
+
+	// Embedded team canon — same content materializeTeamCanon writes to
+	// the team's CanonPath. claude-code reads that file via the mount +
+	// chepherd.read_canon; these flavors get it inlined here.
+	b.WriteString("\n## Team canon\n\n")
+	b.WriteString("Your team has a shared canon (charter). Refresh the live version any time with the `chepherd.read_canon` MCP tool. The snapshot at spawn time:\n\n")
+	if strings.TrimSpace(canon) == "" {
+		b.WriteString("_No team canon materialized yet — call `chepherd.read_canon` once peers join._\n")
+	} else {
+		b.WriteString(canon)
+		if !strings.HasSuffix(canon, "\n") {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // PeerBrief is the minimal per-peer summary materializeAgentBriefing
@@ -291,7 +428,7 @@ description: Your role-specific operating mode for the %s team
 
 # role-%s
 
-You were spawned with role ` + "`%s`" + ` on team ` + "`%s`" + `. The full role-charter is in your ` + "`~/.claude/CLAUDE.md`" + ` ("What good looks like for your role"). This skill is the action-checklist version.
+You were spawned with role `+"`%s`"+` on team `+"`%s`"+`. The full role-charter is in your `+"`~/.claude/CLAUDE.md`"+` ("What good looks like for your role"). This skill is the action-checklist version.
 
 %s
 `, roleName, spec.Team, roleName, spec.Role, spec.Team, roleSkillChecklist(roleName))

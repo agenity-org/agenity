@@ -286,7 +286,7 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// left stale containers behind. --rm covers cleanup-on-exit;
 	// --replace covers reuse-after-prior-leak. Both are needed.
 	podArgs := append(podmanArgs(),
-		"run", "--replace", "--interactive", "--tty",  // #363: --rm removed; corpses persist for podman inspect; --replace handles name reuse
+		"run", "--replace", "--interactive", "--tty", // #363: --rm removed; corpses persist for podman inspect; --replace handles name reuse
 		"--publish-all=false", // #648: suppress auto-publishing of EXPOSE ports from the agent image — those ports (8080/9090) belong to the daemon only
 		// #270 — instance-scoped container name. The prefix carries
 		// this chepherd binary's UUID so a parallel chepherd binary
@@ -323,7 +323,7 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		// on foreign-owned files like iogrid/.git/index → container
 		// stuck in Created). Heuristic: ,U only when path includes
 		// the managed workspaces/ path. Operator-hit 2026-06-02.
-		"-v", hostCwd + ":" + cwd + workspaceMountFlags(hostCwd),
+		"-v", hostCwd+":"+cwd+workspaceMountFlags(hostCwd),
 		"--workdir", cwd,
 	)
 
@@ -495,8 +495,8 @@ type DockerRuntime struct {
 	instanceUUID string // see PodmanRuntime.instanceUUID
 }
 
-func (r *DockerRuntime) Name() string                  { return "docker" }
-func (r *DockerRuntime) SetInstanceUUID(uuid string)   { r.instanceUUID = uuid }
+func (r *DockerRuntime) Name() string                { return "docker" }
+func (r *DockerRuntime) SetInstanceUUID(uuid string) { r.instanceUUID = uuid }
 func (r *DockerRuntime) Available() error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("docker not in PATH")
@@ -557,7 +557,7 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// Docker variant — same flags as Podman except no :U mount option
 	// (Docker handles UID remapping differently).
 	dockerArgs := []string{
-		"docker", "run", "--interactive", "--tty",  // #363: corpse persists
+		"docker", "run", "--interactive", "--tty", // #363: corpse persists
 		"--name", containerNamePrefix(r.instanceUUID) + agentName,
 		"--network", agentNetworkMode(),
 		"-v", agentHomeDir + ":/home/agent:rw",
@@ -617,7 +617,7 @@ func (r *DockerRuntime) ProbeContainerRunning(name string) (bool, string, error)
 // Warns in the UI via the session's "container_runtime" field.
 type BareExecRuntime struct{}
 
-func (r *BareExecRuntime) Name() string { return "bare" }
+func (r *BareExecRuntime) Name() string     { return "bare" }
 func (r *BareExecRuntime) Available() error { return nil }
 func (r *BareExecRuntime) AgentHomeDir(agentName, stateDir string) (string, error) {
 	// On bare exec, use the real host home — no isolation.
@@ -626,10 +626,12 @@ func (r *BareExecRuntime) AgentHomeDir(agentName, stateDir string) (string, erro
 func (r *BareExecRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd string, argv []string, env []string) ([]string, []string) {
 	return argv, env
 }
+
 // BareExec has no container — Runtime.Stop's PTY close is sufficient.
-func (r *BareExecRuntime) StopContainer(name string) error                           { return nil }
-func (r *BareExecRuntime) ListAgentContainers() ([]string, error)                    { return nil, nil }
+func (r *BareExecRuntime) StopContainer(name string) error                    { return nil }
+func (r *BareExecRuntime) ListAgentContainers() ([]string, error)             { return nil, nil }
 func (r *BareExecRuntime) ProbeContainerRunning(string) (bool, string, error) { return true, "", nil }
+
 // #270 — BareExec doesn't manage containers; the UUID is accepted and
 // silently ignored to satisfy the interface.
 func (r *BareExecRuntime) SetInstanceUUID(string) {}
@@ -755,6 +757,36 @@ func hostClaudeCredentialsPath() string {
 	return p
 }
 
+// hostOAuthCredsPath resolves an agentOAuthCredsSpec's host fallback path
+// to an absolute path on the chepherd host, returning "" if no file exists
+// there. claude-code is delegated to hostClaudeCredentialsPath() so its
+// CHEPHERD_CLAUDE_CREDS_PATH override + exact semantics are preserved
+// byte-for-byte (#440). Other flavors resolve a ~-prefixed path under the
+// operator's $HOME and Stat it.
+func hostOAuthCredsPath(spec agentOAuthCredsSpec) string {
+	if spec.flavor == "claude-code" {
+		return hostClaudeCredentialsPath()
+	}
+	rel := spec.hostFallbackPath
+	if rel == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if strings.HasPrefix(rel, "~/") {
+		rel = rel[2:]
+	} else if rel == "~" {
+		rel = ""
+	}
+	p := filepath.Join(home, rel)
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
 func imageExists(image string) bool {
 	base := podmanArgs()
 	if err := exec.Command(base[0], append(append([]string{}, base[1:]...), "image", "exists", image)...).Run(); err == nil {
@@ -795,9 +827,10 @@ func imageExists(image string) bool {
 // support (all of them).
 //
 // Architect verified live 2026-05-31 via doctor --mcp:
-//   --network=chepherd-net   → broken (rootless CNI plumbing dead)
-//   --network=slirp4netns... → TCP unreachable (kernel isolation)
-//   --network=container:chepherd → ALL CHECKS PASS
+//
+//	--network=chepherd-net   → broken (rootless CNI plumbing dead)
+//	--network=slirp4netns... → TCP unreachable (kernel isolation)
+//	--network=container:chepherd → ALL CHECKS PASS
 //
 // Refs #365 P0 #398 #406 #414.
 func agentNetworkMode() string {

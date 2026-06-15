@@ -42,6 +42,46 @@ var KnownProviders = map[string]ProviderMeta{
 		DefaultEnv:  "ANTHROPIC_API_KEY",
 		Description: "sk-ant-... — used by claude-code for direct API access",
 	},
+	"openai-api": {
+		Label:       "OpenAI API Key",
+		DefaultEnv:  "OPENAI_API_KEY",
+		Description: "sk-... — OpenAI-compatible API access",
+	},
+	"google-api": {
+		Label:       "Google Gemini API Key",
+		DefaultEnv:  "GEMINI_API_KEY",
+		Description: "Free key: https://aistudio.google.com/app/apikey (no credit card)",
+	},
+	"groq-api": {
+		Label:       "Groq API Key",
+		DefaultEnv:  "GROQ_API_KEY",
+		Description: "Free key: https://console.groq.com/keys (no credit card)",
+	},
+	"cerebras-api": {
+		Label:       "Cerebras API Key",
+		DefaultEnv:  "CEREBRAS_API_KEY",
+		Description: "Free key: https://cloud.cerebras.ai (no credit card)",
+	},
+	"dashscope-api": {
+		Label:       "Alibaba DashScope (Qwen) API Key",
+		DefaultEnv:  "DASHSCOPE_API_KEY",
+		Description: "https://dashscope.console.aliyun.com",
+	},
+	"gemini-oauth": {
+		Label:       "Gemini CLI login (Google OAuth)",
+		DefaultEnv:  "", // delivered via creds-file mount (mirrors claude-oauth)
+		Description: "Free, no credit card — sign in with a Google account",
+	},
+	"qwen-oauth": {
+		Label:       "Qwen Code login (Qwen OAuth)",
+		DefaultEnv:  "", // delivered via creds-file mount (mirrors claude-oauth)
+		Description: "Free, no credit card — https://chat.qwen.ai",
+	},
+	"copilot-oauth": {
+		Label:       "GitHub Copilot login",
+		DefaultEnv:  "", // delivered via creds-file mount (mirrors claude-oauth)
+		Description: "GitHub OAuth — enable Copilot Free at https://github.com/settings/copilot",
+	},
 	"openrouter": {
 		Label:       "OpenRouter API Key",
 		DefaultEnv:  "OPENROUTER_API_KEY",

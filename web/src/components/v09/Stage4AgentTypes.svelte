@@ -43,6 +43,7 @@
     { slug: 'qwen-code',   label: 'qwen-code' },
     { slug: 'gemini-cli',  label: 'gemini-cli' },
     { slug: 'opencode',    label: 'opencode' },
+    { slug: 'copilot',     label: 'copilot' },
   ];
 
   // Hardcoded model list per agent type. v0.9.2 scope: per-flavor
@@ -70,7 +71,8 @@
     'aider':       ['claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5', 'gpt-4', 'gpt-4-turbo'],
     'qwen-code':   ['qwen3-coder-plus', 'qwen3-coder'],
     'gemini-cli':  ['gemini-2.5-pro', 'gemini-2.5-flash'],
-    'opencode':    ['chepherd-managed'],
+    'opencode':    ['groq/llama-3.3-70b-versatile', 'cerebras/llama-3.3-70b', 'chepherd-managed'],
+    'copilot':     ['gpt-4.1', 'claude-sonnet-4-6', 'gemini-2.5-pro'],
   };
 
   function typeOf(a) {

@@ -159,7 +159,6 @@ func (r *Runtime) fanOutTeamEvent(ev teamEvent) {
 	r.materializeTeamCanon(ev.Team)
 }
 
-
 // renderTeamEventNotification formats the inline notification.
 // Single line per architect's spec, prefixed [chepherd team-event].
 func renderTeamEventNotification(ev teamEvent) string {
@@ -198,7 +197,7 @@ func (r *Runtime) scheduleBriefingRegen(sessionID string, spec SpawnSpec, agentH
 	}
 	r.regenTimers[sessionID] = time.AfterFunc(1*time.Second, func() {
 		peers := r.snapshotPeersForBriefing(spec.Team, spec.Name)
-		materializeAgentBriefing(spec, agentHomeDir, peers)
+		materializeAgentBriefing(spec, agentHomeDir, peers, r.teamCanonBody(spec.Team))
 	})
 }
 
@@ -252,6 +251,50 @@ func (r *Runtime) materializeTeamCanon(teamName string) {
 		fmt.Fprintf(os.Stderr, "[chepherd-team-canon] write %s: %v\n", canonPath, err)
 		return
 	}
+}
+
+// teamCanonBody returns the current team-canon markdown for the named
+// team — the SAME content materializeTeamCanon writes to the team's
+// CanonPath. Prefers the materialized file on disk (authoritative,
+// matches what claude-code reads via the mount); falls back to
+// rendering it live from membership state when the file isn't present
+// yet (fresh team, or a deploy where the canon write hasn't run). Used
+// by #741 to embed team canon into non-claude flavors' context files.
+// Returns "" when no team / no canon path is known.
+func (r *Runtime) teamCanonBody(teamName string) string {
+	r.mu.Lock()
+	t, ok := r.teams[teamName]
+	if !ok {
+		r.mu.Unlock()
+		return ""
+	}
+	canonPath := t.CanonPath
+	topology := string(t.Topology)
+	var members []teamCanonMemberBrief
+	for _, m := range r.memberships {
+		if m.TeamName != teamName {
+			continue
+		}
+		var slug string
+		for _, info := range r.info {
+			if info.Name == m.AgentName {
+				slug = info.AgentSlug
+				break
+			}
+		}
+		members = append(members, teamCanonMemberBrief{
+			Name:      m.AgentName,
+			Role:      string(m.Role),
+			AgentSlug: slug,
+		})
+	}
+	r.mu.Unlock()
+	if canonPath != "" {
+		if b, err := os.ReadFile(canonPath); err == nil && len(b) > 0 {
+			return string(b)
+		}
+	}
+	return renderTeamCanon(teamName, topology, members)
 }
 
 // renderTeamCanon emits the team-level CLAUDE.md content.

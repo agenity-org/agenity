@@ -170,8 +170,9 @@ func TestRuntime_AgentAuthEnv_AiderBothChannels(t *testing.T) {
 }
 
 // TestRuntime_AgentAuthEnv_GeminiCLI — gemini-cli with a google-api
-// vault entry gets GOOGLE_API_KEY=<value>.
-// Refs #225 row H1.
+// vault entry gets GEMINI_API_KEY=<value> (#741: gemini-cli reads
+// GEMINI_API_KEY, not GOOGLE_API_KEY which is the Vertex/other path).
+// Refs #225 row H1, #741.
 func TestRuntime_AgentAuthEnv_GeminiCLI(t *testing.T) {
 	t.Parallel()
 	rt, err := New(t.TempDir())
@@ -182,8 +183,8 @@ func TestRuntime_AgentAuthEnv_GeminiCLI(t *testing.T) {
 		"cred-1": {meta: VaultCredMeta{ID: "cred-1", Provider: "google-api"}, value: "AIza-FAKE-12345"},
 	}})
 	got := rt.agentAuthEnv("gemini-cli")
-	if len(got) != 1 || got[0] != "GOOGLE_API_KEY=AIza-FAKE-12345" {
-		t.Errorf("agentAuthEnv(gemini-cli) = %v, want [GOOGLE_API_KEY=AIza-FAKE-12345]", got)
+	if len(got) != 1 || got[0] != "GEMINI_API_KEY=AIza-FAKE-12345" {
+		t.Errorf("agentAuthEnv(gemini-cli) = %v, want [GEMINI_API_KEY=AIza-FAKE-12345]", got)
 	}
 }
 
