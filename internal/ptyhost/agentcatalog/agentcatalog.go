@@ -154,6 +154,14 @@ var Builtin = []Agent{
 		Notes:       "Qwen Code CLI (@qwen-code/qwen-code, a gemini-cli fork; npm binary `qwen` symlinked to /usr/local/bin/qwen-code). --yolo auto-approves all tool calls. RequiredEnv cleared (#741): the free path is Qwen-OAuth login (qwen-oauth provider, file-mount); a DASHSCOPE_API_KEY (dashscope-api) or OpenAI-compatible base URL are alternatives — none mandatory at create() time.",
 	},
 	{
+		Slug:        "lean-coder",
+		Binary:      "/usr/local/bin/lean-coder",
+		DefaultArgs: []string{},
+		DefaultCwd:  "/workspace",
+		RequiredEnv: nil,
+		Notes:       "chepherd-native ultra-lean MCP mesh agent (scripts/lean-coder.py). Speaks chepherd MCP over HTTP directly and keeps each LLM request tiny (one system line + the task text), so a full knock->reply round-trip is a single small request that fits free-tier TPM (Cerebras 30k/5RPM, Groq 6k) — the caps opencode busts. Reads CEREBRAS_API_KEY by default (or LLM_API_KEY/LLM_BASE_URL/LLM_MODEL to point elsewhere). The free mesh node that off-the-shelf CLIs can't be: opencode too heavy, gemini/qwen don't emit tool calls, aider has no MCP.",
+	},
+	{
 		Slug:        "sovereign-shell",
 		Binary:      "/bin/sh",
 		DefaultArgs: []string{"-l"},

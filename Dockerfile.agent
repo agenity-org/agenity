@@ -59,6 +59,20 @@ RUN npm install -g @github/copilot@1.0.62 \
 RUN npm install -g opencode-ai \
  && ln -sf "$(command -v opencode)" /usr/local/bin/opencode
 
+# aider — lean single-request coding agent (pip pkg `aider-chat`, binary `aider`).
+# The agentcatalog Binary path is /usr/local/bin/aider. Unlike opencode, aider
+# emits one small request per turn, so it fits the free-tier TPM caps
+# (Cerebras 30k TPM / 5 RPM, Groq 6k TPM) that opencode's multi-15-30k-request
+# turns blow past. Pointed at an OpenAI-compatible endpoint via OPENAI_BASE_URL.
+# pip installs the `aider` binary directly into /usr/local/bin (already the
+# agentcatalog Binary path), so no symlink is needed.
+RUN pip3 install --no-cache-dir aider-chat \
+ && test -x /usr/local/bin/aider
+
+# lean-coder — chepherd-native ultra-lean MCP mesh agent. Pure-stdlib python3
+# (already installed). The free mesh node opencode/gemini/qwen/aider can't be.
+COPY --chmod=755 scripts/lean-coder.py /usr/local/bin/lean-coder
+
 # Non-root agent user (UID 1000) — required by chepherd's spawn contract.
 # Host UID 1000 in rootless Podman maps to container root; the actual
 # agent user inside is UID 1000 ≠ container root. All credentials and
