@@ -62,7 +62,9 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   agreed but was a reconstruction; this is the real CLI path.) **Re-confirmed reproducible
   2026-06-16T19:57:30Z** — fresh run, new `Request ID D5C2:4F6E4:14CDF7:166F71:6A31AAAD`, identical
   `Authentication failed`. PAT vaulted (`github-pat`→`GITHUB_TOKEN`, len 93, matches the supplied
-  `github_pat_11ATQXOCQ0…`) + injected, all verified. Live auth HAS been run (3×, consistent); it
+  `github_pat_11ATQXOCQ0…`) + injected, all verified. Live auth HAS been run (4×, consistent —
+  latest `2026-06-16T21:02:05Z`, `Request ID B48A:18CF2E:7981C7:823269:6A31B9D1`, same
+  `Authentication failed → ensure it has the 'Copilot Requests' permission enabled`); it
   cannot succeed until the permission is added. Operator edits the token at
   https://github.com/settings/personal-access-tokens → add **Copilot Requests = Read** → re-run.
   Not a chepherd bug.
