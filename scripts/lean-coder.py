@@ -53,6 +53,22 @@ LLM_BASE = (_a.base_url or os.environ.get("LLM_BASE_URL")
             or "https://api.cerebras.ai/v1").rstrip("/")
 LLM_MODEL = _a.model or os.environ.get("LLM_MODEL") or "gpt-oss-120b"
 _keyenv = _a.key_env or "LLM_API_KEY"
+# Self-configure the provider from a "provider/model" model string — this is what
+# the spawn wizard sends (e.g. "groq/llama-3.3-70b-versatile", "groq/qwen/qwen3-32b"),
+# so the operator can just pick a model in the UI. Explicit --base-url/--key-env win.
+_PROVIDERS = {
+    "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"),
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+}
+if "/" in LLM_MODEL:
+    _prov, _rest = LLM_MODEL.split("/", 1)
+    if _prov in _PROVIDERS:
+        if not _a.base_url:
+            LLM_BASE = _PROVIDERS[_prov][0]
+        if not _a.key_env:
+            _keyenv = _PROVIDERS[_prov][1]
+        LLM_MODEL = _rest
 LLM_KEY = (os.environ.get(_keyenv) or os.environ.get("LLM_API_KEY")
            or os.environ.get("CEREBRAS_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
 

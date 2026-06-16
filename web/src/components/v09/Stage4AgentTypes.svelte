@@ -44,6 +44,7 @@
     { slug: 'gemini-cli',  label: 'gemini-cli' },
     { slug: 'opencode',    label: 'opencode' },
     { slug: 'copilot',     label: 'copilot' },
+    { slug: 'lean-coder',  label: 'lean-coder (free: Cerebras/Groq/Gemini/Qwen)' },
   ];
 
   // Hardcoded model list per agent type. v0.9.2 scope: per-flavor
@@ -73,6 +74,8 @@
     'gemini-cli':  ['gemini-2.5-pro', 'gemini-2.5-flash'],
     'opencode':    ['groq/llama-3.3-70b-versatile', 'cerebras/llama-3.3-70b', 'chepherd-managed'],
     'copilot':     ['gpt-4.1', 'claude-sonnet-4-6', 'gemini-2.5-pro'],
+    // lean-coder: provider/model — the agent self-configures base-url + key from the prefix.
+    'lean-coder':  ['cerebras/gpt-oss-120b', 'groq/llama-3.3-70b-versatile', 'gemini/gemini-2.5-flash', 'groq/qwen/qwen3-32b'],
   };
 
   function typeOf(a) {

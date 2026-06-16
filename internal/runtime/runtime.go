@@ -1150,6 +1150,11 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
 		case "qwen-code":
 			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+		case "lean-coder":
+			// lean-coder reads --model and self-configures the provider from a
+			// "provider/model" prefix (cerebras/groq/gemini), so the wizard's
+			// model pick selects the free provider directly.
+			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
 		}
 	}
 
@@ -2825,6 +2830,14 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		if httpURL != "" {
 			entry = map[string]any{"httpUrl": httpURL, "headers": headers}
 		}
+		// gemini-cli / qwen-code require the MCP server to be TRUSTED to
+		// auto-execute its tools without a per-call confirmation prompt.
+		// --yolo auto-approves the CLI's BUILTIN tools only, NOT MCP server
+		// tools — so without trust the agent connects + lists chepherd tools
+		// but never CALLS get_task/send_to_session (it silently waits on a
+		// confirmation that never comes). This was the gemini "doesn't emit
+		// tool calls" symptom. Trust the chepherd MCP server explicitly.
+		entry["trust"] = true
 		// #741 — security block: disable the folder-trust prompt (both flavors),
 		// and for gemini pin auth to the API key so it doesn't fall into the
 		// OAuth "Enter the authorization code" flow despite GEMINI_API_KEY set.
