@@ -87,6 +87,12 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   *as* qa-gemini — NOT from gemini-cli. gemini-cli has not completed a turn on this free tier,
   so it has emitted zero chepherd MCP calls here. Honestly recorded as undemonstrable-on-free-tier
   rather than claimed either way.
+- **Conclusive (not ambiguous): tried 3 model pins, all blocked.** `--model` default, `gemini-2.5-flash`,
+  and `gemini-2.0-flash` (2026-06-16/17) — every one falls back to `gemini-3.5-flash` (the bundle's
+  hardcoded fallback) which returns `429 limit: 20/day` (exhausted). gemini-cli **cannot complete a
+  turn on this free tier regardless of `--model`**, so no chepherd `tools/call` can be demonstrated
+  here. This is a definitive free-tier-capacity/quota verdict; a paid key (operator-forbidden) or the
+  daily quota reset is the only lever. The working free gemini path remains **lean-coder + gemini**.
 - **The gemini key is fine** — pinning `gemini-2.5-flash` directly via the OpenAI-compat
   endpoint returns `billed-model: gemini-2.5-flash`, no error. So the failure is gemini-cli's
   free-tier fallback behavior + Google's 20/day cap on the fallback model, not the key,
@@ -149,7 +155,7 @@ actually emits tool calls. **No free agent hits all three:**
 | Agent | Lean for free TPM | MCP-capable | Emits tool calls | Free mesh-viable |
 |---|---|---|---|---|
 | opencode | ❌ (~15–30k×N/turn) | ✅ | ✅ | ❌ (too heavy) |
-| gemini-cli | ✅ | ✅ | tool-calling CLI by design; **undemonstrable on free tier** (no turn completes — 503/quota) | ❌ on **free** tier (2.5-flash 503 → 3.5-flash 20/day cap); viable on a paid key |
+| gemini-cli | ✅ | ✅ | tool-calling CLI by design; **conclusively free-tier-blocked** (3 model pins tried, all fall back to 3.5-flash 20/day-exhausted → no turn completes) | ❌ on **free** tier; viable on a paid key |
 | qwen-code | ✅ | ✅ | same engine as gemini-cli | ❌ (no key in vault; same free-tier ceiling) |
 | **aider 0.86.2** | ✅ | ❌ (no MCP in `--help`) | n/a | ❌ |
 | little-coder | ✅ | ❌ (no daemon MCP cfg) | n/a | ❌ |
