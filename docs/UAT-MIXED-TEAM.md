@@ -106,11 +106,19 @@ actually emits tool calls. **No free agent hits all three:**
 | claude-code | ❌ heavy (but sub) | ✅ | ✅ | ✅ (paid sub) |
 | copilot | ~ok | ✅ (HTTP, fixed) | ✅ | needs fine-grained PAT |
 
-**Conclusion (exhaustively tested, not opinion):** there is no off-the-shelf agent that
-is simultaneously lean-enough for free TPM, MCP-capable, AND emits tool calls. opencode is
-too heavy; gemini/qwen don't emit tool calls; aider/little-coder have no MCP. A truly-free
-mesh agent would require building a custom ultra-lean MCP client. The working agents are
-claude (sub) and copilot (one fine-grained PAT away).
+**Conclusion (exhaustively tested):** no OFF-THE-SHELF agent is simultaneously lean-enough
+for free TPM, MCP-capable, AND emits tool calls. opencode too heavy; gemini/qwen don't emit
+tool calls; aider/little-coder have no MCP. **So we built one: `lean-coder`** (scripts/lean-coder.py)
+— a ~120-line pure-stdlib MCP client. **VERIFIED LIVE ✅ on Cerebras free tier:**
+
+| lean-coder → Cerebras (gpt-oss-120b, FREE) | ✅ PASS |
+|---|---|
+| Autonomous | operator knock → `get_task` → Cerebras → `alert_human` → inbox: "capital of France is Paris" |
+| Agent↔agent | claude tech-lead ⇄ lean-coder ("10×10=100"); daemon log: both `send_to_session → OK` |
+
+So a **$0 Cerebras agent now communicates bidirectionally with a paid claude agent** through
+the mesh — a real mixed team. The working agents are **claude (sub) + lean-coder (free Cerebras)**,
+with copilot one fine-grained PAT away.
 
 ## Executed verdict — every pair walked, ✅/❌ with exact output
 
