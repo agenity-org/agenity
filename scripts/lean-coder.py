@@ -24,6 +24,8 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 
 # The daemon exposes MCP as Streamable-HTTP at /mcp and a WS bridge at /mcp/ws.
@@ -37,11 +39,22 @@ if _mcp.endswith("/mcp/ws"):
 MCP_URL = _mcp
 TOKEN = os.environ.get("CHEPHERD_TOKEN", "")
 NAME = os.environ.get("CHEPHERD_AGENT_NAME", "lean-coder")
+# Provider is selectable per-spawn via agent_args (so one image serves
+# Cerebras/Groq/Gemini as distinct team members) with env fallbacks.
+# Usage: lean-coder [--base-url URL] [--model NAME] [--key-env ENVVAR]
+import argparse as _argparse
+_ap = _argparse.ArgumentParser(add_help=False)
+_ap.add_argument("--base-url")
+_ap.add_argument("--model")
+_ap.add_argument("--key-env")
+_a, _ = _ap.parse_known_args()
 # `or`-chains (not .get(default)) so a set-but-EMPTY env var falls through.
-LLM_BASE = (os.environ.get("LLM_BASE_URL") or "https://api.cerebras.ai/v1").rstrip("/")
-LLM_KEY = (os.environ.get("LLM_API_KEY") or os.environ.get("CEREBRAS_API_KEY")
-           or os.environ.get("OPENAI_API_KEY") or "")
-LLM_MODEL = os.environ.get("LLM_MODEL") or "gpt-oss-120b"
+LLM_BASE = (_a.base_url or os.environ.get("LLM_BASE_URL")
+            or "https://api.cerebras.ai/v1").rstrip("/")
+LLM_MODEL = _a.model or os.environ.get("LLM_MODEL") or "gpt-oss-120b"
+_keyenv = _a.key_env or "LLM_API_KEY"
+LLM_KEY = (os.environ.get(_keyenv) or os.environ.get("LLM_API_KEY")
+           or os.environ.get("CEREBRAS_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
 
 KNOCK_RE = re.compile(r"\[chepherd-knock taskID=([0-9a-fA-F-]+) from=([^\]]+)\]")
 _rpc_id = 0
@@ -52,16 +65,27 @@ def _post(url, payload, headers, timeout=30):
     headers = dict(headers)
     # Cerebras's edge 403s the default Python-urllib User-Agent — set our own.
     headers.setdefault("User-Agent", "lean-coder/1.0")
-    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        body = r.read().decode()
-    # Streamable-HTTP may answer as SSE (data: {...}); take the last JSON line.
-    if body.lstrip().startswith("data:"):
-        for line in reversed(body.splitlines()):
-            line = line.strip()
-            if line.startswith("data:"):
-                return json.loads(line[5:].strip())
-    return json.loads(body)
+    last = None
+    for attempt in range(4):
+        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read().decode()
+        except urllib.error.HTTPError as e:
+            last = e
+            # Free tiers throw transient 429/5xx (Gemini 503 overload etc.) — back off + retry.
+            if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
+        # Streamable-HTTP may answer as SSE (data: {...}); take the last JSON line.
+        if body.lstrip().startswith("data:"):
+            for line in reversed(body.splitlines()):
+                line = line.strip()
+                if line.startswith("data:"):
+                    return json.loads(line[5:].strip())
+        return json.loads(body)
+    raise last
 
 
 def mcp_call(tool, arguments):
