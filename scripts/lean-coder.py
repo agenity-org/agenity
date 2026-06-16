@@ -150,7 +150,11 @@ def ask_llm(prompt):
     msg = resp["choices"][0]["message"]
     # Reasoning models (gpt-oss) may put the answer in `reasoning` with empty
     # `content` — accept either.
-    return (msg.get("content") or msg.get("reasoning") or "(no content)").strip()
+    text = msg.get("content") or msg.get("reasoning") or "(no content)"
+    # qwen3 etc. emit <think>...</think> chain-of-thought inside content — strip it
+    # so teammates get the answer, not the reasoning chatter.
+    text = re.sub(r"(?s)<think>.*?</think>", "", text).strip()
+    return text or "(no content)"
 
 
 def handle_knock(task_id, sender):
