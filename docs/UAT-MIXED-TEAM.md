@@ -43,16 +43,17 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   is unwalked. **To close:** let a real claude agent cross its refresh threshold, then drive a
   successful tool call AFTER its original `expiresAt`. Holding per [[feedback_token_expiry_evades_fixed_window_tests]]
   + [[feedback_walk_all_ops_surfaces_not_just_happy_path]].
-- **Partial real-agent evidence + scheduled close (2026-06-17):** on the REAL long-lived agent
-  tech-lead (up 5 h), the #744 spawn-blank is confirmed applied — container `.credentials.json` has
-  `refreshToken=""` (blanked) + a valid accessToken, and tech-lead is alive + responsive (no premature
-  401-death). Its boot clone had a long TTL (token expires in ~106 min), so the refresher hasn't
-  needed to fire yet (`[chepherd-cred-refresh] tech-lead` count = 0 — expected, not a defect). **The
-  natural-expiry survival walk is scheduled** (one-shot 07:49 local 2026-06-17, ~14 min past tech-lead's
-  expiry): it verifies (a) the refresher fires for the real agent, (b) the token refreshes (expiry jumps
-  up, refreshToken still blanked), (c) tech-lead makes a SUCCESSFUL tool call AFTER its original expiry —
-  i.e. claude-code re-read the daemon-refreshed credential. If all pass, the reviewer's last leg closes
-  (CONFIRMED-WITH-CAVEATS → CONFIRMED) and #744 moves status/uat → status/completed.
+- **END-TO-END WALKED + PROVEN on the real agent (2026-06-17 07:35–07:38) — CONFIRMED-WITH-CAVEATS → CONFIRMED:**
+  tech-lead (up 6 h) crossed its **natural** original token expiry (~07:35). The daemon refresher fired
+  **3× for the REAL agent**: `[chepherd-cred-refresh] tech-lead: refreshed accessToken (exp in 14m / 9m /
+  479m), refreshToken blanked` — token went 106 m → 472 m, `refreshToken` stayed `""`. Knocked tech-lead
+  at 07:37:36 (past its original expiry); at **07:38:18** it made SUCCESSFUL post-expiry calls:
+  `tools/call chepherd.get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK` — i.e.
+  claude-code **re-read the daemon-refreshed credential and did NOT 401.** This closes the reviewer's last
+  leg. **Full chain proven on a real long-lived agent crossing NATURAL expiry:** daemon
+  detect→refresh→blank→push, AND claude-code picks up the swap and survives. The synthetic-expiry caveat
+  from the cred-walk is now superseded by the real-agent natural-expiry walk. #744 → status/completed
+  (the scheduled 07:49 cron was cancelled as redundant — the walk ran early on the natural event).
 
 ### Pair 2 — claude ↔ copilot (GitHub Copilot CLI 1.0.63) — ⚠️ chepherd-side DONE, token-permission blocked
 - **Token injection: FIXED ✅** — added github-pat to vault; `GITHUB_TOKEN: SET` in container.
