@@ -123,7 +123,10 @@ var Builtin = []Agent{
 	{
 		Slug:        "gemini-cli",
 		Binary:      "/usr/local/bin/gemini",
-		DefaultArgs: []string{"--yolo"},
+		// #743 — pin gemini-2.5-flash: the v0.46 default (gemini-3.5-flash) and
+		// gemini-2.0-flash are quota-exhausted on the free tier (429
+		// RESOURCE_EXHAUSTED); gemini-2.5-flash has free quota (200 verified).
+		DefaultArgs: []string{"--yolo", "--model", "gemini-2.5-flash"},
 		DefaultCwd:  "/workspace",
 		RequiredEnv: nil,
 		Notes:       "Google Gemini CLI (@google/gemini-cli). --yolo auto-approves all tool calls (the documented full-autonomy approval mode). RequiredEnv is empty by design: the free path is Google-OAuth login dir (gemini-oauth provider, file-mount) — a GEMINI_API_KEY (google-api provider) is the alternative, so neither is mandatory at create() time.",
