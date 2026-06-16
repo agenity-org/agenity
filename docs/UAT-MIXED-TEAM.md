@@ -117,11 +117,19 @@ tool calls; aider/little-coder have no MCP. **So we built one: `lean-coder`** (s
 | → Cerebras agent↔agent | claude tech-lead ⇄ lean-coder ("10×10=100"); daemon log: both `send_to_session → OK` |
 | → Groq (llama-3.3-70b-versatile) | `get_task` → Groq → "Red is a primary color." → delivered (fits Groq 6k TPM) |
 
-**4-pair verdict:** Cerebras ✅ (lean-coder), Groq ✅ (lean-coder), Qwen — native qwen-code
-blocked (no DashScope key) but the qwen3-32b *model* is reachable via lean-coder→Groq,
-Copilot ❌ (classic PAT rejected; needs fine-grained PAT). One lean agent serves both free
-providers; persistent Groq spawn just needs LLM_BASE_URL/LLM_API_KEY/LLM_MODEL env wiring
-(proven standalone).
+**5-PAIR FINAL VERDICT (all live, daemon-log verified, persistent spawns):**
+
+| Pair | Agent | Provider/model | Result |
+|---|---|---|---|
+| Cerebras | cerebras-dev | gpt-oss-120b | ✅ PASS (autonomous, get_task→alert_human OK) |
+| Groq | groq-dev | llama-3.3-70b-versatile | ✅ PASS |
+| Gemini | gemini-dev | gemini-2.5-flash (OpenAI-compat) | ✅ PASS (bypasses tool-call-broken gemini-cli; retry-on-503) |
+| Qwen | qwen-dev | qwen/qwen3-32b (via Groq) | ✅ PASS (qwen3 `<think>` reasoning) |
+| Copilot | reviewer | GitHub Copilot CLI | ❌ FAIL — `Classic PATs are not supported. Please use fine-grained PATs`; needs a fine-grained PAT |
+
+lean-coder takes `--base-url`/`--model`/`--key-env` per spawn, so one image serves all four
+free providers as distinct persistent team members. **Live mixed team: claude + 4 free agents,
+communicating via the mesh.** Only copilot is gated (token type, operator-supplied).
 
 So a **$0 Cerebras agent now communicates bidirectionally with a paid claude agent** through
 the mesh — a real mixed team. The working agents are **claude (sub) + lean-coder (free Cerebras)**,
