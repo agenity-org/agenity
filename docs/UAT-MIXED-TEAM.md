@@ -66,6 +66,51 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 transport (#478) instead of the deprecated stdio bridge — fixes copilot's strict parser
 and is the documented forward path. claude + gemini verified no-regression on HTTP.
 
+---
+
+## Reproducible walkthrough scripts
+
+### Common setup (run once)
+```bash
+export TOK=$(cat /home/openova/.local/state/chepherd/auth.printed)   # daemon bearer token
+BASE=http://127.0.0.1:8083
+PFX=chepherd-agent-42102551-                                          # container name prefix (instanceUUID)
+spawn(){ curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  $BASE/api/v1/sessions -d "{\"Name\":\"$1\",\"Agent\":\"$2\",\"Team\":\"mixed\",\"Role\":\"$3\",\"Cwd\":\"/home/chepherd/repos\"}"; }
+knock(){ curl -s -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  $BASE/api/v1/teams/mixed/messages -d "{\"author\":\"operator\",\"body\":\"@$1 $2\"}"; }
+calls(){ podman logs chepherd 2>&1 | grep "\[chepherd-mcp\] $1: tools/call"; }   # processing evidence
+```
+**PASS criterion (all pairs):** after `knock`, `calls <agent>` shows
+`chepherd.get_task → OK` AND a reply tool (`alert_human` or `send_to_session`) `→ OK`.
+
+### Pair: claude ↔ claude  — ✅ PASS
+- **Precond:** claude-oauth in vault (✓).
+- **Steps:** `spawn tech-lead claude-code lead` → `knock tech-lead "call alert_human confirming you can run"` → `calls tech-lead`.
+- **Expected/Actual:** `get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK`. **PASS.**
+
+### Pair: claude ↔ copilot — ⚠️ chepherd-side PASS, token-type blocked
+- **Precond:** github-pat in vault (`POST /api/v1/vault {provider:github-pat,env_var:GITHUB_TOKEN,value:<PAT>}`); daemon on HTTP transport (`CHEPHERD_AGENT_MCP_URL` set).
+- **Steps:** `spawn reviewer copilot worker` → check `podman exec ${PFX}reviewer env | grep GITHUB_TOKEN` (expect SET) → check `~/.copilot/mcp-config.json` (expect `type:http`) → `knock reviewer ...` → `calls reviewer`.
+- **Expected:** copilot MCP connects clean (no `Unexpected end of JSON input`), then full round-trip.
+- **Actual:** token SET ✓, `type:http` ✓, JSON error GONE ✓; **FAILS at** `Classic PATs are not supported` in `~/.copilot/logs/*.log`. **Pass blocked on token type** → supply a fine-grained PAT with Copilot access (or Copilot OAuth), then re-run.
+
+### Pair: claude ↔ gemini — ❌ FAIL (model)
+- **Precond:** google-api (GEMINI_API_KEY) in vault (✓); flavor pins `--model gemini-2.5-flash`.
+- **Steps:** `spawn qa gemini-cli worker` → `knock qa ...` → `calls qa` + inspect `podman exec ${PFX}qa sh -c 'cat ~/.gemini/tmp/*/logs.json'`.
+- **Expected:** `get_task → OK` + reply.
+- **Actual:** MCP `initialize`+`tools/list → OK` (no `-32601` after the prompts/resources fix), knock received in logs.json, but **zero assistant turn / no tool call** on WS *and* HTTP. **FAIL** — gemini-2.5-flash can't drive the agentic loop. Lever: try `gemini-2.5-pro`.
+
+### Pair: claude ↔ opencode / Cerebras — ❌ FAIL (free-tier TPM)
+- **Precond:** cerebras-api (and/or groq-api) in vault (✓); opencode model resolves to `cerebras/gpt-oss-120b`.
+- **Steps:** `spawn backend-dev opencode worker` → `knock backend-dev ...` → inspect `podman exec ${PFX}backend-dev sh -c 'tail ~/.local/share/opencode/log/opencode.log'`.
+- **Expected:** `get_task → OK` + reply.
+- **Actual:** MCP OK, model `cerebras/gpt-oss-120b`, but `ERROR ... Tokens per minute limit exceeded` (same on Groq). **FAIL** — opencode's ~40k-token requests exceed every free TPM tier. Lever: paid tier OR a lean agent (aider/little-coder).
+
+### Pair: claude ↔ qwen — ⏭ NOT RUN (no credential)
+- **Precond (missing):** no dashscope-api key in vault and no Qwen-OAuth login. qwen-code needs `DASHSCOPE_API_KEY`, a Qwen-OAuth dir, or an OpenAI-compatible base URL.
+- **To run:** add a DashScope key (`POST /api/v1/vault {provider:dashscope-api,...}`) or point qwen-code at an OpenAI-compatible endpoint, then `spawn qa-qwen qwen-code worker` + the standard knock/verify. Honestly recorded as not-run rather than claimed.
+
 **chepherd-side bugs fixed this session:** gemini MCP `-32601` on prompts/resources
 (→ "MCP issues detected" gone); opencode default → Cerebras + correct model id;
 copilot git-token injection (vault github-pat); #744 token-expiry death (daemon refresher).
