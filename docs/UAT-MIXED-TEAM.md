@@ -111,10 +111,17 @@ for free TPM, MCP-capable, AND emits tool calls. opencode too heavy; gemini/qwen
 tool calls; aider/little-coder have no MCP. **So we built one: `lean-coder`** (scripts/lean-coder.py)
 — a ~120-line pure-stdlib MCP client. **VERIFIED LIVE ✅ on Cerebras free tier:**
 
-| lean-coder → Cerebras (gpt-oss-120b, FREE) | ✅ PASS |
+| lean-coder pair | ✅ PASS — exact evidence |
 |---|---|
-| Autonomous | operator knock → `get_task` → Cerebras → `alert_human` → inbox: "capital of France is Paris" |
-| Agent↔agent | claude tech-lead ⇄ lean-coder ("10×10=100"); daemon log: both `send_to_session → OK` |
+| → Cerebras (gpt-oss-120b) autonomous | operator knock → `get_task` → Cerebras → `alert_human` → inbox: "capital of France is Paris" |
+| → Cerebras agent↔agent | claude tech-lead ⇄ lean-coder ("10×10=100"); daemon log: both `send_to_session → OK` |
+| → Groq (llama-3.3-70b-versatile) | `get_task` → Groq → "Red is a primary color." → delivered (fits Groq 6k TPM) |
+
+**4-pair verdict:** Cerebras ✅ (lean-coder), Groq ✅ (lean-coder), Qwen — native qwen-code
+blocked (no DashScope key) but the qwen3-32b *model* is reachable via lean-coder→Groq,
+Copilot ❌ (classic PAT rejected; needs fine-grained PAT). One lean agent serves both free
+providers; persistent Groq spawn just needs LLM_BASE_URL/LLM_API_KEY/LLM_MODEL env wiring
+(proven standalone).
 
 So a **$0 Cerebras agent now communicates bidirectionally with a paid claude agent** through
 the mesh — a real mixed team. The working agents are **claude (sub) + lean-coder (free Cerebras)**,
