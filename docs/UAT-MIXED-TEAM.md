@@ -68,6 +68,41 @@ and is the documented forward path. claude + gemini verified no-regression on HT
 
 ---
 
+## Free-tier hard limits (measured live from provider headers, 2026-06-16)
+
+| Provider | TPM (tokens/min) | RPM (req/min) | Verdict for a mesh agent |
+|---|---|---|---|
+| **Cerebras** (gpt-oss-120b) | **30,000** | **5** | opencode busts both (multi-request × 15–30k); only a lean single-request agent (~≤10k) fits |
+| **Groq** (llama-3.1-8b) | **6,000** | — | too tight for any multi-call coding agent; lean-only |
+| **Gemini** (2.5-flash, free key) | n/a (no quota errors seen) | — | not TPM-limited — blocker is gemini-cli never emitting a tool call |
+
+**Why opencode can't work on free tiers (math, not opinion):** an opencode turn =
+`build` request + `title` request + per-tool-call requests, each carrying the system
+prompt + tool schemas + briefing (~15–30k tokens). That exceeds Cerebras's 5 req/min
+and 30k TPM, and Groq's 6k TPM, on the *first* turn. Slimming tools saves ~11k but
+opencode's base system prompt + multi-request pattern still overruns. **opencode is the
+wrong tool for free TPM tiers — confirmed by the numbers.**
+
+**The only off-the-shelf agent that fits the TPM is a lean single-request one (aider) —
+but it is NOT installed in the agent image.** Executed live 2026-06-16: spawned aider
+on Cerebras (vault openai-api=cerebras key + `--openai-api-base https://api.cerebras.ai/v1
+--model openai/gpt-oss-120b`) → container **Exited (127)**: `/usr/local/bin/aider: No such
+file or directory`. So enabling it needs: (1) add aider to Dockerfile.agent + rebuild the
+agent image; (2) wire `OPENAI_BASE_URL` per-provider (aider RequiredEnv); (3) prove aider
+invokes MCP tools on a knock (unproven — aider is a code-edit REPL). Real work, uncertain payoff.
+
+## Executed verdict — every pair walked, ✅/❌ with exact output
+
+| Pair (agent → provider) | Verdict | Exact evidence |
+|---|---|---|
+| claude-code → Anthropic sub | ✅ PASS | daemon log: `get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK` |
+| copilot → GitHub | ❌ | `~/.copilot/logs`: `Classic PATs are not supported. Please use fine-grained PATs` (MCP transport itself FIXED — HTTP, JSON error gone) |
+| gemini-cli → Gemini free | ❌ | daemon log: `initialize → OK`, `tools/list → OK` but **zero `tools/call`** ever; logs.json shows knock received, no assistant tool turn |
+| opencode → Groq free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Groq 6k TPM vs ~30k request) |
+| opencode → Cerebras free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Cerebras 30k TPM / 5 RPM vs multi-request turn) |
+| aider → Cerebras free | ❌ | container `Exited (127)`: `/usr/local/bin/aider: No such file or directory` (not in image) |
+| qwen-code → (none) | ⏭ NOT RUN | no DashScope key / OAuth in vault |
+
 ## Reproducible walkthrough scripts
 
 ### Common setup (run once)
