@@ -24,7 +24,13 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 - MCP: `initialize → OK`, `tools/list → OK (27 tools)`
 - Process+reply: `get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK`
 - Skills/canon: agent listed its loaded skills + team canon on request.
-- Durability: survives token expiry (#744 daemon refresher — verified 5m→407m).
+- Durability: survives token expiry (#744 daemon refresher). **Live-walked on the CURRENT daemon
+  2026-06-16** (not just code inspection): planted a near-expiry (now+120s) credential on a
+  throwaway `cred-walk` agent → the next 5-min scan fired, ~180s later:
+  `[chepherd-cred-refresh] cred-walk: refreshed accessToken (exp in 239m), refreshToken blanked`,
+  and the host `expiresAt` jumped back to 239.8 min (fresh master TTL). Full cycle observed:
+  detect `exp <= now+15min` → re-resolve master from vault → blank refreshToken → `podman cp`
+  push → log marker. Non-disruptive (throwaway agent; tech-lead/qa untouched, no daemon bounce).
 
 ### Pair 2 — claude ↔ copilot (GitHub Copilot CLI 1.0.63) — ⚠️ chepherd-side DONE, token-permission blocked
 - **Token injection: FIXED ✅** — added github-pat to vault; `GITHUB_TOKEN: SET` in container.
