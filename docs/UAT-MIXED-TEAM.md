@@ -36,11 +36,14 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 - **Classic-PAT error: FIXED ✅** — a fine-grained PAT (`github_pat_11A…`, len 93) is wired into
   the vault (provider `github-pat`, env `GITHUB_TOKEN`); the `Classic PATs are not supported` error
   is gone.
-- **Remaining blocker (operator's to provide): token permission** — live 2026-06-17,
-  `GET /copilot_internal/v2/token` with the fine-grained PAT → `403 "Resource not accessible by
-  personal access token"`. The token is missing the **"Copilot Requests"** account permission.
-  Operator edits the token at https://github.com/settings/personal-access-tokens → add
-  **Copilot Requests = Read** → re-run. Not a chepherd bug.
+- **Remaining blocker (operator's to provide): token permission** — definitive production-path
+  test 2026-06-17, the actual `copilot -p "..." --allow-all-tools` binary with the real
+  `GITHUB_TOKEN`: `Error: Authentication failed (Request ID: 9D34:42221:187A4D3:19BF04D:6A3194E0)`.
+  The CLI's own remediation: *"If using a Fine-Grained PAT, ensure it has the 'Copilot Requests'
+  permission enabled."* (My earlier `GET /copilot_internal/v2/token → 403 "Resource not accessible"`
+  agreed but was a reconstruction; this is the real CLI path.) Operator edits the token at
+  https://github.com/settings/personal-access-tokens → add **Copilot Requests = Read** → re-run.
+  Not a chepherd bug.
 
 ### Pair 3 — claude ↔ gemini (gemini-cli) — ⚠️ FAIL (free-tier capacity/quota, NOT tool calls)
 - MCP: `initialize → OK`, `tools/list → OK (27 tools)`, no `-32601` (prompts/resources fix shipped).
@@ -140,7 +143,7 @@ caps the fallback at 20 req/day; aider/little-coder have no MCP. **So we built o
 | Groq | groq-dev | llama-3.3-70b-versatile | ✅ PASS |
 | Gemini | gemini-dev | gemini-2.5-flash (OpenAI-compat) | ✅ PASS (pins 2.5-flash direct, no 3.5-flash 20/day fallback; retry-on-503; canon-aware: "loaded team 'mixed' canon") |
 | Qwen | qwen-dev | qwen/qwen3-32b (via Groq) | ✅ PASS (qwen3 `<think>` reasoning) |
-| Copilot | reviewer | GitHub Copilot CLI | ⏳ one perm away — fine-grained PAT wired (classic-PAT error gone); `403 "Resource not accessible"` → token needs **Copilot Requests** permission (operator) |
+| Copilot | reviewer | GitHub Copilot CLI 1.0.62 | ⏳ one perm away — fine-grained PAT wired (classic-PAT error gone). Real CLI auth: `Authentication failed (Request ID 9D34:…:6A3194E0)`; CLI says add the **'Copilot Requests' permission** (operator) |
 
 lean-coder takes `--base-url`/`--model`/`--key-env` per spawn, so one image serves all four
 free providers as distinct persistent team members. **Live mixed team: claude + 4 free agents,
@@ -155,7 +158,7 @@ with copilot one fine-grained PAT away.
 | Pair (agent → provider) | Verdict | Exact evidence |
 |---|---|---|
 | claude-code → Anthropic sub | ✅ PASS | daemon log: `get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK` |
-| copilot → GitHub | ⏳ one perm away | MCP transport fixed (HTTP); classic-PAT error fixed (fine-grained PAT `github_pat_…` wired into vault). Remaining: token needs the **"Copilot Requests"** account permission. Live recheck 2026-06-17: `GET /copilot_internal/v2/token` → `403 "Resource not accessible by personal access token"` (operator edits the token). |
+| copilot → GitHub | ⏳ one perm away | MCP transport fixed (HTTP); classic-PAT error fixed (fine-grained PAT `github_pat_11A…`, len 93, wired into vault, reaches the CLI). **Definitive production-path test 2026-06-17** — ran the actual `copilot -p "..." --allow-all-tools` binary with the real `GITHUB_TOKEN`: `Error: Authentication failed (Request ID: 9D34:42221:187A4D3:19BF04D:6A3194E0)` → the CLI's own remediation names it: *"If using a Fine-Grained PAT, ensure it has the 'Copilot Requests' permission enabled."* Operator adds **Copilot Requests = Read** to the token → re-run. |
 | gemini-cli → Gemini free | ❌ (free-tier, NOT tool calls) | gemini-cli **does** emit tool calls (builtins ran live). It fails because the free-tier LLM call fails: `gemini-2.5-flash` → 503 "high demand" → hardcoded fallback to `gemini-3.5-flash` → 429 `limit: 20/day` (exhausted). Key verified working direct (`billed-model: gemini-2.5-flash`). Working gemini = **lean-coder + gemini** (pins 2.5-flash, no fallback) — row "Gemini × lean-coder". Earlier "tool-invocation wall" claim retracted. |
 | opencode → Groq free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Groq 6k TPM vs ~30k request) |
 | opencode → Cerebras free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Cerebras 30k TPM / 5 RPM vs multi-request turn) |
