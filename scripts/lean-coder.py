@@ -125,9 +125,48 @@ def task_text(get_task_result):
     return " ".join(t for t in texts if t).strip() or json.dumps(blob)[:500]
 
 
-SYSTEM = ("You are %s, a teammate on a chepherd agent mesh backed by %s. "
-          "You DO have memory of this conversation (it is provided below). "
-          "Be helpful and specific; give concrete, measurable detail when asked." % (NAME, LLM_MODEL))
+SYSTEM_BASE = ("You are %s, a teammate on a chepherd agent mesh backed by %s. "
+               "You DO have memory of this conversation (it is provided below). "
+               "Be helpful and specific; give concrete, measurable detail when asked." % (NAME, LLM_MODEL))
+SYSTEM = SYSTEM_BASE  # augmented with the team canon at startup (load_team_canon)
+
+
+def _result_text(res):
+    """Extract + JSON-parse the text payload from an MCP tool result."""
+    if isinstance(res, dict) and isinstance(res.get("content"), list):
+        for part in res["content"]:
+            if part.get("type") == "text":
+                try:
+                    return json.loads(part["text"])
+                except Exception:
+                    return part["text"]
+    return res
+
+
+def load_team_canon():
+    """Make lean-coder canon/team/role aware: find our team, read its canon,
+    and fold it into the system prompt. Best-effort — skips on any error."""
+    global SYSTEM
+    try:
+        mem = _result_text(mcp_call("list_memberships", {"agent": NAME}))
+        ms = mem.get("memberships", mem) if isinstance(mem, dict) else mem
+        team = ""
+        if isinstance(ms, list):
+            for m in ms:
+                if isinstance(m, dict) and (m.get("team_name") or m.get("team")):
+                    team = m.get("team_name") or m.get("team")
+                    break
+        if not team:
+            return
+        canon = _result_text(mcp_call("read_canon", {"team": team}))
+        text = canon.get("canon", "") if isinstance(canon, dict) else str(canon)
+        if text:
+            SYSTEM = (SYSTEM_BASE +
+                      "\n\nYour team canon (authoritative — follow it):\n" + text[:3000])
+            print("[lean-coder] loaded team '%s' canon (%d chars) — canon-aware"
+                  % (team, len(text)), flush=True)
+    except Exception as e:
+        print("[lean-coder] canon load skipped: %s" % e, flush=True)
 
 
 def ask_llm(prompt):
@@ -174,6 +213,7 @@ def handle_interactive(line):
 def main():
     print("[lean-coder] %s online — model=%s via %s, MCP=%s | stateful + interactive "
           "(type a message, or wait for knocks)" % (NAME, LLM_MODEL, LLM_BASE, MCP_URL), flush=True)
+    load_team_canon()  # canon/team/role awareness via MCP
     for raw in sys.stdin:
         line = raw.rstrip("\r\n")
         if not line.strip():
