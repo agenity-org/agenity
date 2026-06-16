@@ -26,24 +26,38 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 - Skills/canon: agent listed its loaded skills + team canon on request.
 - Durability: survives token expiry (#744 daemon refresher — verified 5m→407m).
 
-### Pair 2 — claude ↔ copilot (GitHub Copilot CLI 1.0.63) — ⚠️ chepherd-side DONE, token-type blocked
+### Pair 2 — claude ↔ copilot (GitHub Copilot CLI 1.0.63) — ⚠️ chepherd-side DONE, token-permission blocked
 - **Token injection: FIXED ✅** — added github-pat to vault; `GITHUB_TOKEN: SET` in container.
 - **MCP transport: FIXED ✅** — switched agents to the canonical Streamable-HTTP transport
   (`CHEPHERD_AGENT_MCP_URL=http://127.0.0.1:9090/mcp`, #478) instead of the stdio bridge.
   copilot's `Unexpected end of JSON input` is **GONE** — log now shows `MCP client for
   chepherd connected ... Started MCP client for remote server chepherd`. Verified the
   HTTP endpoint answers `initialize`+`tools/list` with clean JSON from inside the container.
-- **Remaining blocker (operator's to provide): classic PAT rejected** — copilot logs
-  `Classic PATs are not supported. Please use fine-grained PATs or other supported token
-  types.` The host `gh` token is a classic `ghp_…` PAT. copilot needs a **fine-grained
-  PAT with Copilot access** or the Copilot OAuth login. Not a chepherd bug.
+- **Classic-PAT error: FIXED ✅** — a fine-grained PAT (`github_pat_11A…`, len 93) is wired into
+  the vault (provider `github-pat`, env `GITHUB_TOKEN`); the `Classic PATs are not supported` error
+  is gone.
+- **Remaining blocker (operator's to provide): token permission** — live 2026-06-17,
+  `GET /copilot_internal/v2/token` with the fine-grained PAT → `403 "Resource not accessible by
+  personal access token"`. The token is missing the **"Copilot Requests"** account permission.
+  Operator edits the token at https://github.com/settings/personal-access-tokens → add
+  **Copilot Requests = Read** → re-run. Not a chepherd bug.
 
-### Pair 3 — claude ↔ gemini (gemini-cli, gemini-2.5-flash) — ⚠️ FAIL (model)
+### Pair 3 — claude ↔ gemini (gemini-cli) — ⚠️ FAIL (free-tier capacity/quota, NOT tool calls)
 - MCP: `initialize → OK`, `tools/list → OK (27 tools)`, no `-32601` (prompts/resources fix shipped).
-- Process: **never called `get_task`** — session log shows the knock received, zero
-  assistant response. gemini-2.5-flash does not complete the agentic turn (matches
-  operator's "Thinking 3m14s" observation). Not a chepherd bug; model capability.
-- Next lever to try: gemini-2.5-pro (more capable) or longer timeout.
+- **CORRECTION (2026-06-17): gemini-cli DOES emit tool calls.** Earlier "never emits a
+  tool call" was wrong. Live proof: a one-shot `gemini --yolo -p "..."` ran its builtin
+  `ReadFolder`/`GrepTool` tools, so tool invocation works. The reason it never completed
+  an A2A reply is the **free-tier LLM call itself failing**, captured live:
+  1. requests `gemini-2.5-flash` → **503 "This model is currently experiencing high demand"** (free-tier capacity)
+  2. gemini-cli **falls back to `gemini-3.5-flash`** (a hardcoded fallback chain in the bundle — no settings toggle)
+  3. `gemini-3.5-flash` → **429 `Quota exceeded ... limit: 20, model: gemini-3.5-flash`** (free-tier = 20 req/day, exhausted)
+- **The gemini key is fine** — pinning `gemini-2.5-flash` directly via the OpenAI-compat
+  endpoint returns `billed-model: gemini-2.5-flash`, no error. So the failure is gemini-cli's
+  free-tier fallback behavior + Google's 20/day cap on the fallback model, not the key,
+  not chepherd, and not "won't call tools."
+- **Working gemini = lean-coder + gemini** — it pins `gemini-2.5-flash` over OpenAI-compat
+  (no 3.5-flash fallback), retries 503, and uses `max_tokens:800`. Verified live + canon-aware
+  (see "Gemini × lean-coder" row).
 
 ### Pair 4 — claude ↔ opencode (Cerebras gpt-oss-120b / Groq) — ❌ FAIL (free-tier TPM)
 - MCP: `initialize → OK`, `tools/list → OK (27 tools)`; model resolved to `cerebras/gpt-oss-120b`.
@@ -59,7 +73,7 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 |---|---|---|---|
 | claude ↔ claude | ✅ PASS (full round-trip, HTTP transport, durable) | — | works |
 | claude ↔ copilot | ⚠️ chepherd-side DONE | classic PAT rejected — needs fine-grained PAT / Copilot OAuth | no (token type) |
-| claude ↔ gemini | ❌ FAIL | gemini-2.5-flash never completes the turn (same on WS + HTTP) | no (model) |
+| claude ↔ gemini (gemini-cli) | ❌ FAIL | free-tier capacity/quota: 2.5-flash 503 → hardcoded fallback to gemini-3.5-flash (20 req/day, exhausted). gemini-cli DOES emit tool calls; key works direct. | no (free-tier) |
 | claude ↔ opencode | ❌ FAIL | free TPM (Groq 12k / Cerebras) < opencode's ~40k req | no (provider) |
 
 **Transport upgrade shipped:** all agents now use the canonical Streamable-HTTP MCP
@@ -74,7 +88,7 @@ and is the documented forward path. claude + gemini verified no-regression on HT
 |---|---|---|---|
 | **Cerebras** (gpt-oss-120b) | **30,000** | **5** | opencode busts both (multi-request × 15–30k); only a lean single-request agent (~≤10k) fits |
 | **Groq** (llama-3.1-8b) | **6,000** | — | too tight for any multi-call coding agent; lean-only |
-| **Gemini** (2.5-flash, free key) | n/a (no quota errors seen) | — | not TPM-limited — blocker is gemini-cli never emitting a tool call |
+| **Gemini** (free API key) | n/a (per-token, not per-minute) | — | **20 req/day** on `gemini-3.5-flash` (gemini-cli's fallback model); `gemini-2.5-flash` is 503-prone on free tier. Pin 2.5-flash direct (lean-coder) to dodge the 20/day fallback. |
 
 **Why opencode can't work on free tiers (math, not opinion):** an opencode turn =
 `build` request + `title` request + per-tool-call requests, each carrying the system
@@ -99,16 +113,17 @@ actually emits tool calls. **No free agent hits all three:**
 | Agent | Lean for free TPM | MCP-capable | Emits tool calls | Free mesh-viable |
 |---|---|---|---|---|
 | opencode | ❌ (~15–30k×N/turn) | ✅ | ✅ | ❌ (too heavy) |
-| gemini-cli (2.5-flash) | ✅ | ✅ | ❌ (never `tools/call`) | ❌ |
-| qwen-code | ✅ | ✅ | ❌ (gemini-cli fork) | ❌ (+ no key) |
+| gemini-cli | ✅ | ✅ | ✅ (builtins proven; MCP only when the LLM call succeeds) | ❌ on **free** tier (2.5-flash 503 → 3.5-flash 20/day cap); viable on a paid key |
+| qwen-code | ✅ | ✅ | ✅ (gemini-cli fork — same engine) | ❌ (no key in vault; same free-tier ceiling) |
 | **aider 0.86.2** | ✅ | ❌ (no MCP in `--help`) | n/a | ❌ |
 | little-coder | ✅ | ❌ (no daemon MCP cfg) | n/a | ❌ |
 | claude-code | ❌ heavy (but sub) | ✅ | ✅ | ✅ (paid sub) |
 | copilot | ~ok | ✅ (HTTP, fixed) | ✅ | needs fine-grained PAT |
 
 **Conclusion (exhaustively tested):** no OFF-THE-SHELF agent is simultaneously lean-enough
-for free TPM, MCP-capable, AND emits tool calls. opencode too heavy; gemini/qwen don't emit
-tool calls; aider/little-coder have no MCP. **So we built one: `lean-coder`** (scripts/lean-coder.py)
+for **free** TPM, MCP-capable, AND able to complete a turn on a free tier. opencode too heavy;
+gemini-cli/qwen-code emit tool calls fine but the free Gemini tier 503s on 2.5-flash and
+caps the fallback at 20 req/day; aider/little-coder have no MCP. **So we built one: `lean-coder`** (scripts/lean-coder.py)
 — a ~120-line pure-stdlib MCP client. **VERIFIED LIVE ✅ on Cerebras free tier:**
 
 | lean-coder pair | ✅ PASS — exact evidence |
@@ -123,9 +138,9 @@ tool calls; aider/little-coder have no MCP. **So we built one: `lean-coder`** (s
 |---|---|---|---|
 | Cerebras | cerebras-dev | gpt-oss-120b | ✅ PASS (autonomous, get_task→alert_human OK) |
 | Groq | groq-dev | llama-3.3-70b-versatile | ✅ PASS |
-| Gemini | gemini-dev | gemini-2.5-flash (OpenAI-compat) | ✅ PASS (bypasses tool-call-broken gemini-cli; retry-on-503) |
+| Gemini | gemini-dev | gemini-2.5-flash (OpenAI-compat) | ✅ PASS (pins 2.5-flash direct, no 3.5-flash 20/day fallback; retry-on-503; canon-aware: "loaded team 'mixed' canon") |
 | Qwen | qwen-dev | qwen/qwen3-32b (via Groq) | ✅ PASS (qwen3 `<think>` reasoning) |
-| Copilot | reviewer | GitHub Copilot CLI | ❌ FAIL — `Classic PATs are not supported. Please use fine-grained PATs`; needs a fine-grained PAT |
+| Copilot | reviewer | GitHub Copilot CLI | ⏳ one perm away — fine-grained PAT wired (classic-PAT error gone); `403 "Resource not accessible"` → token needs **Copilot Requests** permission (operator) |
 
 lean-coder takes `--base-url`/`--model`/`--key-env` per spawn, so one image serves all four
 free providers as distinct persistent team members. **Live mixed team: claude + 4 free agents,
@@ -140,8 +155,8 @@ with copilot one fine-grained PAT away.
 | Pair (agent → provider) | Verdict | Exact evidence |
 |---|---|---|
 | claude-code → Anthropic sub | ✅ PASS | daemon log: `get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK` |
-| copilot → GitHub | ⏳ one perm away | MCP transport fixed (HTTP); classic-PAT error fixed (fine-grained PAT `github_pat_…` wired into vault). Remaining: token needs the **"Copilot Requests"** account permission — `PAT does not have "Copilot Requests" permission` (operator edits the token). |
-| gemini-cli → Gemini free | ❌ | **3 fixes tried + committed** (prompts/resources `-32601`, `trust:true`, inline directive marker). gemini RECEIVED the explicit directive (`ACTION REQUIRED: call chepherd.get_task…`) and STILL never calls `get_task` — gemini-cli/2.5-flash tool-invocation wall, not a chepherd config. Working gemini = **lean-coder + gemini** (row "Gemini × lean-coder"). |
+| copilot → GitHub | ⏳ one perm away | MCP transport fixed (HTTP); classic-PAT error fixed (fine-grained PAT `github_pat_…` wired into vault). Remaining: token needs the **"Copilot Requests"** account permission. Live recheck 2026-06-17: `GET /copilot_internal/v2/token` → `403 "Resource not accessible by personal access token"` (operator edits the token). |
+| gemini-cli → Gemini free | ❌ (free-tier, NOT tool calls) | gemini-cli **does** emit tool calls (builtins ran live). It fails because the free-tier LLM call fails: `gemini-2.5-flash` → 503 "high demand" → hardcoded fallback to `gemini-3.5-flash` → 429 `limit: 20/day` (exhausted). Key verified working direct (`billed-model: gemini-2.5-flash`). Working gemini = **lean-coder + gemini** (pins 2.5-flash, no fallback) — row "Gemini × lean-coder". Earlier "tool-invocation wall" claim retracted. |
 | opencode → Groq free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Groq 6k TPM vs ~30k request) |
 | opencode → Cerebras free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Cerebras 30k TPM / 5 RPM vs multi-request turn) |
 | aider → Cerebras free | ❌ | container `Exited (127)`: `/usr/local/bin/aider: No such file or directory` (not in image) |
@@ -174,11 +189,20 @@ calls(){ podman logs chepherd 2>&1 | grep "\[chepherd-mcp\] $1: tools/call"; }  
 - **Expected:** copilot MCP connects clean (no `Unexpected end of JSON input`), then full round-trip.
 - **Actual:** token SET ✓, `type:http` ✓, JSON error GONE ✓; **FAILS at** `Classic PATs are not supported` in `~/.copilot/logs/*.log`. **Pass blocked on token type** → supply a fine-grained PAT with Copilot access (or Copilot OAuth), then re-run.
 
-### Pair: claude ↔ gemini — ❌ FAIL (model)
+### Pair: claude ↔ gemini — ❌ FAIL (free-tier capacity/quota, NOT tool calls)
 - **Precond:** google-api (GEMINI_API_KEY) in vault (✓); flavor pins `--model gemini-2.5-flash`.
 - **Steps:** `spawn qa gemini-cli worker` → `knock qa ...` → `calls qa` + inspect `podman exec ${PFX}qa sh -c 'cat ~/.gemini/tmp/*/logs.json'`.
 - **Expected:** `get_task → OK` + reply.
-- **Actual:** MCP `initialize`+`tools/list → OK` (no `-32601` after the prompts/resources fix), knock received in logs.json, but **zero assistant turn / no tool call** on WS *and* HTTP. **FAIL** — gemini-2.5-flash can't drive the agentic loop. Lever: try `gemini-2.5-pro`.
+- **Actual (recorded live 2026-06-17):** MCP `initialize`+`tools/list → OK`. One-shot `gemini -p`
+  proves tool invocation works (ran `ReadFolder`/`GrepTool`). The agentic turn fails on the
+  **LLM call**: `gemini-2.5-flash` → `503 "This model is currently experiencing high demand"`
+  → gemini-cli falls back to `gemini-3.5-flash` → `429 Quota exceeded ... limit: 20, model:
+  gemini-3.5-flash`. **FAIL = free-tier capacity + 20/day fallback cap, not "can't drive the loop."**
+- **Proof the key is fine:** `curl .../v1beta/openai/chat/completions -d '{"model":"gemini-2.5-flash",...}'`
+  → `billed-model: gemini-2.5-flash`, no error.
+- **Working gemini:** `spawn gemini-dev lean-coder` with `--model gemini/gemini-2.5-flash` → PASS
+  (pins 2.5-flash, retries 503, no 3.5-flash fallback). Lever for gemini-cli itself: a paid key
+  (lifts the 20/day cap) — the fallback chain is hardcoded in the bundle, no settings toggle.
 
 ### Pair: claude ↔ opencode / Cerebras — ❌ FAIL (free-tier TPM)
 - **Precond:** cerebras-api (and/or groq-api) in vault (✓); opencode model resolves to `cerebras/gpt-oss-120b`.
@@ -194,8 +218,11 @@ calls(){ podman logs chepherd 2>&1 | grep "\[chepherd-mcp\] $1: tools/call"; }  
 (→ "MCP issues detected" gone); opencode default → Cerebras + correct model id;
 copilot git-token injection (vault github-pat); #744 token-expiry death (daemon refresher).
 
-**The one remaining chepherd-fixable blocker is copilot's MCP framing** — and copilot
-runs a capable, non-TPM-limited model, so fixing it (bridge framing or M2 HTTP
-transport) yields a *second* fully-working agent. gemini/opencode are blocked by
-model capability and free-tier TPM respectively — not chepherd bugs; they need a
-paid tier or a leaner agent.
+**No remaining chepherd-fixable blocker.** copilot's MCP framing is fixed (HTTP transport);
+it's gated only on the operator adding the **"Copilot Requests"** permission to the fine-grained
+PAT. gemini-cli and opencode are blocked by **free-tier limits, not chepherd bugs and not
+tool-call capability**: gemini-cli emits tool calls fine but the free Gemini tier 503s on
+2.5-flash and caps the 3.5-flash fallback at 20 req/day; opencode's multi-request turns exceed
+every free TPM. Both work on a paid key; on free tiers the answer is **lean-coder** (proven
+across Cerebras/Groq/Gemini/Qwen, canon-aware), which sidesteps both ceilings by issuing one
+small request against a directly-pinned model.
