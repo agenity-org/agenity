@@ -44,6 +44,10 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   agreed but was a reconstruction; this is the real CLI path.) Operator edits the token at
   https://github.com/settings/personal-access-tokens → add **Copilot Requests = Read** → re-run.
   Not a chepherd bug.
+- **Verdict (answers "rate-limit vs misconfiguration"): token-permission MISCONFIGURATION, NOT a
+  rate-limit.** The copilot path shows zero 429/quota/TPM errors — the sole failure is a fixed
+  PAT-scope gap (missing `Copilot Requests`), which the operator closes once by editing the token.
+  Contrast: gemini-cli/opencode failures ARE free-tier limits (429/quota/TPM); copilot is not.
 
 ### Pair 3 — claude ↔ gemini (gemini-cli) — ⚠️ FAIL (free-tier capacity/quota, NOT tool calls)
 - MCP: `initialize → OK`, `tools/list → OK (27 tools)`, no `-32601` (prompts/resources fix shipped).
