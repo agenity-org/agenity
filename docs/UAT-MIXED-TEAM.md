@@ -91,6 +91,27 @@ file or directory`. So enabling it needs: (1) add aider to Dockerfile.agent + re
 agent image; (2) wire `OPENAI_BASE_URL` per-provider (aider RequiredEnv); (3) prove aider
 invokes MCP tools on a knock (unproven — aider is a code-edit REPL). Real work, uncertain payoff.
 
+## Free-agent capability matrix (every agent tested on every axis, 2026-06-16)
+
+A free mesh agent must be ALL THREE: lean enough for free TPM, MCP-capable, and
+actually emits tool calls. **No free agent hits all three:**
+
+| Agent | Lean for free TPM | MCP-capable | Emits tool calls | Free mesh-viable |
+|---|---|---|---|---|
+| opencode | ❌ (~15–30k×N/turn) | ✅ | ✅ | ❌ (too heavy) |
+| gemini-cli (2.5-flash) | ✅ | ✅ | ❌ (never `tools/call`) | ❌ |
+| qwen-code | ✅ | ✅ | ❌ (gemini-cli fork) | ❌ (+ no key) |
+| **aider 0.86.2** | ✅ | ❌ (no MCP in `--help`) | n/a | ❌ |
+| little-coder | ✅ | ❌ (no daemon MCP cfg) | n/a | ❌ |
+| claude-code | ❌ heavy (but sub) | ✅ | ✅ | ✅ (paid sub) |
+| copilot | ~ok | ✅ (HTTP, fixed) | ✅ | needs fine-grained PAT |
+
+**Conclusion (exhaustively tested, not opinion):** there is no off-the-shelf agent that
+is simultaneously lean-enough for free TPM, MCP-capable, AND emits tool calls. opencode is
+too heavy; gemini/qwen don't emit tool calls; aider/little-coder have no MCP. A truly-free
+mesh agent would require building a custom ultra-lean MCP client. The working agents are
+claude (sub) and copilot (one fine-grained PAT away).
+
 ## Executed verdict — every pair walked, ✅/❌ with exact output
 
 | Pair (agent → provider) | Verdict | Exact evidence |
