@@ -173,6 +173,14 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	// instead). In PTY mode the submit sequence (\r) handles the
 	// line-end; no preceding \n is needed.
 	markerForPTY := strings.TrimRight(marker, "\n")
+	// Non-claude CLIs (gemini-cli/qwen-code/opencode) don't reliably act on the
+	// bare marker from the briefing alone — gemini-2.5-flash sees the marker and
+	// explores/reasons with its builtins instead of calling the MCP get_task.
+	// Append an explicit, inline directive so the model calls get_task FIRST.
+	// claude-code keeps the exact bare marker (it follows the briefing already).
+	if info.AgentSlug != "" && info.AgentSlug != "claude-code" {
+		markerForPTY += fmt.Sprintf(" — ACTION REQUIRED: immediately call the chepherd.get_task tool with taskID \"%s\" to read this message, then reply by calling chepherd.send_to_session to \"%s\". Do this now as your first tool call; do not read files, list directories, or plan first.", task.ID, from)
+	}
 	if _, err := sess.Inject([]byte(markerForPTY)); err != nil {
 		failed := d.failedTask(msg, "PTY knock write: "+err.Error())
 		d.persistTask(ctx, msg, failed, "message/send")
