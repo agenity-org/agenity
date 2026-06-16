@@ -43,6 +43,16 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   is unwalked. **To close:** let a real claude agent cross its refresh threshold, then drive a
   successful tool call AFTER its original `expiresAt`. Holding per [[feedback_token_expiry_evades_fixed_window_tests]]
   + [[feedback_walk_all_ops_surfaces_not_just_happy_path]].
+- **Partial real-agent evidence + scheduled close (2026-06-17):** on the REAL long-lived agent
+  tech-lead (up 5 h), the #744 spawn-blank is confirmed applied — container `.credentials.json` has
+  `refreshToken=""` (blanked) + a valid accessToken, and tech-lead is alive + responsive (no premature
+  401-death). Its boot clone had a long TTL (token expires in ~106 min), so the refresher hasn't
+  needed to fire yet (`[chepherd-cred-refresh] tech-lead` count = 0 — expected, not a defect). **The
+  natural-expiry survival walk is scheduled** (one-shot 07:49 local 2026-06-17, ~14 min past tech-lead's
+  expiry): it verifies (a) the refresher fires for the real agent, (b) the token refreshes (expiry jumps
+  up, refreshToken still blanked), (c) tech-lead makes a SUCCESSFUL tool call AFTER its original expiry —
+  i.e. claude-code re-read the daemon-refreshed credential. If all pass, the reviewer's last leg closes
+  (CONFIRMED-WITH-CAVEATS → CONFIRMED) and #744 moves status/uat → status/completed.
 
 ### Pair 2 — claude ↔ copilot (GitHub Copilot CLI 1.0.63) — ⚠️ chepherd-side DONE, token-permission blocked
 - **Token injection: FIXED ✅** — added github-pat to vault; `GITHUB_TOKEN: SET` in container.
