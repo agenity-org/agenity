@@ -59,7 +59,11 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   `GITHUB_TOKEN`: `Error: Authentication failed (Request ID: 9D34:42221:187A4D3:19BF04D:6A3194E0)`.
   The CLI's own remediation: *"If using a Fine-Grained PAT, ensure it has the 'Copilot Requests'
   permission enabled."* (My earlier `GET /copilot_internal/v2/token → 403 "Resource not accessible"`
-  agreed but was a reconstruction; this is the real CLI path.) Operator edits the token at
+  agreed but was a reconstruction; this is the real CLI path.) **Re-confirmed reproducible
+  2026-06-16T19:57:30Z** — fresh run, new `Request ID D5C2:4F6E4:14CDF7:166F71:6A31AAAD`, identical
+  `Authentication failed`. PAT vaulted (`github-pat`→`GITHUB_TOKEN`, len 93, matches the supplied
+  `github_pat_11ATQXOCQ0…`) + injected, all verified. Live auth HAS been run (3×, consistent); it
+  cannot succeed until the permission is added. Operator edits the token at
   https://github.com/settings/personal-access-tokens → add **Copilot Requests = Read** → re-run.
   Not a chepherd bug.
 - **Verdict (answers "rate-limit vs misconfiguration"): token-permission MISCONFIGURATION, NOT a
