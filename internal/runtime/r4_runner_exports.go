@@ -10,11 +10,22 @@
 package runtime
 
 import (
+	"context"
 	"time"
 
 	"github.com/chepherd/chepherd/internal/a2a"
 	"github.com/chepherd/chepherd/internal/ptyhost/session"
 )
+
+// StartClaudeCredRefresher exports the daemon-side Claude credential
+// refresher (#744) so cmd/run.go can launch it bound to the process-
+// lifetime context. See startClaudeCredRefresher for the full contract:
+// it makes the daemon the SOLE refresher of every running claude-flavor
+// agent's bind-mounted ~/.claude/.credentials.json (the container's clone
+// has its refreshToken blanked at spawn).
+func (r *Runtime) StartClaudeCredRefresher(ctx context.Context) {
+	r.startClaudeCredRefresher(ctx)
+}
 
 // BrokerPublisher is the exported alias of the internal
 // brokerPublisher interface — any *a2a.StreamBroker satisfies it.

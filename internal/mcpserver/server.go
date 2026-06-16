@@ -254,6 +254,21 @@ func (s *Server) dispatch(req *rpcReq) rpcResp {
 	if strings.HasPrefix(req.Method, "notifications/") {
 		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}
 	}
+	// #744 follow-up — gemini-cli (unlike claude-code) probes the full MCP
+	// discovery surface after tools/list: prompts/list, resources/list, and
+	// resources/templates/list. chepherd is a tools-only server, so the old
+	// -32601 fall-through on these made gemini flag "MCP issues detected" even
+	// though initialize + tools/list succeeded. Answer with empty collections
+	// (a valid, spec-compliant "this server has none") so gemini sees a clean
+	// server. Operator-observed live on a gemini-cli agent stuck after a knock.
+	switch req.Method {
+	case "prompts/list":
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"prompts": []any{}}}
+	case "resources/list":
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"resources": []any{}}}
+	case "resources/templates/list":
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"resourceTemplates": []any{}}}
+	}
 	fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: %s → -32601 method not found\n", caller, req.Method)
 	return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: -32601, Message: "method not found: " + req.Method}}
 }

@@ -306,6 +306,27 @@ type Runtime struct {
 	// would add complexity for zero observable benefit.
 	claudeRefreshMu sync.Mutex
 
+	// #744 — the daemon is the SOLE refresher of every running claude-flavor
+	// agent's bind-mounted ~/.claude/.credentials.json. credRefreshInterval
+	// is how often startClaudeCredRefresher scans; credRefreshThreshold is
+	// how close to expiry a credential must be before the daemon re-resolves
+	// + rewrites it (with the refreshToken blanked). Production defaults are
+	// set in NewWithStore; same-package tests overwrite them directly for
+	// fast, deterministic ticks.
+	credRefreshInterval  time.Duration
+	credRefreshThreshold time.Duration
+
+	// credPusher writes the given credentials.json bytes into the named agent's
+	// running container at ~/.claude/.credentials.json (UID-translated via the
+	// container runtime). The daemon runs as host UID 1000 but the bind-mounted
+	// host file is chowned to the container's remapped UID (100999) by the `:U`
+	// mount option, so a host-side os.WriteFile gets EACCES every tick and the
+	// refresher silently never refreshes anything. Routing the write through
+	// `podman cp` (which translates UIDs) is the only path that lands. Default
+	// is r.pushCredToContainer (set in NewWithStore); overridable in tests so
+	// the unit test doesn't require a live podman. #744.
+	credPusher func(agentName, containerName, payload string) error
+
 	// extraAgentEnv is appended to every agent's spawn env. Used to
 	// inject the operator's MCP bearer token (CHEPHERD_TOKEN) so the
 	// agent's bridge subprocess can authenticate (#139).
@@ -933,7 +954,15 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		sessionToAgent:   make(map[string]uuid.UUID),
 		instanceUUID:     instUUID,
 		peers:            NewPeerRegistry(),
+		// #744 — daemon cred-refresher cadence. Production defaults; tests
+		// overwrite directly (same package) for fast ticks.
+		credRefreshInterval:  5 * time.Minute,
+		credRefreshThreshold: 15 * time.Minute,
 	}
+	// #744 — default the container-write seam to the real podman-cp impl.
+	// Tests inject a fake credPusher to capture (containerName, payload)
+	// without requiring a live container runtime.
+	r.credPusher = r.pushCredToContainer
 	// #216 closes the Spawn ↔ SessionRepository seam left open by
 	// PR #211 (runtime migration) + PR #213 (daemon retire). With a
 	// store wired, Spawn writes the initial session row so shepherd's
@@ -2903,11 +2932,18 @@ func opencodeModelFromEnv(spec SpawnSpec) string {
 	if m := lookup("OPENCODE_MODEL"); m != "" {
 		return m
 	}
+	// #744 follow-up — prefer Cerebras over Groq. opencode emits ~40k-token
+	// requests (system prompt + tools + briefing + file context); Groq's free
+	// tier caps at 12k TPM and rejects them with 413, so a Groq-default opencode
+	// agent never works (operator-observed). Cerebras's free tier has the
+	// throughput headroom. cerebras/gpt-oss-120b is a verified-available model
+	// id (the old cerebras/llama-3.3-70b 404s — Cerebras serves gpt-oss-120b /
+	// zai-glm-4.7, not llama-3.3-70b).
+	if lookup("CEREBRAS_API_KEY") != "" {
+		return "cerebras/gpt-oss-120b"
+	}
 	if lookup("GROQ_API_KEY") != "" {
 		return "groq/llama-3.3-70b-versatile"
-	}
-	if lookup("CEREBRAS_API_KEY") != "" {
-		return "cerebras/llama-3.3-70b"
 	}
 	return ""
 }
@@ -3163,11 +3199,21 @@ func (r *Runtime) materializeClaudeSecrets(spec SpawnSpec, dir string, fs agentO
 			}
 		}
 		r.claudeRefreshMu.Unlock()
-		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
+		// #744 — blank the refreshToken in the CONTAINER copy only. The
+		// vault UpdateValue above kept the UN-blanked refreshed payload (the
+		// vault is the master store and DOES need the refreshToken so the
+		// daemon can keep refreshing). But the container must NEVER hold a
+		// usable refreshToken: Anthropic rotates the refresh token on use, so
+		// a container that self-refreshes would invalidate the operator's own
+		// host claude-code (~1hr after spawn → HTTP 401 → "/login"). The
+		// daemon's background refresher (startClaudeCredRefresher) becomes the
+		// SOLE refresher. Blank AFTER the vault write, just before WriteFile.
+		containerPayload := blankClaudeRefreshToken(payload)
+		if err := os.WriteFile(dst, []byte(containerPayload), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: WRITE FAILED to %s: %v\n", spec.Name, dst, err)
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: wrote %d-byte credentials.json to %s\n", spec.Name, len(payload), dst)
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: wrote %d-byte credentials.json to %s (refreshToken blanked, #744)\n", spec.Name, len(containerPayload), dst)
 		// Also write the onboarding stub claude-code v2.1.150 requires
 		// in ~/.claude.json. Without hasCompletedOnboarding: true +
 		// userID + oauthAccount, claude-code re-runs the welcome /
@@ -3177,6 +3223,210 @@ func (r *Runtime) materializeClaudeSecrets(spec SpawnSpec, dir string, fs agentO
 		if onboarding != "" {
 			_ = os.WriteFile(filepath.Join(dir, "claude-onboarding"), []byte(onboarding), 0o644)
 		}
+	}
+	return nil
+}
+
+// resolveFreshestClaudeCred resolves the freshest master Claude credential
+// using the SAME source-priority chain as materializeClaudeSecrets's resolve
+// phase (#369/#374): a pinned vault token-id (if any), then the most-recently-
+// updated claude-oauth vault entry, then the host's ~/.claude/.credentials.json
+// — picking whichever is FRESHER by expiresAt when comparing vault-vs-host.
+//
+// It returns the payload, a human-readable source label, the vault id the
+// payload came from (empty if it came from the host or no vault hit), and a
+// flag indicating the host-fallback path won (the #374 host-pin signal so the
+// caller does NOT re-read the vault and clobber the fresh host bytes).
+//
+// This is read-only: it does NOT refresh or write anything. The daemon
+// refresher (#744) and a potential future spawn refactor both layer the
+// claudeRefreshMu-guarded refresh + vault write-back on top of this.
+func (r *Runtime) resolveFreshestClaudeCred(tokenID string, fs agentOAuthCredsSpec) (payload, src, vaultID string, pickedFromHost bool) {
+	if r.vault != nil {
+		if tokenID != "" && tokenID != "__none__" {
+			if v, err := r.vault.GetValue(tokenID); err == nil {
+				payload = v
+				vaultID = tokenID
+				src = "vault:by-token-id:" + tokenID
+			}
+		}
+		if payload == "" {
+			creds := r.vault.ListByProvider(fs.oauthVaultProvider)
+			if len(creds) > 0 {
+				latest := creds[len(creds)-1]
+				if v, err := r.vault.GetValue(latest.ID); err == nil {
+					payload = v
+					vaultID = latest.ID
+					src = "vault:fallback-most-recent-" + fs.oauthVaultProvider + ":" + latest.ID
+				}
+			}
+		}
+	}
+	// #369 P0 — prefer the host file when it is fresher than the vault snapshot.
+	if hostSrc := hostOAuthCredsPath(fs); hostSrc != "" {
+		if b, err := os.ReadFile(hostSrc); err == nil {
+			hostPayload := string(b)
+			if claudeCredsExpiresAt(hostPayload) > claudeCredsExpiresAt(payload) {
+				payload = hostPayload
+				src = "host-fallback:" + hostSrc
+				vaultID = "" // host bytes are not a vault entry
+				pickedFromHost = true
+			}
+		}
+	}
+	return payload, src, vaultID, pickedFromHost
+}
+
+// startClaudeCredRefresher runs until ctx is cancelled. Every
+// r.credRefreshInterval it scans running claude-flavor agents; for each whose
+// bind-mounted ~/.claude/.credentials.json expiresAt is within
+// r.credRefreshThreshold of now, it re-resolves the freshest Claude
+// credential (same host-vs-vault #369 priority + refreshClaudeOAuthIfNeeded
+// under claudeRefreshMu as spawn), blanks the refreshToken, and overwrites the
+// agent's credential file. This makes the daemon the SOLE refresher (#744).
+func (r *Runtime) startClaudeCredRefresher(ctx context.Context) {
+	interval := r.credRefreshInterval
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.refreshClaudeCredsOnce()
+		}
+	}
+}
+
+// refreshClaudeCredsOnce is one scan-and-refresh pass over the running
+// claude-flavor agents. Factored out of the loop so tests can drive a single
+// deterministic tick without racing a ticker. Refs #744.
+func (r *Runtime) refreshClaudeCredsOnce() {
+	threshold := r.credRefreshThreshold
+	if threshold <= 0 {
+		threshold = 15 * time.Minute
+	}
+
+	// Snapshot the running agents' names+slugs under the lock; do the
+	// file/network work outside it.
+	type agentRef struct {
+		name string
+		slug string
+	}
+	r.mu.Lock()
+	refs := make([]agentRef, 0, len(r.info))
+	for _, info := range r.info {
+		refs = append(refs, agentRef{name: info.Name, slug: info.AgentSlug})
+	}
+	r.mu.Unlock()
+
+	fs := oauthCredsSpecFor("claude-code")
+	if fs == nil {
+		return // no claude-code OAuth row (should never happen)
+	}
+
+	nowMs := time.Now().UnixMilli()
+	for _, ref := range refs {
+		// claude-flavor = AgentSlug "claude-code" OR empty (empty defaults
+		// to claude-code, same as materializeAgentSecrets).
+		if ref.slug != "" && ref.slug != "claude-code" {
+			continue
+		}
+		credPath := filepath.Join(r.stateDir, "agents", ref.name, "home", ".claude", ".credentials.json")
+		b, err := os.ReadFile(credPath)
+		if err != nil {
+			continue // file missing (agent not booted yet / non-claude) — skip
+		}
+		exp := claudeCredsExpiresAt(string(b))
+		if exp > nowMs+threshold.Milliseconds() {
+			continue // still comfortably fresh — nothing to do
+		}
+
+		// Re-resolve the freshest master credential (no pinned token-id at
+		// the session level; resolveFreshestClaudeCred falls through to the
+		// most-recent claude-oauth vault entry vs. the host file).
+		payload, _, vaultID, pickedFromHost := r.resolveFreshestClaudeCred("", *fs)
+		if payload == "" {
+			continue // no master credential available — leave the file as-is
+		}
+
+		// Refresh under claudeRefreshMu (same serialization as spawn, #264)
+		// and persist the UN-blanked refreshed pair back to the vault when
+		// the source was a vault entry — never when the host was picked
+		// (#374: re-reading/overwriting the host pick would regress).
+		r.claudeRefreshMu.Lock()
+		if refreshed, ok := refreshClaudeOAuthIfNeeded(payload); ok {
+			payload = refreshed
+			if !pickedFromHost && r.vault != nil && vaultID != "" {
+				_ = r.vault.UpdateValue(vaultID, refreshed)
+			}
+		}
+		r.claudeRefreshMu.Unlock()
+
+		// Blank the refreshToken in the container copy (#744) and push it
+		// INTO the running container via the container runtime. We cannot
+		// os.WriteFile the bind-mounted host file: the `:U` mount option
+		// chowns it to the container's remapped UID (100999) but the daemon
+		// runs as host UID 1000, so a host write gets EACCES every tick. The
+		// credPusher (podman cp + chmod, UID-translated) is the only path
+		// that lands. #744.
+		out := blankClaudeRefreshToken(payload)
+		containerName := containerNamePrefix(r.instanceUUID) + ref.name
+		if err := r.credPusher(ref.name, containerName, out); err != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-cred-refresh] %s: push failed: %v\n", ref.name, err)
+			continue
+		}
+		newExp := claudeCredsExpiresAt(out)
+		minsLeft := (newExp - time.Now().UnixMilli()) / 60000
+		fmt.Fprintf(os.Stderr, "[chepherd-cred-refresh] %s: refreshed accessToken (exp in %dm), refreshToken blanked\n", ref.name, minsLeft)
+	}
+}
+
+// pushCredToContainer is the real (production) credPusher: it writes the
+// given credentials.json bytes into the named agent's RUNNING container at
+// ~/.claude/.credentials.json via `podman cp` so the container runtime
+// translates UIDs (the daemon runs as host UID 1000; the bind-mounted file
+// is owned by the container's remapped UID 100999 thanks to the `:U` mount,
+// so a direct host write fails with EACCES). Sequence:
+//
+//  1. write the payload to a host temp file the daemon CAN write (0600),
+//  2. `podman cp <tmp> <container>:/home/agent/.claude/.credentials.json`,
+//  3. `podman exec <container> chmod 600 <dest>` (claude-code requires 600),
+//  4. remove the temp file.
+//
+// Reuses podmanArgs() so rootless --remote/--url flags stay consistent with
+// the rest of the runtime's container exec convention. #744.
+func (r *Runtime) pushCredToContainer(agentName, containerName, payload string) error {
+	const dest = "/home/agent/.claude/.credentials.json"
+
+	tmp, err := os.CreateTemp("", "chepherd-cred-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.WriteString(payload); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+
+	base := podmanArgs()
+	cpArgs := append(append([]string{}, base[1:]...), "cp", tmpPath, containerName+":"+dest)
+	if out, err := exec.Command(base[0], cpArgs...).CombinedOutput(); err != nil {
+		return fmt.Errorf("podman cp: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	execArgs := append(append([]string{}, base[1:]...), "exec", containerName, "chmod", "600", dest)
+	if out, err := exec.Command(base[0], execArgs...).CombinedOutput(); err != nil {
+		return fmt.Errorf("podman exec chmod: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -3718,6 +3968,57 @@ const claudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 
 var claudeOAuthTokenEndpointOverride string
+
+// blankClaudeRefreshToken returns the credentials.json payload with
+// claudeAiOauth.refreshToken set to "" while preserving EVERY other field
+// byte-for-byte-semantically (accessToken, expiresAt, scopes,
+// subscriptionType, rateLimitTier, and ANY unknown future fields). The
+// container must never hold a usable refreshToken: Anthropic rotates refresh
+// tokens on use, so a container that self-refreshes would invalidate the
+// operator's own host claude-code (issue #744). Parse into map[string]any —
+// NOT a fixed struct — so unknown fields survive (a fixed struct silently
+// drops rateLimitTier etc; see the json.Marshal-over-handcoded-maps lesson).
+// On any parse error return the input unchanged (fail-safe: better a working
+// token than a corrupted file).
+func blankClaudeRefreshToken(payload string) string {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
+		return payload // fail-safe: leave the bytes untouched
+	}
+	switch {
+	case isMap(doc["claudeAiOauth"]):
+		// Wrapped shape (the canonical credentials.json claude-code writes):
+		// {"claudeAiOauth":{"accessToken":...,"refreshToken":...,...}}
+		inner := doc["claudeAiOauth"].(map[string]any)
+		inner["refreshToken"] = ""
+	case hasKey(doc, "refreshToken"):
+		// Unwrapped shape: refreshToken sits at the top level.
+		doc["refreshToken"] = ""
+	default:
+		// Unexpected shape — neither a claudeAiOauth map nor a top-level
+		// refreshToken. Leave it unchanged (fail-safe).
+		return payload
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return payload // fail-safe
+	}
+	return string(out)
+}
+
+// isMap reports whether v is a JSON object (map[string]any). Helper for
+// blankClaudeRefreshToken's shape dispatch.
+func isMap(v any) bool {
+	_, ok := v.(map[string]any)
+	return ok
+}
+
+// hasKey reports whether the JSON object m contains key k. Helper for
+// blankClaudeRefreshToken's shape dispatch.
+func hasKey(m map[string]any, k string) bool {
+	_, ok := m[k]
+	return ok
+}
 
 // claudeCredsExpiresAt extracts the expiresAt epoch-ms from a
 // credentials.json payload. Returns 0 on any parse failure (caller

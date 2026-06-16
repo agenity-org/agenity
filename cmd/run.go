@@ -350,6 +350,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "shepherd Run: %v\n", err)
 		}
 	}()
+	// #744 — daemon is the SOLE refresher of every running claude-flavor
+	// agent's bind-mounted ~/.claude/.credentials.json. The container's clone
+	// has its refreshToken blanked at spawn (it must never self-refresh, or it
+	// would rotate the operator's own host token away); this loop keeps the
+	// accessToken fresh on the daemon's behalf. Bound to the process-lifetime
+	// context so ctrl-C / SIGTERM stops it cleanly.
+	go rt.StartClaudeCredRefresher(shepCtx)
 	fmt.Printf("✓ MCP server (HTTP/WS) listening on http://%s/mcp/ws\n", mcpListen)
 
 	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),

@@ -18,6 +18,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,22 +77,37 @@ func TestP0_374_HostPick_NotClobbered_ByVaultReread(t *testing.T) {
 	}
 	gotStr := string(got)
 
-	// Primary assertion: written bytes MUST equal the fresh host
-	// payload exactly. Pre-#374, gotStr == stalePayload (vault
-	// clobber) → test fails loudly.
-	if gotStr != freshPayload {
-		t.Fatalf("materialised credentials != fresh host payload\n\nwrote:\n%s\n\nwant (host bytes verbatim):\n%s\n\nvault-stale (forbidden):\n%s",
-			gotStr, freshPayload, stalePayload)
+	// #744 — the CONTAINER copy now has its refreshToken BLANKED before
+	// WriteFile (the container must never self-refresh; the daemon is the
+	// sole refresher). So the written bytes are the fresh HOST payload with
+	// refreshToken=="", NOT a byte-for-byte copy. We therefore assert the
+	// load-bearing facts (fresh host accessToken present, no stale vault
+	// marker, refreshToken blanked) by parsing rather than exact-string
+	// equality. The #374 host-pin contract is unchanged: the fresh host
+	// accessToken must flow through and the stale vault payload must NOT.
+	var got374 struct {
+		ClaudeAiOauth struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+		} `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal(got, &got374); err != nil {
+		t.Fatalf("materialised credentials not parseable JSON: %v\n%s", err, gotStr)
+	}
+	if got374.ClaudeAiOauth.AccessToken != "AT-FRESH-HOST" {
+		t.Fatalf("materialised accessToken = %q, want AT-FRESH-HOST — host bytes did not flow through (#374 P0)\nwrote:\n%s\nvault-stale (forbidden):\n%s",
+			got374.ClaudeAiOauth.AccessToken, gotStr, stalePayload)
+	}
+	// #744 — container copy MUST carry a blanked refreshToken.
+	if got374.ClaudeAiOauth.RefreshToken != "" {
+		t.Errorf("materialised refreshToken = %q, want \"\" — container copy must blank the refreshToken (#744)", got374.ClaudeAiOauth.RefreshToken)
 	}
 
 	// Secondary: must NOT contain the stale vault's accessToken
-	// marker. Cheaper failure signal if the equality check above
-	// races a JSON whitespace difference in the future.
+	// marker. Cheaper failure signal if the parse above races a JSON
+	// shape change in the future.
 	if containsSubstring(gotStr, "AT-STALE-VAULT") {
 		t.Errorf("materialised credentials contains the stale vault accessToken marker — vault clobbered the host pick (#374 P0)")
-	}
-	if !containsSubstring(gotStr, "AT-FRESH-HOST") {
-		t.Errorf("materialised credentials missing the fresh host accessToken marker — host bytes did not flow through to WriteFile")
 	}
 }
 
