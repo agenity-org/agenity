@@ -2830,6 +2830,19 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		cfg = map[string]any{
 			"$schema": "https://opencode.ai/config.json",
 			"mcp":     map[string]any{"chepherd": chepEntry},
+			// #743 — free-tier slim: Groq free = 12k tokens/min; opencode's full
+			// chepherd MCP tool schemas + briefing exceed it (413 "request too
+			// large"). Disable all chepherd tools then re-enable only the
+			// essential peer/canon ones so requests fit the free cap.
+			"tools": map[string]any{
+				"chepherd*":         false,
+				"*send_to_session*": true,
+				"*get_task*":        true,
+				"*list_sessions*":   true,
+				"*list_peers*":      true,
+				"*read_canon*":      true,
+				"*alert_human*":     true,
+			},
 		}
 		// COORDINATION (#741): the daemon writes the COMPLETE
 		// opencode.json (schema + model + mcp) so it doesn't clobber —
