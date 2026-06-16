@@ -247,6 +247,13 @@ func (s *Server) dispatch(req *rpcReq) rpcResp {
 		}
 		return resp
 	}
+	// #743 — notifications/* are JSON-RPC notifications; the MCP spec expects
+	// NO error response. The old -32601 fall-through made gemini-cli treat the
+	// server as broken ("MCP issues detected") and re-handshake in a loop
+	// (claude tolerated it; gemini does not). Ack with a non-error empty result.
+	if strings.HasPrefix(req.Method, "notifications/") {
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}
+	}
 	fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: %s → -32601 method not found\n", caller, req.Method)
 	return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: -32601, Message: "method not found: " + req.Method}}
 }
