@@ -140,8 +140,8 @@ with copilot one fine-grained PAT away.
 | Pair (agent → provider) | Verdict | Exact evidence |
 |---|---|---|
 | claude-code → Anthropic sub | ✅ PASS | daemon log: `get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK` |
-| copilot → GitHub | ❌ | `~/.copilot/logs`: `Classic PATs are not supported. Please use fine-grained PATs` (MCP transport itself FIXED — HTTP, JSON error gone) |
-| gemini-cli → Gemini free | ❌ | daemon log: `initialize → OK`, `tools/list → OK` but **zero `tools/call`** ever; logs.json shows knock received, no assistant tool turn |
+| copilot → GitHub | ⏳ one perm away | MCP transport fixed (HTTP); classic-PAT error fixed (fine-grained PAT `github_pat_…` wired into vault). Remaining: token needs the **"Copilot Requests"** account permission — `PAT does not have "Copilot Requests" permission` (operator edits the token). |
+| gemini-cli → Gemini free | ❌ | **3 fixes tried + committed** (prompts/resources `-32601`, `trust:true`, inline directive marker). gemini RECEIVED the explicit directive (`ACTION REQUIRED: call chepherd.get_task…`) and STILL never calls `get_task` — gemini-cli/2.5-flash tool-invocation wall, not a chepherd config. Working gemini = **lean-coder + gemini** (row "Gemini × lean-coder"). |
 | opencode → Groq free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Groq 6k TPM vs ~30k request) |
 | opencode → Cerebras free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Cerebras 30k TPM / 5 RPM vs multi-request turn) |
 | aider → Cerebras free | ❌ | container `Exited (127)`: `/usr/local/bin/aider: No such file or directory` (not in image) |
