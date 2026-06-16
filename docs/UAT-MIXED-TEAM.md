@@ -51,13 +51,20 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 
 ### Pair 3 — claude ↔ gemini (gemini-cli) — ⚠️ FAIL (free-tier capacity/quota, NOT tool calls)
 - MCP: `initialize → OK`, `tools/list → OK (27 tools)`, no `-32601` (prompts/resources fix shipped).
-- **CORRECTION (2026-06-17): gemini-cli DOES emit tool calls.** Earlier "never emits a
-  tool call" was wrong. Live proof: a one-shot `gemini --yolo -p "..."` ran its builtin
-  `ReadFolder`/`GrepTool` tools, so tool invocation works. The reason it never completed
-  an A2A reply is the **free-tier LLM call itself failing**, captured live:
-  1. requests `gemini-2.5-flash` → **503 "This model is currently experiencing high demand"** (free-tier capacity)
-  2. gemini-cli **falls back to `gemini-3.5-flash`** (a hardcoded fallback chain in the bundle — no settings toggle)
+- **RETRACTION: the earlier "gemini-cli never emits a tool call / tool-invocation wall" claim
+  is withdrawn — it was asserted without proof.** gemini-cli is an agentic tool-calling CLI by
+  design (ReadFolder/GrepTool/etc. are its builtins). The real reason it never completes an A2A
+  reply on the FREE tier is the **LLM call failing before any turn completes** — so NO tool call
+  (builtin or chepherd MCP) is ever reached. That is a free-tier-capacity fact, NOT a
+  tool-capability claim either way. Captured live across two days:
+  1. `gemini-2.5-flash` → **503 "This model is currently experiencing high demand"** — 2026-06-16 once, **2026-06-17 three retries all 503** (free-tier capacity)
+  2. gemini-cli **falls back to `gemini-3.5-flash`** (hardcoded fallback chain in the bundle — no settings toggle)
   3. `gemini-3.5-flash` → **429 `Quota exceeded ... limit: 20, model: gemini-3.5-flash`** (free-tier = 20 req/day, exhausted)
+- **Caveat (no misattribution):** the only `[chepherd-mcp] qa-gemini: tools/call` lines in the
+  daemon log (`list_memberships`, `read_canon`) are from the **lean-coder** smoke run executed
+  *as* qa-gemini — NOT from gemini-cli. gemini-cli has not completed a turn on this free tier,
+  so it has emitted zero chepherd MCP calls here. Honestly recorded as undemonstrable-on-free-tier
+  rather than claimed either way.
 - **The gemini key is fine** — pinning `gemini-2.5-flash` directly via the OpenAI-compat
   endpoint returns `billed-model: gemini-2.5-flash`, no error. So the failure is gemini-cli's
   free-tier fallback behavior + Google's 20/day cap on the fallback model, not the key,
@@ -120,8 +127,8 @@ actually emits tool calls. **No free agent hits all three:**
 | Agent | Lean for free TPM | MCP-capable | Emits tool calls | Free mesh-viable |
 |---|---|---|---|---|
 | opencode | ❌ (~15–30k×N/turn) | ✅ | ✅ | ❌ (too heavy) |
-| gemini-cli | ✅ | ✅ | ✅ (builtins proven; MCP only when the LLM call succeeds) | ❌ on **free** tier (2.5-flash 503 → 3.5-flash 20/day cap); viable on a paid key |
-| qwen-code | ✅ | ✅ | ✅ (gemini-cli fork — same engine) | ❌ (no key in vault; same free-tier ceiling) |
+| gemini-cli | ✅ | ✅ | tool-calling CLI by design; **undemonstrable on free tier** (no turn completes — 503/quota) | ❌ on **free** tier (2.5-flash 503 → 3.5-flash 20/day cap); viable on a paid key |
+| qwen-code | ✅ | ✅ | same engine as gemini-cli | ❌ (no key in vault; same free-tier ceiling) |
 | **aider 0.86.2** | ✅ | ❌ (no MCP in `--help`) | n/a | ❌ |
 | little-coder | ✅ | ❌ (no daemon MCP cfg) | n/a | ❌ |
 | claude-code | ❌ heavy (but sub) | ✅ | ✅ | ✅ (paid sub) |
