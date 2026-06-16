@@ -108,6 +108,15 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   (system prompt + 27 tools + AGENTS.md + file context); **no free tier accepts that**.
 - Root cause is structural: opencode is too heavy for free TPM tiers. The correct
   tool for a free TPM tier is a lean agent (aider/little-coder) or a paid tier.
+- **Re-walked LIVE on the current daemon 2026-06-16** (fresh evidence, throwaway `oc-walk`):
+  `[chepherd-mcp] oc-walk: initialize → OK`, `tools/list → OK (27 tools)` (MCP-capable, VERIFIED);
+  knock delivered (`operator → oc-walk: delivered via Deliverer.Deliver`); opencode.log
+  `level=ERROR ... AI_APICallError: Tokens per minute limit exceeded` on its FIRST request
+  (build session, `model.providerID=cerebras model.id=gpt-oss-120b`). **No `oc-walk: tools/call`
+  was ever logged** — opencode TPM-fails BEFORE emitting any tool call, so (exactly like gemini-cli)
+  its chepherd tool-call emission is **undemonstrable on the free tier** — NOT a tool-call defect
+  and NOT a chepherd bug. opencode IS a functional MCP agent; it is simply too heavy for free TPM.
+  Earlier "opencode emits tool calls ✅" was an unverified assumption, now corrected.
 
 ## Verdict (2026-06-16)
 
@@ -154,7 +163,7 @@ actually emits tool calls. **No free agent hits all three:**
 
 | Agent | Lean for free TPM | MCP-capable | Emits tool calls | Free mesh-viable |
 |---|---|---|---|---|
-| opencode | ❌ (~15–30k×N/turn) | ✅ | ✅ | ❌ (too heavy) |
+| opencode | ❌ (~15–30k×N/turn) | ✅ (initialize+tools/list OK, verified live) | undemonstrable on free tier (TPM-fails on the FIRST request, before any turn completes) | ❌ (too heavy for free TPM) |
 | gemini-cli | ✅ | ✅ | tool-calling CLI by design; **conclusively free-tier-blocked** (3 model pins tried, all fall back to 3.5-flash 20/day-exhausted → no turn completes) | ❌ on **free** tier; viable on a paid key |
 | qwen-code | ✅ | ✅ | same engine as gemini-cli | ❌ (no key in vault; same free-tier ceiling) |
 | **aider 0.86.2** | ✅ | ❌ (no MCP in `--help`) | n/a | ❌ |
