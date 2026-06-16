@@ -31,6 +31,18 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   and the host `expiresAt` jumped back to 239.8 min (fresh master TTL). Full cycle observed:
   detect `exp <= now+15min` → re-resolve master from vault → blank refreshToken → `podman cp`
   push → log marker. Non-disruptive (throwaway agent; tech-lead/qa untouched, no daemon bounce).
+- **Independent-reviewer caveat (2026-06-16, why #744 stays in status/uat, NOT completed):** the
+  walk proves the **daemon-side** (detect→push) and the byte-level unit tests pass, but it does
+  NOT re-prove the **agent-side** this session — that claude-code inside the container actually
+  *re-reads* the `podman cp`-swapped `.credentials.json` and makes a successful API call **past
+  its original expiry** (a `podman cp` overwrite doesn't guarantee an in-process reload). The
+  refresher has only fired against the throwaway's *synthetic* now+120s expiry, never a real
+  long-lived agent crossing its threshold. Prior session showed the agent-pickup leg (a manual
+  fresh-cred push revived a 401'd tech-lead → it processed a knock), which chains with this
+  session's push proof — but the end-to-end "agent survives past expiry" leg on the current daemon
+  is unwalked. **To close:** let a real claude agent cross its refresh threshold, then drive a
+  successful tool call AFTER its original `expiresAt`. Holding per [[feedback_token_expiry_evades_fixed_window_tests]]
+  + [[feedback_walk_all_ops_surfaces_not_just_happy_path]].
 
 ### Pair 2 — claude ↔ copilot (GitHub Copilot CLI 1.0.63) — ⚠️ chepherd-side DONE, token-permission blocked
 - **Token injection: FIXED ✅** — added github-pat to vault; `GITHUB_TOKEN: SET` in container.
