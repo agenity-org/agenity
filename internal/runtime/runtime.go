@@ -2849,6 +2849,18 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 			"mcpServers": map[string]any{"chepherd": entry},
 			"security":   security,
 		}
+		// gemini-cli defaults to gemini-3.5-flash, whose FREE tier is only
+		// ~20 requests/day. Observed live 2026-06-17: an agent connects, calls
+		// chepherd.get_task → OK, then dies mid-task with "Usage limit reached
+		// for gemini-3.5-flash" before it can send_to_session — i.e. it burns
+		// its last daily slot on the get_task turn. Pin the primary model to
+		// gemini-2.5-flash (far larger free daily quota) so agents don't default
+		// to the thinnest model; the CLI only falls back to 3.5-flash on a 2.5
+		// 503. settings.model.name is the gemini-cli config key (bundle reads
+		// settings.model?.name). qwen-code runs its own (qwen) models — gemini only.
+		if flavor == "gemini-cli" {
+			cfg["model"] = map[string]any{"name": "gemini-2.5-flash"}
+		}
 	case "copilot":
 		rel = filepath.Join(".copilot", "mcp-config.json")
 		entry := map[string]any{"type": "local", "command": chepBin, "args": stdioArgs, "env": stdioEnv, "tools": []string{"*"}}
