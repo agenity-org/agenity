@@ -81,6 +81,38 @@ def main():
     check("unknown-prefix keeps default base", m.LLM_BASE, "https://api.cerebras.ai/v1")
     check("unknown-prefix keeps full model", m.LLM_MODEL, "openai/gpt-4")
 
+    # KNOCK_RE — parse the daemon's knock marker into (taskID, from)
+    m = load({})
+    mt = m.KNOCK_RE.search(
+        "[chepherd-knock taskID=019ed169-1092-7170-9efc-ee681e7e9177 from=operator]")
+    check("knock taskID", mt.group(1), "019ed169-1092-7170-9efc-ee681e7e9177")
+    check("knock from", mt.group(2), "operator")
+
+    # task_text — extract the sender's text from an A2A get_task envelope
+    check("task_text from A2A envelope",
+          m.task_text({"input": {"message": {"parts": [{"text": "what is 7x8?"}]}}}),
+          "what is 7x8?")
+
+    # ask_llm — <think> stripping (qwen3), reasoning-field fallback, and bounded
+    # HISTORY (the amnesia fix). Mock _post so no network is touched.
+    m = load({})
+    m._post = lambda url, payload, headers, timeout=60: {
+        "choices": [{"message": {"content": "<think>scratchpad</think>56"}}]}
+    check("ask_llm strips <think> (qwen3)", m.ask_llm("7*8?"), "56")
+    check("ask_llm appends turn to HISTORY (amnesia fix)", len(m.HISTORY), 2)
+
+    m = load({})
+    m._post = lambda *a, **k: {
+        "choices": [{"message": {"reasoning": "answer is 7", "content": ""}}]}
+    check("ask_llm reasoning-field fallback", m.ask_llm("x"), "answer is 7")
+
+    # amnesia fix is BOUNDED — HISTORY caps at HISTORY_MAX (2 entries/turn)
+    m = load({})
+    m._post = lambda *a, **k: {"choices": [{"message": {"content": "ok"}}]}
+    for i in range(20):
+        m.ask_llm("q%d" % i)
+    check("ask_llm HISTORY bounded (<=HISTORY_MAX)", len(m.HISTORY) <= m.HISTORY_MAX, True)
+
     print("ALL PASS")
 
 
