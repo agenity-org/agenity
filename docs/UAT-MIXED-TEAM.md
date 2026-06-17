@@ -143,7 +143,7 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 | lean-coder × Groq (llama-3.3-70b) | ✅ PASS | `get_task`→reply, fits 6k TPM |
 | lean-coder × Gemini (2.5-flash) | ✅ PASS | canon-aware ("loaded team 'mixed' canon") |
 | lean-coder × Qwen (qwen3-32b/Groq) | ✅ PASS | `<think>` reasoning handled |
-| copilot × GitHub | ⏳ one perm away | live CLI auth **5×**, all `Authentication failed` (Req IDs 9D34/D5C2/B48A/**B830** — latest 2026-06-17T02:58:30Z, ~6 h after B48A, `Copilot Requests` perm still absent); **misconfiguration, NOT rate-limit** (zero 429/quota); needs operator's `Copilot Requests` perm — `79ddce5`/`f0ca068`/`a0d2f7f` |
+| copilot × GitHub | ⏳ **PARKED — awaiting operator action** | **PARKED: requires the operator to add `Copilot Requests = Read` to the fine-grained PAT — no further agent action is possible.** live CLI auth **5×**, all `Authentication failed` (Req IDs 9D34/D5C2/B48A/**B830** — latest 2026-06-17T02:58:30Z, ~6 h after B48A, `Copilot Requests` perm still absent); **misconfiguration, NOT rate-limit** (zero 429/quota). chepherd-side complete (PAT vaulted + injected + MCP HTTP); blocked solely on the operator's GitHub token permission — `79ddce5`/`f0ca068`/`a0d2f7f`/`062ecfb` |
 | gemini-cli × Gemini free | ❌ free-tier | 3 model pins → 503 on 2.5-flash + `429 limit:20/day` on 3.5-flash fallback; tool-calling CLI, viable on paid key — `b930ef4` |
 | opencode × Cerebras/Groq free | ❌ free-TPM | MCP `initialize`+`tools/list` OK (live), then `Tokens per minute limit exceeded` on 1st request; functional, too heavy for free — `bc75787` |
 | qwen-code × (no key) | ⏭ NOT RUN | no DashScope key in vault; same engine + free-tier ceiling as gemini-cli |
