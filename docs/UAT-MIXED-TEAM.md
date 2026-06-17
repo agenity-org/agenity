@@ -142,7 +142,7 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 | Agent × Provider | Verdict | Live evidence (committed) |
 |---|---|---|
 | claude-code × Anthropic sub | ✅ PASS | full round-trip (`get_task`/`alert_human`/`send_to_session` → OK); durable via #744 |
-| lean-coder × Cerebras (gpt-oss-120b) | ✅ PASS | autonomous knock + agent↔agent |
+| lean-coder × Cerebras (gpt-oss-120b) | ✅ PASS | **full round-trip re-proven live 2026-06-17T07:23Z (current daemon):** knock → `get_task → OK` → computed → reply "56" → `alert_human → OK` (delivered to operator); canon-aware (`list_memberships`+`read_canon` on boot). Plus earlier autonomous + agent↔agent. |
 | lean-coder × Groq (llama-3.3-70b) | ✅ PASS | `get_task`→reply, fits 6k TPM |
 | lean-coder × Gemini (2.5-flash) | ✅ PASS | canon-aware ("loaded team 'mixed' canon") |
 | lean-coder × Qwen (qwen3-32b/Groq) | ✅ PASS | `<think>` reasoning handled |
