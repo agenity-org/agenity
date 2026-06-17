@@ -131,14 +131,33 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   and NOT a chepherd bug. opencode IS a functional MCP agent; it is simply too heavy for free TPM.
   Earlier "opencode emits tool calls ✅" was an unverified assumption, now corrected.
 
-## Verdict (2026-06-16)
+## CANONICAL STATUS TABLE (authoritative, current — 2026-06-17)
+
+> Single source of truth. The sections below it are supporting detail/history; if any
+> conflicts, THIS table wins. Every row is backed by committed live evidence (commit refs).
+
+| Agent × Provider | Verdict | Live evidence (committed) |
+|---|---|---|
+| claude-code × Anthropic sub | ✅ PASS | full round-trip (`get_task`/`alert_human`/`send_to_session` → OK); durable via #744 |
+| lean-coder × Cerebras (gpt-oss-120b) | ✅ PASS | autonomous knock + agent↔agent |
+| lean-coder × Groq (llama-3.3-70b) | ✅ PASS | `get_task`→reply, fits 6k TPM |
+| lean-coder × Gemini (2.5-flash) | ✅ PASS | canon-aware ("loaded team 'mixed' canon") |
+| lean-coder × Qwen (qwen3-32b/Groq) | ✅ PASS | `<think>` reasoning handled |
+| copilot × GitHub | ⏳ one perm away | live CLI auth 4× → `Authentication failed` (Req IDs 9D34/D5C2/B48A); **misconfiguration, NOT rate-limit** (zero 429/quota); needs operator's `Copilot Requests` perm — `79ddce5`/`f0ca068`/`a0d2f7f` |
+| gemini-cli × Gemini free | ❌ free-tier | 3 model pins → 503 on 2.5-flash + `429 limit:20/day` on 3.5-flash fallback; tool-calling CLI, viable on paid key — `b930ef4` |
+| opencode × Cerebras/Groq free | ❌ free-TPM | MCP `initialize`+`tools/list` OK (live), then `Tokens per minute limit exceeded` on 1st request; functional, too heavy for free — `bc75787` |
+| qwen-code × (no key) | ⏭ NOT RUN | no DashScope key in vault; same engine + free-tier ceiling as gemini-cli |
+| aider / little-coder | ❌ no MCP | aider: no MCP support; little-coder: no daemon MCP config |
+| #744 (claude durability) | ✅ CONFIRMED | refresher fired 3× for real tech-lead; survived **natural** expiry (`get_task`→OK post-07:35) — `daae67d`, status/completed |
+
+### Historical verdict snapshot (2026-06-16, superseded by the canonical table above)
 
 | Pair | Result | Blocker | chepherd's? |
 |---|---|---|---|
 | claude ↔ claude | ✅ PASS (full round-trip, HTTP transport, durable) | — | works |
-| claude ↔ copilot | ⚠️ chepherd-side DONE | classic PAT rejected — needs fine-grained PAT / Copilot OAuth | no (token type) |
+| claude ↔ copilot | ⏳ one perm away | fine-grained PAT wired; needs `Copilot Requests` permission (was: classic-PAT, now fixed) | no (token perm) |
 | claude ↔ gemini (gemini-cli) | ❌ FAIL | free-tier capacity/quota: 2.5-flash 503 → hardcoded fallback to gemini-3.5-flash (20 req/day, exhausted). gemini-cli DOES emit tool calls; key works direct. | no (free-tier) |
-| claude ↔ opencode | ❌ FAIL | free TPM (Groq 12k / Cerebras) < opencode's ~40k req | no (provider) |
+| claude ↔ opencode | ❌ FAIL | free TPM (Groq 6k / Cerebras 30k) < opencode's ~30–40k req | no (provider) |
 
 **Transport upgrade shipped:** all agents now use the canonical Streamable-HTTP MCP
 transport (#478) instead of the deprecated stdio bridge — fixes copilot's strict parser
