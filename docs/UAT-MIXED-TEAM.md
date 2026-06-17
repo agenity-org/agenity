@@ -95,11 +95,14 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
   1. `gemini-2.5-flash` → **503 "This model is currently experiencing high demand"** — 2026-06-16 once, **2026-06-17 three retries all 503** (free-tier capacity)
   2. gemini-cli **falls back to `gemini-3.5-flash`** (hardcoded fallback chain in the bundle — no settings toggle)
   3. `gemini-3.5-flash` → **429 `Quota exceeded ... limit: 20, model: gemini-3.5-flash`** (free-tier = 20 req/day, exhausted)
-- **Caveat (no misattribution):** the only `[chepherd-mcp] qa-gemini: tools/call` lines in the
-  daemon log (`list_memberships`, `read_canon`) are from the **lean-coder** smoke run executed
-  *as* qa-gemini — NOT from gemini-cli. gemini-cli has not completed a turn on this free tier,
-  so it has emitted zero chepherd MCP calls here. Honestly recorded as undemonstrable-on-free-tier
-  rather than claimed either way.
+- **UPDATE 2026-06-17T04:15:39Z — gemini-cli DID emit a chepherd MCP tool call (PROVEN, supersedes "undemonstrable"):**
+  when a 20/day quota slot was free, gemini-cli completed a full turn and called
+  `[chepherd-mcp] qa-gemini: tools/call chepherd.list → OK` (a real chepherd MCP tool, not a builtin,
+  not lean-coder — fresh `initialize`+`tools/list`+call in the gemini-cli run). The very next run
+  (04:16:53Z) hit `429 limit: 20/day` again. So gemini-cli's chepherd tool-calling IS demonstrated
+  live; the free tier is just so thin (20 req/day on the 3.5-flash fallback) that successful turns are
+  rare. Earlier "undemonstrable on free tier" is retracted — it's demonstrable, just intermittent.
+  (The earlier `list_memberships`/`read_canon` calls were lean-coder; this `chepherd.list` is gemini-cli.)
 - **Conclusive (not ambiguous): tried 3 model pins, all blocked.** `--model` default, `gemini-2.5-flash`,
   and `gemini-2.0-flash` (2026-06-16/17) — every one falls back to `gemini-3.5-flash` (the bundle's
   hardcoded fallback) which returns `429 limit: 20/day` (exhausted). gemini-cli **cannot complete a
@@ -144,7 +147,7 @@ daemon's own per-agent tool-call log) + the agent's own session transcript.
 | lean-coder × Gemini (2.5-flash) | ✅ PASS | canon-aware ("loaded team 'mixed' canon") |
 | lean-coder × Qwen (qwen3-32b/Groq) | ✅ PASS | `<think>` reasoning handled |
 | copilot × GitHub | ⏳ **PARKED — awaiting operator action** | **PARKED: requires the operator to add `Copilot Requests = Read` to the fine-grained PAT — no further agent action is possible.** live CLI auth **5×**, all `Authentication failed` (Req IDs 9D34/D5C2/B48A/**B830** — latest 2026-06-17T02:58:30Z, ~6 h after B48A, `Copilot Requests` perm still absent); **misconfiguration, NOT rate-limit** (zero 429/quota). chepherd-side complete (PAT vaulted + injected + MCP HTTP); blocked solely on the operator's GitHub token permission — `79ddce5`/`f0ca068`/`a0d2f7f`/`062ecfb` |
-| gemini-cli × Gemini free | ❌ free-tier | 3 model pins → 503 on 2.5-flash + `429 limit:20/day` on 3.5-flash fallback; tool-calling CLI, viable on paid key — `b930ef4` |
+| gemini-cli × Gemini free | ⚠️ WORKS intermittently | **PROVEN live: gemini-cli emits chepherd MCP tool calls** — `tools/call chepherd.list → OK` at 2026-06-17T04:15:39Z (completed a full turn). Free tier (gemini-3.5-flash fallback, 20 req/day) is so thin that most turns 503/429 (the very next run, 04:16:53Z, hit the cap) — reliable only on a paid key, but the capability is confirmed. — `b930ef4` |
 | opencode × Cerebras/Groq free | ❌ free-TPM | MCP `initialize`+`tools/list` OK (live), then `Tokens per minute limit exceeded` on 1st request; functional, too heavy for free — `bc75787` |
 | qwen-code × (no key) | ⏭ NOT RUN | no DashScope key in vault; same engine + free-tier ceiling as gemini-cli |
 | aider / little-coder | ❌ no MCP | aider: no MCP support; little-coder: no daemon MCP config |
@@ -196,7 +199,7 @@ actually emits tool calls. **No free agent hits all three:**
 | Agent | Lean for free TPM | MCP-capable | Emits tool calls | Free mesh-viable |
 |---|---|---|---|---|
 | opencode | ❌ (~15–30k×N/turn) | ✅ (initialize+tools/list OK, verified live) | undemonstrable on free tier (TPM-fails on the FIRST request, before any turn completes) | ❌ (too heavy for free TPM) |
-| gemini-cli | ✅ | ✅ | tool-calling CLI by design; **conclusively free-tier-blocked** (3 model pins tried, all fall back to 3.5-flash 20/day-exhausted → no turn completes) | ❌ on **free** tier; viable on a paid key |
+| gemini-cli | ✅ | ✅ | ✅ **PROVEN live** — `tools/call chepherd.list → OK` 2026-06-17T04:15:39Z | ⚠️ free tier (20/day) yields only occasional turns; reliable on a paid key |
 | qwen-code | ✅ | ✅ | same engine as gemini-cli | ❌ (no key in vault; same free-tier ceiling) |
 | **aider 0.86.2** | ✅ | ❌ (no MCP in `--help`) | n/a | ❌ |
 | little-coder | ✅ | ❌ (no daemon MCP cfg) | n/a | ❌ |
@@ -239,7 +242,7 @@ with copilot one fine-grained PAT away.
 |---|---|---|
 | claude-code → Anthropic sub | ✅ PASS | daemon log: `get_task → OK`, `alert_human → OK`, `send_to_session→operator → OK` |
 | copilot → GitHub | ⏳ one perm away | MCP transport fixed (HTTP); classic-PAT error fixed (fine-grained PAT `github_pat_11A…`, len 93, wired into vault, reaches the CLI). **Definitive production-path test 2026-06-17** — ran the actual `copilot -p "..." --allow-all-tools` binary with the real `GITHUB_TOKEN`: `Error: Authentication failed (Request ID: 9D34:42221:187A4D3:19BF04D:6A3194E0)` → the CLI's own remediation names it: *"If using a Fine-Grained PAT, ensure it has the 'Copilot Requests' permission enabled."* Operator adds **Copilot Requests = Read** to the token → re-run. **Investigation verdict: token-permission MISCONFIGURATION, NOT a rate-limit — the copilot path shows zero 429/quota/TPM errors; the sole failure is the fixed PAT-scope gap.** |
-| gemini-cli → Gemini free | ❌ (free-tier, NOT tool calls) | gemini-cli **does** emit tool calls (builtins ran live). It fails because the free-tier LLM call fails: `gemini-2.5-flash` → 503 "high demand" → hardcoded fallback to `gemini-3.5-flash` → 429 `limit: 20/day` (exhausted). Key verified working direct (`billed-model: gemini-2.5-flash`). Working gemini = **lean-coder + gemini** (pins 2.5-flash, no fallback) — row "Gemini × lean-coder". Earlier "tool-invocation wall" claim retracted. |
+| gemini-cli → Gemini free | ⚠️ WORKS intermittently | **gemini-cli emits chepherd MCP tool calls — PROVEN live:** `[chepherd-mcp] qa-gemini: tools/call chepherd.list → OK` at 2026-06-17T04:15:39Z (full turn completed when a quota slot was free). Most turns fail on the thin free tier: `gemini-2.5-flash` → 503 → fallback `gemini-3.5-flash` → 429 `limit: 20/day` (the 04:16:53Z run hit the cap). Key works direct (`billed-model: gemini-2.5-flash`). Reliable on a paid key; lean-coder+gemini is the robust free path. Both "tool-invocation wall" and "undemonstrable" claims retracted — capability confirmed. |
 | opencode → Groq free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Groq 6k TPM vs ~30k request) |
 | opencode → Cerebras free | ❌ | opencode.log: `Tokens per minute limit exceeded` (Cerebras 30k TPM / 5 RPM vs multi-request turn) |
 | aider → Cerebras free | ❌ | container `Exited (127)`: `/usr/local/bin/aider: No such file or directory` (not in image) |
