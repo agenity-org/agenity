@@ -56,4 +56,10 @@ jobs:
         # applied to a <table>. See scripts/check-grid-class-collision.sh
         # + issue #228 for the rename pattern.
         run: bash scripts/check-grid-class-collision.sh
+      - name: lean-coder config-parsing + knock/amnesia tests
+        # scripts/test_lean_coder.py guards lean-coder.py's gotchas: ws->http MCP
+        # URL normalization, provider self-config from a provider/model prefix,
+        # think-tag stripping, and the bounded-HISTORY amnesia fix. Pure-stdlib
+        # python; RED->GREEN verified. Refs #743.
+        run: python3 scripts/test_lean_coder.py
       - run: go test ./... -race -count=1
