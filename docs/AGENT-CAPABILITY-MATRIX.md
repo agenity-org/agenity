@@ -22,7 +22,7 @@ Two axes kept strictly separate: **capability** (binary — does it work at all?
 | **Reply tool** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Round-trip** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | *— capacity (quantitative) —* | | | | | | | | |
-| **TPM** | sub | 30k | ~12k | per-tok | ~Groq | per-tok | n/d | ~250k |
+| **TPM** | sub | 30k | ~12k | ~250k | ~Groq | n/d | n/d | ~250k |
 | **RPM** | sub | 5 | n/d | n/d | n/d | n/d | n/d | ~10 |
 | **RPD** | sub | n/d | n/d | ~1,500 | n/d | **20** | Free-alw. | ~1,500 |
 | **Tokens/turn** | heavy | ~3k | ~3k | ~3k | ~3k | ~15k | ~med | 15–40k |
@@ -34,7 +34,8 @@ Two axes kept strictly separate: **capability** (binary — does it work at all?
 
 ### How to read it
 - **Capability rows** (MCP → Round-trip) are **binary**: ✅ = proven works (≥1 live success this walk), ❌ = never completes, — = n/a because an earlier stage failed. **Rate limits never turn a ✅ into ❌.**
-- **Capacity rows** (TPM/RPM/RPD/Tokens-per-turn) are **quantities** that bound throughput. `sub` = subscription-governed · `per-tok` = billed per-token · `Free-alw.` = Copilot Free premium-request allowance · `n/d` = vendor undisclosed.
+- **Capacity rows** (TPM/RPM/RPD/Tokens-per-turn) are **quantities** that bound throughput. `sub` = subscription-governed · `Free-alw.` = Copilot Free premium-request allowance · `n/d` = vendor undisclosed.
+- **Gemini's TPM is real, not absent.** Gemini free enforces a **per-minute TPM (~250k, published)** — ~8× Cerebras's 30k. That high ceiling is *why opencode fits on Gemini but busts Cerebras's 30k*; it is **not** "no per-minute cap." On Gemini the binding limit shifts to RPD (~1,500/day) and RPM (~10/min).
 - **Status** = WORKS (capability ✅) / FAILS (capability ❌) — a *capability* verdict, independent of how fast/much.
 
 ### Worked examples (capability ≠ capacity)
