@@ -147,7 +147,6 @@
   let vaultEntries = $state([]);    // [{ id, label, provider, account_class, ... }]
   let loadingVault = $state(false);
   let showConnect = $state(false);  // inline Connect Claude flow
-  let advancedOpen = $state(false); // ▶ per-agent override panel
   let bootHydrated = $state(false); // guard against re-running auto-select
 
   // #741 — inline "+ Add key" state, keyed by agent type. Mirrors the
@@ -231,18 +230,6 @@
   }
 
   function classOf(t) { return TYPE_TO_CLASS[t] || ''; }
-
-  // Auto-open the per-agent override when any type has >1 agent — otherwise
-  // it isn't discoverable how to give duplicates (e.g. opencode ×2) DIFFERENT
-  // accounts (operator-reported confusion 2026-06-19). They can still collapse
-  // it; advancedTouched records a manual toggle so we never fight the operator.
-  let advancedTouched = $state(false);
-  const hasDuplicateType = $derived.by(() =>
-    teamTypes.some(t => agentsOfType(t).length > 1)
-  );
-  $effect(() => {
-    if (!advancedTouched && hasDuplicateType) advancedOpen = true;
-  });
 
   // entriesForType returns vault entries whose provider is declared
   // compatible with agent type `t` per PROVIDER_COMPATIBILITY (#232).
@@ -346,18 +333,22 @@
             <span class="type-name">{t}</span>
             <span class="type-count">×{agentsOfType(t).length}</span>
           </div>
-          <select
-            class="picker"
-            value={typeAccounts[t] || ''}
-            onchange={(e) => pickType(t, e.currentTarget.value)}
-          >
-            <option value="">
-              {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
-            </option>
-            {#each matches as v}
-              <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
-            {/each}
-          </select>
+          {#if agentsOfType(t).length === 1}
+            <select
+              class="picker"
+              value={typeAccounts[t] || ''}
+              onchange={(e) => pickType(t, e.currentTarget.value)}
+            >
+              <option value="">
+                {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
+              </option>
+              {#each matches as v}
+                <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
+              {/each}
+            </select>
+          {:else}
+            <span class="multi-hint">↓ pick an account per agent</span>
+          {/if}
           {#if t === 'claude-code'}
             {#if !showConnect}
               <button type="button" class="link" onclick={() => showConnect = true}>+ Connect Claude account</button>
@@ -376,6 +367,32 @@
             </div>
           {/if}
         </div>
+
+        {#if agentsOfType(t).length > 1}
+          <!-- duplicated type → one independent account picker PER agent
+               instance (operator-reported 2026-06-19: 2× opencode must be
+               able to use e.g. one Cerebras + one Groq). Each binds its own
+               agentAccountOverrides[label]; labels are unique (Stage3Skills). -->
+          <div class="per-agent">
+            {#each agentsOfType(t) as a}
+              <div class="pa-row">
+                <span class="pa-label">{a.label}</span>
+                <select
+                  class="picker"
+                  value={effectiveFor(a)}
+                  onchange={(e) => pickAgent(a.label, e.currentTarget.value)}
+                >
+                  <option value="">
+                    {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
+                  </option>
+                  {#each matches as v}
+                    <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
+                  {/each}
+                </select>
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         {#if g}
           <div class="guide-detail">
@@ -426,38 +443,10 @@
       />
     {/if}
 
-    {#if agents.length > 1}
-      <button type="button" class="adv-toggle" onclick={() => { advancedOpen = !advancedOpen; advancedTouched = true; }}>
-        {advancedOpen ? '▼' : '▶'} Advanced — per-agent override
-      </button>
-      {#if advancedOpen}
-        <div class="adv">
-          <p class="adv-help">
-            Override the type default for a single agent. Leave on
-            <em>(use default)</em> to inherit from the row above.
-          </p>
-          {#each agents as a}
-            {@const at = effectiveTypeFor(a)}
-            {@const cls = classOf(at)}
-            {@const matches = entriesForType(at)}
-            <div class="adv-row">
-              <span class="adv-label">{a.label}</span>
-              <span class="adv-type">{at}</span>
-              <select
-                class="picker"
-                value={agentAccountOverrides[a.label] || ''}
-                onchange={(e) => pickAgent(a.label, e.currentTarget.value)}
-              >
-                <option value="">— use default ({typeAccounts[at] || 'unset'}) —</option>
-                {#each matches as v}
-                  <option value={v.id}>{v.label || v.id}</option>
-                {/each}
-              </select>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    {/if}
+    <!-- Per-agent account selection is now INLINE above (one picker per agent
+         for any duplicated type). The old collapsed "Advanced — per-agent
+         override" panel was removed 2026-06-19 — it was the reason duplicates
+         appeared to share one selector. -->
 
     <div class="state" class:ok={allResolved} class:miss={!allResolved}>
       {#if allResolved}
@@ -495,28 +484,16 @@
   }
   .link:hover { color: var(--fg, #fff); }
 
-  .adv-toggle {
-    background: transparent; border: 0; color: var(--accent-2, #87ceeb);
-    cursor: pointer; font: inherit; font-size: 0.82rem;
-    padding: 0.35rem 0; margin: 0.55rem 0 0.4rem 0;
+  /* inline per-agent account pickers for duplicated types */
+  .multi-hint { color: var(--fg-muted, #888); font-size: 0.8rem; font-style: italic; }
+  .per-agent {
+    display: flex; flex-direction: column; gap: 0.35rem;
+    margin: 0.15rem 0 0.5rem 8.1rem;
+    border-left: 2px solid rgba(135, 206, 235, 0.25); padding-left: 0.7rem;
   }
-  .adv-toggle:hover { text-decoration: underline; }
-  .adv {
-    background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a);
-    border-radius: 5px; padding: 0.65rem 0.85rem; margin-bottom: 0.85rem;
-  }
-  .adv-help { color: var(--fg-muted, #888); font-size: 0.78rem; margin: 0 0 0.55rem 0; line-height: 1.5; }
-  .adv-help em { color: var(--fg-muted, #aaa); font-style: italic; }
-  .adv-row {
-    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
-    padding: 0.25rem 0;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
-  }
-  .adv-row:last-child { border-bottom: 0; }
-  .adv-label { font-weight: 600; min-width: 6rem; font-size: 0.86rem; }
-  .adv-type {
-    font-size: 0.72rem; padding: 0.04rem 0.4rem; border-radius: 999px;
-    background: rgba(135, 206, 235, 0.14); color: #87ceeb;
+  .pa-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .pa-label {
+    min-width: 7rem; font-weight: 600; font-size: 0.84rem; color: var(--fg, #f5f5f5);
   }
 
   .state {
