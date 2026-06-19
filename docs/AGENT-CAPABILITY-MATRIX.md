@@ -1,44 +1,49 @@
 # chepherd Agent Capability Matrix
 
-Two **orthogonal** axes, never mixed:
-- **Capability** = *binary* — does the agent complete the MCP round-trip at all? Works once ⇒ **✅ WORKS**. Rate limits do **not** make a capable agent "fail".
-- **Capacity** = *quantitative* — the measured rate limits (TPM / RPM / RPD) that bound *how much* a working agent can do. Reported in their own columns.
+**Comprehensive + transposed:** every *attribute* is a row, every *agent* a column.
+Nothing is dropped when columns are added — a new attribute is just a new row.
+Two axes kept strictly separate: **capability** (binary — does it work at all?) and
+**capacity** (quantitative — rate limits that bound *how much*).
 
-> **Last full live walk: 2026-06-19 18:45 UTC.** Every runnable row re-verified on the *current* daemon (fresh spawn → operator knock → autonomous round-trip), evidence from the daemon's own MCP tool-call log.
+> **Last full live walk: 2026-06-19 18:45 UTC** — every column re-verified on the *current* daemon (fresh spawn → operator knock → autonomous round-trip), evidence from the daemon's own MCP tool-call log. `LC` = lean-coder.
 
-| Agent · model | MCP | Round-trip | TPM | RPM | RPD | Access | Limiting factor (quantitative) |
-|---|:--:|:--:|--:|--:|--:|---|---|
-| claude-code · Opus 4.8 | ✅ | ✅ | sub | sub | sub | paid sub | none — subscription tier |
-| lean-coder · gpt-oss-120b | ✅ | ✅ | 30k | 5 | n/d | Cerebras free | req ~3k ≪ 30k TPM → not rate-bound in practice |
-| lean-coder · llama-3.3-70b | ✅ | ✅ | ~12k | n/d | n/d | Groq free | req ~3k ≪ 12k TPM |
-| lean-coder · gemini-2.5-flash | ✅ | ✅ | per-tok | n/d | ~1,500 | Google free | high free quota |
-| lean-coder · qwen3-32b | ✅ | ✅ | ~Groq | n/d | n/d | Groq free | req ~3k |
-| gemini-cli · gemini-3.5-flash | ✅ | ✅ | per-tok | n/d | **20** | Google free | **RPD = 20/day** caps volume (works until spent) |
-| copilot · Copilot (GPT-4o/Claude) | ✅ | ✅ | n/d | n/d | n/d | PAT + Copilot Free | Copilot Free premium-request allowance |
-| opencode · gpt-oss-120b | ✅ | ❌ | 30k | 5 | n/d | Cerebras free | **per-turn 15–40k tok > 30k TPM** → never completes on free (would work on a higher-TPM/paid tier) |
-| qwen-code · — | ✅ | n/r | — | — | — | no key | not run — no DashScope key |
-| aider · — | ❌ | — | — | — | — | — | no MCP support |
-| little-coder · — | ❌ | — | — | — | — | — | no MCP support |
+| Attribute | claude-code | LC · Cerebras | LC · Groq | LC · Gemini | LC · Qwen | gemini-cli | copilot | opencode |
+|---|---|---|---|---|---|---|---|---|
+| **Model** | Opus 4.8 | gpt-oss-120b | llama-3.3-70b | gemini-2.5-flash | qwen3-32b | gemini-3.5-flash | GPT-4o/Claude | gpt-oss-120b |
+| **Params** (total/active) | n/d | 117B/5.1B | 70B | n/d | 32.8B | n/d | n/d | 117B/5.1B |
+| **Context** | 200k | 131k | 131k | 1.05M | 131k | ~1M | n/d | 131k |
+| **Provider** | Anthropic | Cerebras | Groq | Google | Groq | Google | GitHub | Cerebras |
+| **Access** | paid sub | free | free | free | free | free | PAT+Free | free |
+| *— capability (binary) —* | | | | | | | | |
+| **MCP** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Knock recv** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **LLM call** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **get_task** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| **Reply tool** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| **Round-trip** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| *— capacity (quantitative) —* | | | | | | | | |
+| **TPM** | sub | 30k | ~12k | per-tok | ~Groq | per-tok | n/d | 30k |
+| **RPM** | sub | 5 | n/d | n/d | n/d | n/d | n/d | 5 |
+| **RPD** | sub | n/d | n/d | ~1,500 | n/d | **20** | Free-alw. | n/d |
+| **Tokens/turn** | heavy | ~3k | ~3k | ~3k | ~3k | ~15k | ~med | 15–40k |
+| *— outcome —* | | | | | | | | |
+| **Limiting factor** | none | none | none | none | none | RPD 20/day | Free alw. | req>TPM |
+| **Status** | WORKS | WORKS | WORKS | WORKS | WORKS | WORKS | WORKS | FAILS |
 
-### Reading the columns
-- **MCP** — speaks chepherd's MCP protocol (`initialize`+`tools/list`). Binary.
-- **Round-trip** — completed an **autonomous** knock → `get_task` → reply **at least once**. Binary capability. ✅ = proven works; ❌ = never completes; `n/r` = not run; — = n/a (no MCP).
-- **TPM / RPM / RPD** — measured rate limits (tokens-per-min / requests-per-min / requests-per-day). These bound *throughput*, not *capability*. `sub` = subscription-governed (not a free cap); `per-tok` = billed per-token, no per-minute cap; `n/d` = vendor doesn't disclose.
-- **Access** — credential/tier in use.
-- **Limiting factor** — the *quantitative* thing that bounds this combo (or "none").
+**Not in the table (degenerate — fail at MCP / no credential):** `qwen-code` = MCP-capable but **not run** (no DashScope key) · `aider` = **no MCP support** · `little-coder` = **no daemon MCP config**.
 
-**Provenance:** Round-trip/MCP = live-measured this walk (daemon log). TPM/RPM/RPD = measured from this account's provider response headers where shown as numbers; `n/d` where undisclosed. Note the measured-vs-published drift: Google *publishes* ~1,500 RPD free, but this account's gemini-cli `3.5-flash` fallback **measured 20 RPD**.
+### How to read it
+- **Capability rows** (MCP → Round-trip) are **binary**: ✅ = proven works (≥1 live success this walk), ❌ = never completes, — = n/a because an earlier stage failed. **Rate limits never turn a ✅ into ❌.**
+- **Capacity rows** (TPM/RPM/RPD/Tokens-per-turn) are **quantities** that bound throughput. `sub` = subscription-governed · `per-tok` = billed per-token (no per-minute cap) · `Free-alw.` = Copilot Free premium-request allowance · `n/d` = vendor undisclosed.
+- **Status** = WORKS (capability ✅) / FAILS (capability ❌) — a *capability* verdict, independent of how fast/much.
 
-### Capability vs. capacity — worked example
-**gemini-cli is `✅ WORKS`** — it ran a full autonomous round-trip (`get_task`+`send_to_session`+`alert_human` → OK) this walk. Its 20/day is a **capacity** number in the **RPD** column, *not* a capability downgrade. It works every time **until** the 20 daily requests are spent, then returns `429 limit:20` until reset. Capability ✅, RPD = 20. (To lift the cap: pin `gemini-2.5-flash`, commit `c9ff5d0` — a daemon redeploy.)
+### Worked examples (capability ≠ capacity)
+- **gemini-cli = WORKS.** Ran a full autonomous round-trip this walk (`get_task`+`send_to_session`+`alert_human` → OK). Its `RPD = 20` is a **capacity** number — it works every time until 20 daily requests are spent, then `429 limit:20` until reset. ✅ capability, low RPD. (Lift the cap by pinning gemini-2.5-flash, commit `c9ff5d0`.)
+- **opencode = FAILS**, and it's a **pure capacity** failure: MCP ✅, but one turn = 15–40k tokens > the 30k TPM cap, so it dies at the LLM call before any tool call. Would work on a higher-TPM/paid tier.
+- **copilot = WORKS.** With the `Copilot Requests` PAT permission (added 2026-06-19) it autonomously fired `get_task → OK` then `send_to_session→operator → OK`.
 
-**opencode is the only `❌`** — and it's a pure **capacity** failure, not a capability one: it's MCP-capable, but a single turn packs 15–40k tokens, exceeding the 30k TPM cap on request #1, so it never reaches a tool call on free tier. It would work on a higher-TPM/paid tier.
-
-### Sustained-use rule
-Capability ✅ is necessary; to run *continuously* on a tier you also need: `tokens/turn < TPM` **and** `turns/day < RPD`. lean-coder satisfies both on every free tier (1 small ~3k req/turn); gemini-cli satisfies capability but is RPD-bound to ~20 turns/day; opencode fails the TPM term.
-
-### Bottom line
-**7 agents WORK** (claude-code · lean-coder×{Cerebras, Groq-llama, Gemini-2.5, Qwen3} · gemini-cli · copilot), all with fresh autonomous round-trips 2026-06-19. **1 fails** (opencode — capacity). gemini-cli is fully working but volume-capped at 20/day; copilot runs on a Copilot Free allowance.
+### Provenance
+Capability + per-turn tokens = live-measured this walk (daemon log). TPM/RPM/RPD = measured from this account's provider response headers where a number is shown; `n/d` where undisclosed. Measured beats published: Google *publishes* ~1,500 RPD free, but this account's gemini-cli `3.5-flash` fallback **measured 20 RPD**.
 
 ### Sources (model specs)
 [gpt-oss-120b](https://arxiv.org/pdf/2508.10925) · [Llama 3.3 70B](https://console.groq.com/docs/model/llama-3.3-70b-versatile) · [Qwen3-32B](https://huggingface.co/Qwen/Qwen3-32B) · [Gemini Flash limits](https://pecollective.com/tools/gemini-free-tier-guide/)
