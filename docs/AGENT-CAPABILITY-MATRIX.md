@@ -1,35 +1,48 @@
 # chepherd Agent Capability Matrix
 
-**One table, fits on screen.** Every agent × model × provider, every measurable axis.
-Composite cells keep it to 5 columns so it reads without horizontal scrolling.
+Every agent's round-trip is broken into its **5 pipeline stages**. A working agent
+must pass all 5. The "Breaks at" column names the exact stage + the literal error,
+so "working / flaky / failing" is never a vague label — it's *which stage failed*.
 
-| Agent | Model · params · context | Provider · tier · limits | Round-trip (live) | Verdict · binding constraint |
-|---|---|---|---|---|
-| claude-code | Claude Opus 4.8 · n/d · 200k | Anthropic · **paid sub** | ✅ | ✅ working · MCP+tools ✅ · none (paid) |
-| lean-coder | gpt-oss-120b · 117B/5.1B · 131k | Cerebras · free · 30k TPM / 5 RPM | ✅ | ✅ working · req ~3k ≪ 30k TPM |
-| lean-coder | llama-3.3-70b · 70B · 131k | Groq · free · ~12k TPM | ✅ | ✅ working · req ~3k ≪ 12k TPM |
-| lean-coder | gemini-2.5-flash · n/d · 1.05M | Google · free · per-token | ✅ | ✅ working · single small req fits |
-| lean-coder | qwen3-32b · 32.8B · 131k | Groq · free | ✅ | ✅ working · `<think>` handled |
-| gemini-cli | gemini-3.5-flash · n/d · ~1M | Google · free · **20 RPD** | ⚠ flaky | ⚠ MCP+tools ✅ · capped at 20 req/day |
-| copilot | Copilot (GPT-4o/Claude) · n/d | GitHub · fine-grained PAT | ❌ | ⛔ MCP+tools ✅ · **PAT lacks `Copilot Requests` scope** |
-| opencode | gpt-oss-120b · 117B/5.1B · 131k | Cerebras · free · 30k TPM | ❌ | ❌ MCP ✅ but req 15–40k **> 30k TPM** (no tool-call reached) |
-| qwen-code | — · — · — | no key in vault | n/r | ⏭ MCP ✅ · not run (no DashScope key) |
-| aider | — · — · — | any | ❌ | ❌ no MCP support |
-| little-coder | — · — · — | any | ❌ | ❌ no daemon MCP config |
+### The 5 stages (what has to happen for one message round-trip)
+1. **MCP** — agent connects to chepherd's tool server (`initialize` + `tools/list`).
+2. **Knock** — agent receives the operator's message.
+3. **LLM** — the model actually answers (no `429`/`503`/auth error).
+4. **get_task** — agent calls `chepherd.get_task` to read the task body.
+5. **Reply** — agent calls a reply tool (`send_to_session`/`alert_human`).
 
-**Symbols:** ✅ works · ⚠ flaky · ❌ fails · ⛔ blocked (non-quantitative) · n/d undisclosed · n/r not-run.
-**Round-trip** = a real knock produced `get_task → OK` **and** a reply tool (`alert_human`/`send_to_session`) `→ OK` in the daemon log.
-**Provenance:** params/context = vendor spec (sources below); limits + MCP/tools/round-trip = measured live (chepherd daemon logs + this account's provider headers, 2026-06-16). Measured limits override published tiers — e.g. Google *publishes* ~1,500 RPD free, this account *measured* **20 RPD** on the gemini-cli fallback.
+Stages 3–5 need the model; stages 1–2 don't. So an agent can connect + receive a
+knock yet still fail because its model call dies.
 
-### Viability law
-A combination works on free tier iff: `MCP-capable ∧ emits-tool-calls ∧ (tokens/req × reqs/turn < TPM) ∧ (turns/day < RPD)`.
-- **lean-coder** passes by construction (1 req/turn, ~3k tokens) → works on every free tier.
-- **opencode** fails the throughput term (15–40k > 30k TPM) — structural.
-- **gemini-cli** fails the daily term (20 RPD) — fixable by pinning 2.5-flash (`c9ff5d0`, deploy-gated).
-- **copilot** is an auth-scope gate, not a limit — operator adds `Copilot Requests = Read`.
+| Agent · model · tier | MCP | Knock | LLM | get_task | Reply | Breaks at · exact error | Status |
+|---|:--:|:--:|:--:|:--:|:--:|---|---|
+| claude-code · Claude Opus 4.8 · paid sub | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
+| lean-coder · gpt-oss-120b · Cerebras free | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
+| lean-coder · llama-3.3-70b · Groq free | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
+| lean-coder · gemini-2.5-flash · Google free | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
+| lean-coder · qwen3-32b · Groq free | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
+| gemini-cli · gemini-3.5-flash · Google free | ✅ | ✅ | ⚠ | ⚠ | ⚠ | **Stage 3 (LLM)** — after ~20 calls/day: `429 Quota exceeded … limit: 20, model: gemini-3.5-flash`. Stages 3–5 run *only* while a daily slot is free. | **FLAKY** |
+| copilot · GitHub Copilot · fine-grained PAT | ✅ | ✅ | ❌ | ❌ | ❌ | **Stage 3 (LLM/auth)** — `Authentication failed … ensure the 'Copilot Requests' permission is enabled`. Fails before the model ever answers. | **BLOCKED** (operator) |
+| opencode · gpt-oss-120b · Cerebras free | ✅ | ✅ | ❌ | ❌ | ❌ | **Stage 3 (LLM)** — `Tokens per minute limit exceeded` on request #1: its turn sends 15–40k tokens > the 30k TPM cap. | **FAILS** |
+| qwen-code · (no key) | ✅ | — | — | — | — | not run — no DashScope key in vault | **NOT RUN** |
+| aider · any | ❌ | — | — | — | — | **Stage 1** — aider has no MCP support | **NO MCP** |
+| little-coder · any | ❌ | — | — | — | — | **Stage 1** — no daemon MCP config | **NO MCP** |
+
+**Symbols:** ✅ passes every time · ⚠ passes *only when quota is available* · ❌ fails every time · — n/a (an earlier stage already failed).
+
+### What each status word means (no vague labels)
+- **WORKS** — all 5 stages pass on every attempt. Reliable mesh member.
+- **FLAKY** — stages 1–2 always pass, but the model-dependent stages (3–5) pass *only while a free-tier quota slot remains*. **gemini-cli's** free fallback model allows ~**20 model calls per day**; once spent, every turn returns `429 limit: 20` until the next daily reset. So it's neither broken nor dependable — it completes a round-trip *sometimes*, bounded by 20/day. (Fix: pin `gemini-2.5-flash`, which has far higher quota — commit `c9ff5d0`, needs a daemon redeploy.)
+- **BLOCKED** — chepherd side is 100% done; it fails at an external gate only you can open. **copilot's** PAT authenticates to GitHub (API 200) but lacks the **`Copilot Requests`** permission, so the model call is refused before stage 3. One toggle at github.com/settings/personal-access-tokens fixes it.
+- **FAILS** — a structural limit, not fixable on the free tier. **opencode** packs 15–40k tokens into one request (big system prompt + 27 tool schemas + context); that exceeds Cerebras's 30k tokens/minute cap on the very first call.
+- **NOT RUN / NO MCP** — no credential, or the tool can't speak MCP at all (fails stage 1).
+
+### Why the working ones work (the rule)
+A combo passes stage 3 on a free tier iff `tokens_per_request × requests_per_turn < TPM` **and** `turns_per_day < RPD`.
+**lean-coder** is built to send **one ~3k-token request per turn**, so it stays far under every free cap → passes on Cerebras, Groq, Gemini, and Qwen. opencode violates the token term; gemini-cli violates the daily term.
 
 ### Bottom line
-Live today: **claude-code (paid) + lean-coder × {Cerebras, Groq, Gemini, Qwen} (free)** — a real mixed team. gemini-cli works but is 20/day-flaky; copilot is one GitHub toggle away; the rest are ruled out for the measured reasons above.
+Reliable today: **claude-code (paid) + lean-coder × {Cerebras, Groq, Gemini, Qwen} (free)**. gemini-cli works ~20×/day then rate-limits; copilot needs your GitHub scope toggle; opencode/aider/little-coder are out for the measured reasons above.
 
 ### Sources (model specs)
 [gpt-oss-120b](https://arxiv.org/pdf/2508.10925) · [Llama 3.3 70B](https://console.groq.com/docs/model/llama-3.3-70b-versatile) · [Qwen3-32B](https://huggingface.co/Qwen/Qwen3-32B) · [Gemini Flash limits](https://pecollective.com/tools/gemini-free-tier-guide/)
