@@ -62,15 +62,26 @@
     if (!teamName) {
       teamName = (template.name || '').toLowerCase().replace(/\s+/g, '-');
     }
-    agents = template.slots.map(s => ({
-      label: s.label,
-      role_id: s.role_id || s.primary_skill || 'generalist',
-      owned_skills: s.owned_skills || (s.primary_skill ? [s.primary_skill] : []),
-      owned_skills_scope: s.owned_skills_scope || {},
-      agent_type: s.agent_type_default || 'claude-code',
-      account_id: '',
-      account_class: s.account_class_default || 'anthropic',
-    }));
+    const _labelCounts = {};
+    agents = template.slots.map(s => {
+      // Ensure UNIQUE labels: duplicate slots (e.g. two "opencode" workers)
+      // must not collide. The label keys per-agent account overrides AND
+      // becomes the spawned agent's @-name — colliding labels meant picking
+      // an account for one duplicate set it for both (operator-reported
+      // 2026-06-19), and would clash at spawn. Suffix repeats: foo, foo-2, foo-3.
+      const base = s.label || s.role_id || 'agent';
+      _labelCounts[base] = (_labelCounts[base] || 0) + 1;
+      const label = _labelCounts[base] === 1 ? base : `${base}-${_labelCounts[base]}`;
+      return {
+        label,
+        role_id: s.role_id || s.primary_skill || 'generalist',
+        owned_skills: s.owned_skills || (s.primary_skill ? [s.primary_skill] : []),
+        owned_skills_scope: s.owned_skills_scope || {},
+        agent_type: s.agent_type_default || 'claude-code',
+        account_id: '',
+        account_class: s.account_class_default || 'anthropic',
+      };
+    });
   });
 
   $effect(() => { load(); });

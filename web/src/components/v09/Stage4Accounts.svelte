@@ -88,6 +88,11 @@
     'groq-api':       ['opencode'],
     'cerebras-api':   ['opencode'],
     'copilot-oauth':  ['copilot'],
+    // copilot authenticates with a fine-grained GitHub PAT that has the
+    // 'Copilot Requests' Account permission (env GITHUB_TOKEN) — live-verified
+    // 2026-06-19. Without this row the working github-pat vault entry was
+    // "compatible with nothing" and never showed in copilot's dropdown.
+    'github-pat':     ['copilot'],
     'ollama':         ['aider', 'opencode'],
   };
 
@@ -121,6 +126,9 @@
     'copilot': {
       getFree: [{ label: 'Get it free →', url: 'https://github.com/settings/copilot' }],
       oauth: { cmd: 'gh auth login' },
+      // Primary path (live-verified 2026-06-19): a fine-grained GitHub PAT with
+      // the 'Copilot Requests' Account permission, injected as GITHUB_TOKEN.
+      keyAdd: { provider: 'github-pat', env_var: 'GITHUB_TOKEN', keyLabel: 'GitHub fine-grained PAT — needs the "Copilot Requests" Account permission', getKeyUrl: 'https://github.com/settings/personal-access-tokens' },
     },
     'opencode': {
       getFree: [
@@ -223,6 +231,18 @@
   }
 
   function classOf(t) { return TYPE_TO_CLASS[t] || ''; }
+
+  // Auto-open the per-agent override when any type has >1 agent — otherwise
+  // it isn't discoverable how to give duplicates (e.g. opencode ×2) DIFFERENT
+  // accounts (operator-reported confusion 2026-06-19). They can still collapse
+  // it; advancedTouched records a manual toggle so we never fight the operator.
+  let advancedTouched = $state(false);
+  const hasDuplicateType = $derived.by(() =>
+    teamTypes.some(t => agentsOfType(t).length > 1)
+  );
+  $effect(() => {
+    if (!advancedTouched && hasDuplicateType) advancedOpen = true;
+  });
 
   // entriesForType returns vault entries whose provider is declared
   // compatible with agent type `t` per PROVIDER_COMPATIBILITY (#232).
@@ -407,7 +427,7 @@
     {/if}
 
     {#if agents.length > 1}
-      <button type="button" class="adv-toggle" onclick={() => advancedOpen = !advancedOpen}>
+      <button type="button" class="adv-toggle" onclick={() => { advancedOpen = !advancedOpen; advancedTouched = true; }}>
         {advancedOpen ? '▼' : '▶'} Advanced — per-agent override
       </button>
       {#if advancedOpen}
