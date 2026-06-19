@@ -36,6 +36,12 @@
     // compatibility, not the template default. Optional; defaults to
     // empty so callers that haven't been wired don't break.
     agentTypeOverrides = {},
+    // #237 — per-agent MODEL from the Agents step. For opencode/lean-coder the
+    // model carries a provider prefix (cerebras/…, groq/…, gemini/…). The
+    // account picker filters to THAT provider so the credential matches the
+    // already-chosen model instead of offering an unrelated free choice
+    // (operator-reported 2026-06-19).
+    agentModelOverrides = {},
     typeAccounts = $bindable({}),
     agentAccountOverrides = $bindable({}),
   } = $props();
@@ -249,6 +255,32 @@
     });
   }
 
+  // Map a "provider/model" prefix (opencode/lean-coder models) to the vault
+  // provider id, so each agent's account picker can be narrowed to the model
+  // it was already assigned in the Agents step.
+  const MODEL_PREFIX_TO_PROVIDER = {
+    cerebras:  'cerebras-api',
+    groq:      'groq-api',
+    gemini:    'google-api',
+    google:    'google-api',
+    openai:    'openai-api',
+    anthropic: 'anthropic-api',
+  };
+  function providerForModel(model) {
+    if (!model || model.indexOf('/') < 0) return null;
+    return MODEL_PREFIX_TO_PROVIDER[model.slice(0, model.indexOf('/')).toLowerCase()] || null;
+  }
+
+  // entriesForAgent — account options for ONE agent. If its chosen model
+  // dictates a provider (e.g. opencode "cerebras/…"), show ONLY that provider's
+  // vault entries so the credential matches the model (operator-reported
+  // 2026-06-19). Otherwise fall back to the agent-type compatibility list.
+  function entriesForAgent(a) {
+    const prov = providerForModel(agentModelOverrides[a.label]);
+    if (prov) return vaultEntries.filter(v => v.provider === prov);
+    return entriesForType(effectiveTypeFor(a));
+  }
+
   // Auto-select the newest matching entry per agent-type once the
   // vault list arrives, IFF the operator hasn't already picked one
   // and there's exactly one obvious match. (UX nicety; operator can
@@ -268,6 +300,26 @@
       }
     }
     if (any) typeAccounts = { ...typeAccounts, ...updates };
+  });
+
+  // Model-driven per-agent auto-select: when an agent's chosen model dictates a
+  // provider (opencode/lean-coder cerebras|groq|gemini/…), pre-pick the matching
+  // vault entry FOR THAT AGENT so its account follows its model with no extra
+  // clicks. Re-maps if the operator changes the model in the Agents step.
+  // Converges (only writes when the current pick isn't valid for the provider).
+  $effect(() => {
+    if (vaultEntries.length === 0) return;
+    const updates = {};
+    let any = false;
+    for (const a of agents) {
+      const prov = providerForModel(agentModelOverrides[a.label]);
+      if (!prov) continue;
+      const m = vaultEntries.filter(v => v.provider === prov);
+      const cur = agentAccountOverrides[a.label];
+      const curValid = cur && m.some(v => v.id === cur);
+      if (m.length >= 1 && !curValid) { updates[a.label] = m[0].id; any = true; }
+    }
+    if (any) agentAccountOverrides = { ...agentAccountOverrides, ...updates };
   });
 
   function pickType(t, id) {
@@ -326,7 +378,6 @@
   {:else}
     <div class="rows">
       {#each teamTypes as t}
-        {@const matches = entriesForType(t)}
         {@const g = TYPE_GUIDANCE[t]}
         <div class="row">
           <div class="type">
@@ -342,7 +393,7 @@
               <option value="">
                 {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
               </option>
-              {#each matches as v}
+              {#each entriesForAgent(agentsOfType(t)[0]) as v}
                 <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
               {/each}
             </select>
@@ -385,10 +436,13 @@
                   <option value="">
                     {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
                   </option>
-                  {#each matches as v}
+                  {#each entriesForAgent(a) as v}
                     <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
                   {/each}
                 </select>
+                {#if agentModelOverrides[a.label]}
+                  <span class="pa-model" title="model chosen in the Agents step">{agentModelOverrides[a.label]}</span>
+                {/if}
               </div>
             {/each}
           </div>
@@ -494,6 +548,10 @@
   .pa-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
   .pa-label {
     min-width: 7rem; font-weight: 600; font-size: 0.84rem; color: var(--fg, #f5f5f5);
+  }
+  .pa-model {
+    font-size: 0.7rem; color: var(--fg-muted, #888); font-family: ui-monospace, monospace;
+    background: rgba(135, 206, 235, 0.1); padding: 0.05rem 0.4rem; border-radius: 4px;
   }
 
   .state {

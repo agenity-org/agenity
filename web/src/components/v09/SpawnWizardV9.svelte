@@ -178,6 +178,7 @@
       <Stage4Accounts
         agents={agents}
         agentTypeOverrides={agentTypeOverrides}
+        agentModelOverrides={agentModelOverrides}
         bind:typeAccounts
         bind:agentAccountOverrides
       />

@@ -48,6 +48,10 @@ import '../styles/global.css';
           { label: 'tech-lead',  role_id: 'lead',   agent_type: 'claude-code' },
           { label: 'reviewer',   role_id: 'qa',     agent_type: 'copilot' },
         ]}
+        agentModelOverrides={{
+          'opencode':   'cerebras/llama-3.3-70b',
+          'opencode-2': 'groq/llama-3.3-70b-versatile',
+        }}
         typeAccounts={{}}
         agentAccountOverrides={{}}
       />
