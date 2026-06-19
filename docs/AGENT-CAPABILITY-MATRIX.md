@@ -14,6 +14,8 @@ so "working / flaky / failing" is never a vague label — it's *which stage fail
 Stages 3–5 need the model; stages 1–2 don't. So an agent can connect + receive a
 knock yet still fail because its model call dies.
 
+> **Last full live walk: 2026-06-19 18:45 UTC.** Every runnable row below was re-verified on the *current* daemon — fresh spawn → operator knock → **autonomous** round-trip — with evidence taken from the daemon's own MCP tool-call log. Not a composite of old sessions.
+
 | Agent · model · tier | MCP | Knock | LLM | get_task | Reply | Breaks at · exact error | Status |
 |---|:--:|:--:|:--:|:--:|:--:|---|---|
 | claude-code · Claude Opus 4.8 · paid sub | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
@@ -21,14 +23,14 @@ knock yet still fail because its model call dies.
 | lean-coder · llama-3.3-70b · Groq free | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
 | lean-coder · gemini-2.5-flash · Google free | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
 | lean-coder · qwen3-32b · Groq free | ✅ | ✅ | ✅ | ✅ | ✅ | — | **WORKS** |
-| gemini-cli · gemini-3.5-flash · Google free | ✅ | ✅ | ⚠ | ⚠ | ⚠ | **Stage 3 (LLM)** — after ~20 calls/day: `429 Quota exceeded … limit: 20, model: gemini-3.5-flash`. Stages 3–5 run *only* while a daily slot is free. | **FLAKY** |
+| gemini-cli · gemini-3.5-flash · Google free | ✅ | ✅ | ⚠ | ⚠ | ⚠ | **2026-06-19 walk: full autonomous round-trip succeeded** (`get_task`+`send_to_session`+`alert_human` → OK) — a daily slot was free. Still **Stage 3 (LLM)**-bound: after ~20 calls/day → `429 Quota exceeded … limit: 20`. Works *when* quota remains. | **FLAKY** |
 | copilot · GitHub Copilot · fine-grained PAT | ✅ | ✅ | ✅ | ✅ | ✅ | **RESOLVED 2026-06-19** — PAT granted `Copilot Requests` (Account permission); vault updated + daemon restarted. Live via vault-injected token: `COPILOT_AUTH_OK` (real request, credits spent) + `chepherd.list → OK` + `chepherd.alert_human → OK`. ¹ | **WORKS** ¹ |
 | opencode · gpt-oss-120b · Cerebras free | ✅ | ✅ | ❌ | ❌ | ❌ | **Stage 3 (LLM)** — `Tokens per minute limit exceeded` on request #1: its turn sends 15–40k tokens > the 30k TPM cap. | **FAILS** |
 | qwen-code · (no key) | ✅ | — | — | — | — | not run — no DashScope key in vault | **NOT RUN** |
 | aider · any | ❌ | — | — | — | — | **Stage 1** — aider has no MCP support | **NO MCP** |
 | little-coder · any | ❌ | — | — | — | — | **Stage 1** — no daemon MCP config | **NO MCP** |
 
-¹ copilot: **RESOLVED 2026-06-19** — with the `Copilot Requests` *Account* permission added to the PAT, auth + chepherd tool-calls (`chepherd.list`, `chepherd.alert_human`) + reply are proven live (daemon log + real credits spent). These were driven via one-shot prompts; the agent main-loop *auto-firing* `get_task` on a PTY knock was not observed in this walk — a separate agent-loop behavior, not the PAT/auth.
+¹ copilot: **RESOLVED + AUTONOMOUS round-trip confirmed 2026-06-19** — with the `Copilot Requests` *Account* permission on the PAT, the agent autonomously processed an operator knock: `get_task → OK` then `send_to_session→operator → OK` + `alert_human → OK` (daemon log, real credits spent). The earlier "driven-only" caveat is resolved — copilot just needed a longer turn window (~3 min) to fire on its own.
 
 **Symbols:** ✅ passes every time · ⚠ passes *only when quota is available* · ❌ fails every time · — n/a (an earlier stage already failed).
 
