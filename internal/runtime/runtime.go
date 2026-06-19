@@ -2884,19 +2884,16 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		cfg = map[string]any{
 			"$schema": "https://opencode.ai/config.json",
 			"mcp":     map[string]any{"chepherd": chepEntry},
-			// #743 — free-tier slim: Groq free = 12k tokens/min; opencode's full
-			// chepherd MCP tool schemas + briefing exceed it (413 "request too
-			// large"). Disable all chepherd tools then re-enable only the
-			// essential peer/canon ones so requests fit the free cap.
-			"tools": map[string]any{
-				"chepherd*":         false,
-				"*send_to_session*": true,
-				"*get_task*":        true,
-				"*list_sessions*":   true,
-				"*list_peers*":      true,
-				"*read_canon*":      true,
-				"*alert_human*":     true,
-			},
+			// #743 tools-slim REMOVED (it was a bug): the "chepherd*": false key
+			// sorts LAST in the marshaled JSON and disabled ALL chepherd MCP
+			// tools, overriding the explicit re-enables below it — opencode saw
+			// zero chepherd tools ("Model tried to call unavailable tool
+			// 'alert_human'"). The slim targeted Groq's 12k TPM, but opencode
+			// only completes a turn on a high-TPM tier (Gemini ~250k TPM has the
+			// headroom for the full tool schema set; Cerebras/Groq bust TPM
+			// regardless of tool count). Leave tools at the default (all enabled)
+			// so the chepherd toolset is actually callable. Live-verified
+			// 2026-06-19: with this block present opencode listed only builtins.
 		}
 		// COORDINATION (#741): the daemon writes the COMPLETE
 		// opencode.json (schema + model + mcp) so it doesn't clobber —
