@@ -144,6 +144,7 @@ var Builtin = []Agent{
 		DefaultArgs: []string{},
 		DefaultCwd:  "/workspace",
 		RequiredEnv: []string{"OPENAI_BASE_URL", "OPENAI_API_KEY"},
+		Notes: "Standard agent for raw OpenAI-compatible free providers (Cerebras 30k TPM, Groq 12k TPM). The daemon's writeFlavorMCPConfig emits a TPM-fit opencode.json (measured live 2026-06-21): tools allow-list (37→4 tools), focused build-agent system prompt (system 21,850→1,257 chars), instructions:[], and a per-model output-token cap (max_tokens 40,960→1,024 so Groq's prompt+reserved-output total fits 12k). A trivial turn drops 11,034→730 prompt_tokens; a full knock→get_task→reply round-trip fits Cerebras 30k (max 3,783/req) and Groq 12k (sum 8,272). The output cap also avoids the Cerebras reasoning_content replay error (3/3 clean round-trips).",
 	},
 	{
 		Slug:        "qwen-code",

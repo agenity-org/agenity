@@ -170,7 +170,21 @@ func materializeFlavorBriefing(spec SpawnSpec, agentHomeDir string, peers []Peer
 // renderFlavorBriefing builds the full context-file body for a
 // non-claude flavor: the shared chepherd briefing + an embedded
 // skills section + an embedded team-canon section.
+//
+// opencode is the exception: its context file (AGENTS.md) is injected
+// into EVERY per-turn request, and the free OpenAI-compatible providers
+// it runs on (Cerebras 30k / Groq 12k TPM) can't afford the ~10.9 kB
+// full briefing on every request. The opencode build-agent system prompt
+// (opencodeMeshPrompt, written into opencode.json by writeFlavorMCPConfig)
+// already carries the identity + tool names + knock protocol, so the
+// AGENTS.md only needs the dynamic bits the prompt can't: the live peer
+// roster and the team-canon snapshot. renderCompactFlavorBriefing keeps
+// it small (measured: full 10,942 → compact ~1 kB). All other flavors
+// (gemini-cli, qwen-code, copilot) keep the full briefing.
 func renderFlavorBriefing(spec SpawnSpec, peers []PeerBrief, flavor, canon string) string {
+	if flavor == "opencode" {
+		return renderCompactFlavorBriefing(spec, peers, canon)
+	}
 	var b strings.Builder
 	b.WriteString(renderAgentClaudeMD(spec, peers))
 
@@ -198,6 +212,43 @@ func renderFlavorBriefing(spec SpawnSpec, peers []PeerBrief, flavor, canon strin
 	b.WriteString("Your team has a shared canon (charter). Refresh the live version any time with the `chepherd.read_canon` MCP tool. The snapshot at spawn time:\n\n")
 	if strings.TrimSpace(canon) == "" {
 		b.WriteString("_No team canon materialized yet — call `chepherd.read_canon` once peers join._\n")
+	} else {
+		b.WriteString(canon)
+		if !strings.HasSuffix(canon, "\n") {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// renderCompactFlavorBriefing is the TPM-fit AGENTS.md for opencode: just
+// the live peer roster + the team-canon snapshot. The identity, MCP tool
+// names, and knock protocol live in the opencode build-agent system prompt
+// (opencodeMeshPrompt) instead of being repeated here, because this file
+// is injected into EVERY opencode request and the free providers
+// (Cerebras 30k / Groq 12k TPM) can't afford the full ~10.9 kB briefing
+// per turn. Regenerated on team-events like the full one, so the peer
+// list stays current. Measured: ~1 kB vs the full briefing's 10,942 B.
+func renderCompactFlavorBriefing(spec SpawnSpec, peers []PeerBrief, canon string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# chepherd mesh worker — %s (team %s, role %s)\n\n", spec.Name, spec.Team, spec.Role)
+	b.WriteString("## Peers (snapshot — call chepherd_chepherd_list for the live set)\n\n")
+	if len(peers) == 0 {
+		b.WriteString("_No other agents in your team yet._\n")
+	} else {
+		sorted := append([]PeerBrief(nil), peers...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		for _, p := range sorted {
+			fmt.Fprintf(&b, "- `%s` — role %s, agent %s", p.Name, p.Role, p.AgentSlug)
+			if p.Team != "" && p.Team != spec.Team {
+				fmt.Fprintf(&b, " (team %s)", p.Team)
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n## Team canon (snapshot — refresh with chepherd_chepherd_read_canon)\n\n")
+	if strings.TrimSpace(canon) == "" {
+		b.WriteString("_No team canon yet._\n")
 	} else {
 		b.WriteString(canon)
 		if !strings.HasSuffix(canon, "\n") {

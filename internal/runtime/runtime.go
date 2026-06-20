@@ -2903,29 +2903,72 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		cfg = map[string]any{
 			"$schema": "https://opencode.ai/config.json",
 			"mcp":     map[string]any{"chepherd": chepEntry},
-			// #743 tools-slim REMOVED (it was a bug): the "chepherd*": false key
-			// sorts LAST in the marshaled JSON and disabled ALL chepherd MCP
-			// tools, overriding the explicit re-enables below it — opencode saw
-			// zero chepherd tools ("Model tried to call unavailable tool
-			// 'alert_human'"). The slim targeted Groq's 12k TPM, but opencode
-			// only completes a turn on a high-TPM tier (Gemini ~250k TPM has the
-			// headroom for the full tool schema set; Cerebras/Groq bust TPM
-			// regardless of tool count). Leave tools at the default (all enabled)
-			// so the chepherd toolset is actually callable. Live-verified
-			// 2026-06-19: with this block present opencode listed only builtins.
+			// TPM-fit slim, MEASURED live 2026-06-21 against Cerebras + Groq via
+			// a token-counting proxy. opencode's baseline per-turn request is huge
+			// (measured 11,034 prompt_tokens for a trivial reply): opencode's own
+			// ~10.5 kB builtin system prompt + the full 27-tool chepherd MCP schema
+			// set (34,255 chars / ~8.5 k tokens, surfaced to the model as 37 tools
+			// incl. 10 builtins) + the ~10.9 kB AGENTS.md briefing. That busts
+			// Cerebras 30k and Groq 12k TPM. Four levers, each measured:
+			//
+			//   (1) tools allow-list (opencodeToolSlim): 37→4 tools, tool schema
+			//       34,255→1,928 chars. The 4 mesh-essential tools are re-enabled;
+			//       everything else (other chepherd tools + opencode builtins) is
+			//       denied. This is the CORRECT version of the #743 tools-slim that
+			//       was reverted: that one used "chepherd*": false + single-prefix
+			//       re-enables ("chepherd_get_task") that NEVER matched the real
+			//       tool names. opencode names MCP tools <server>_<tool> where the
+			//       chepherd server's tools are ALREADY "chepherd.<x>", so the
+			//       sanitized name is the DOUBLE-prefixed "chepherd_chepherd_<x>"
+			//       (verified live). The deny-wildcard "chepherd_chepherd_*" sorts
+			//       BEFORE the specific allows under Go's alphabetical map marshal
+			//       ('*'=0x2A < '_a'/'_g'/'_l'/'_s'), and opencode applies last-
+			//       entry-wins over Object.entries insertion order, so the specific
+			//       allows win — the exact ordering the old bug got wrong.
+			//   (2) agent.build.prompt: replaces opencode's ~10.5 kB builtin system
+			//       prompt with a focused mesh-worker prompt (system 21,850→1,257
+			//       chars). Live-verified the model still emits real tool calls
+			//       (get_task + send_to_session both fired + delivered).
+			//   (3) instructions: [] — opencode merges (unions) every instructions
+			//       file into the prompt; empty keeps the daemon-written AGENTS.md
+			//       from being doubled by stray project rules files.
+			//   (4) per-model limit.output cap: opencode defaults max_tokens to the
+			//       model's full output limit (40,960 for cerebras gpt-oss). Groq
+			//       counts prompt_tokens + reserved max_tokens against its 12k TPM,
+			//       so EVERY request claimed ~32 k and 413'd regardless of prompt
+			//       size. Capping output to 1024 drops the reservation under the cap
+			//       (Groq full round-trip then fits: measured sum 8,272 tokens, max
+			//       single 1,759). Harmless on Cerebras (replies are short).
+			//
+			// Combined: a trivial turn drops 11,034→730 prompt_tokens; a full
+			// knock→get_task→reply round-trip fits 30k Cerebras (measured max
+			// 3,783/req) and 12k Groq (measured sum 8,272).
+			"tools":        opencodeToolSlim(),
+			"instructions": []string{},
 		}
 		// COORDINATION (#741): the daemon writes the COMPLETE
-		// opencode.json (schema + model + mcp) so it doesn't clobber —
-		// or get clobbered by — the entrypoint's model-only write.
-		// scripts/agent-entrypoint.sh's opencode.json write MUST be
-		// removed (flagged in the PR; not edited here — image build in
-		// flight). Model selection logic is preserved verbatim:
-		// OPENCODE_MODEL > GROQ → groq/llama-3.3-70b-versatile >
-		// CEREBRAS → cerebras/llama-3.3-70b. The daemon DOES see these
-		// env vars (they ride spec.Env / the agent-env overlay), so it
-		// resolves the model here too.
+		// opencode.json (schema + model + mcp + tools + agent + provider)
+		// so it doesn't clobber — or get clobbered by — the entrypoint's
+		// model-only write. scripts/agent-entrypoint.sh's opencode.json
+		// write was already removed (#741). Model selection logic:
+		// per-agent pick > OPENCODE_MODEL > GROQ → groq/llama-3.3-70b-versatile
+		// > CEREBRAS → cerebras/gpt-oss-120b (opencodeModelFromEnv).
 		if model := opencodeModelFromEnv(spec); model != "" {
 			cfg["model"] = model
+			// small_model drives the per-session title-generation request
+			// (a separate ~595-token call). Point it at the SAME model so
+			// there's no second provider/credential to configure; the
+			// output cap below keeps it cheap.
+			cfg["small_model"] = model
+			// Focused build-agent system prompt + per-model output cap. Both
+			// are model-aware: the provider id is the first path segment of
+			// the "provider/model" string.
+			cfg["agent"] = map[string]any{
+				"build": map[string]any{"prompt": opencodeMeshPrompt(spec.Name)},
+			}
+			if prov := opencodeProviderOutputCap(model); prov != nil {
+				cfg["provider"] = prov
+			}
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: no native MCP schema for flavor %q — skipping (#741)\n", spec.Name, flavor)
@@ -2949,6 +2992,123 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 	_ = os.Chmod(dest, 0o644)
 	fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: wrote %s (flavor=%s, chepherd MCP via HTTP) (#741)\n", spec.Name, rel, flavor)
 }
+
+// opencodeMeshTools is the allow-list of chepherd MCP tools an opencode
+// mesh worker actually needs: read an inbound task, reply to a peer,
+// escalate to the operator, and enumerate peers. Everything else (the
+// other 23 chepherd tools + all opencode builtins) is denied to keep the
+// per-request tool schema tiny (measured 34,255→1,928 chars).
+//
+// Names are opencode's sanitized form <server>_<tool>. The chepherd MCP
+// server registers tools already named "chepherd.<x>", and opencode
+// prefixes the server id and replaces '.' with '_', yielding the
+// DOUBLE-prefixed "chepherd_chepherd_<x>" (verified live 2026-06-21).
+var opencodeMeshTools = []string{
+	"chepherd_chepherd_get_task",
+	"chepherd_chepherd_send_to_session",
+	"chepherd_chepherd_alert_human",
+	"chepherd_chepherd_list",
+}
+
+// opencodeToolSlim builds the opencode.json "tools" map: deny every
+// builtin + every chepherd tool via a wildcard, then re-enable only the
+// mesh-essential chepherd tools.
+//
+// CORRECTNESS (the #743 bug this fixes): opencode resolves the "tools"
+// map into permissions by iterating Object.entries and applying
+// last-entry-wins. Go's json.Marshal sorts map keys alphabetically, and
+// the deny-wildcard "chepherd_chepherd_*" sorts BEFORE the specific
+// "chepherd_chepherd_<x>" allows ('*' = 0x2A precedes '_a'/'_g'/'_l'/'_s'),
+// so the specific allows land last and win. The old #743 slim used
+// "chepherd*": false with single-prefix re-enables that never matched the
+// real double-prefixed names, so every chepherd tool stayed denied.
+//
+// Builtins are listed explicitly (a bare "*": false would also deny the
+// chepherd wildcard's specific re-enables if it sorted between them, and
+// keeping the builtin set explicit makes the deny surface auditable).
+func opencodeToolSlim() map[string]any {
+	t := map[string]any{
+		// opencode builtins this mesh worker doesn't need.
+		"bash": false, "edit": false, "write": false, "read": false,
+		"glob": false, "grep": false, "webfetch": false, "websearch": false,
+		"skill": false, "task": false, "todowrite": false, "patch": false,
+		// deny every chepherd MCP tool…
+		"chepherd_chepherd_*": false,
+	}
+	// …then re-enable only the mesh-essential ones.
+	for _, name := range opencodeMeshTools {
+		t[name] = true
+	}
+	return t
+}
+
+// opencodeMeshPrompt is the focused build-agent system prompt that
+// replaces opencode's ~10.5 kB builtin prompt. It carries the agent's
+// identity, the four MCP tool names, and the knock protocol so the model
+// can drive a full round-trip without the verbose AGENTS.md (system
+// prompt drops 21,850→1,257 chars; tool-calling verified intact live).
+func opencodeMeshPrompt(name string) string {
+	return fmt.Sprintf(`You are %q, a worker agent in a chepherd multi-agent mesh. `+
+		`You collaborate with peer agents and a human operator through MCP tools. `+
+		`Call MCP tools as native tool calls (never as bash).
+
+Available chepherd tools:
+- chepherd_chepherd_get_task(taskID): fetch an inbound task envelope
+- chepherd_chepherd_send_to_session(name, body): reply to or message a peer
+- chepherd_chepherd_alert_human(kind, urgency, body): escalate to the operator
+- chepherd_chepherd_list: list peers
+
+KNOCK PROTOCOL: when your input contains a line like [chepherd-knock taskID=<uuid> from=<name>], `+
+		`a peer sent you a task. Handle it now: (1) call chepherd_chepherd_get_task with that taskID `+
+		`to read the request; (2) do the task; (3) call chepherd_chepherd_send_to_session with `+
+		`name=<from> and body=<your reply>. Also print your reply. Be concise — do not call tools you do not need.`, name)
+}
+
+// opencodeProviderOutputCap returns the opencode.json "provider" block
+// that caps the model's max output tokens, or nil for models that don't
+// need it. opencode defaults max_tokens to the model's full output limit
+// (40,960 for cerebras gpt-oss). Groq counts prompt_tokens + reserved
+// max_tokens against its 12k TPM, so an uncapped request 413s
+// ("Request too large … Requested ~32 k") regardless of the actual
+// prompt size. Capping output to opencodeMaxOutputTokens drops the
+// reservation under the cap.
+//
+// The provider id is the first path segment of the "provider/model"
+// string (e.g. "groq/llama-3.3-70b-versatile" → "groq"). The per-model
+// limit requires BOTH context and output (opencode schema), so context is
+// set to a generous default that opencode clamps to the real window.
+func opencodeProviderOutputCap(model string) map[string]any {
+	slash := strings.IndexByte(model, '/')
+	if slash <= 0 || slash >= len(model)-1 {
+		return nil
+	}
+	providerID := model[:slash]
+	modelID := model[slash+1:]
+	return map[string]any{
+		providerID: map[string]any{
+			"models": map[string]any{
+				modelID: map[string]any{
+					"limit": map[string]any{
+						"context": opencodeContextWindow,
+						"output":  opencodeMaxOutputTokens,
+					},
+				},
+			},
+		},
+	}
+}
+
+const (
+	// opencodeMaxOutputTokens caps each opencode request's reserved
+	// completion budget. Mesh replies are short (a peer message / an
+	// operator alert), so 1024 is ample and keeps Groq's
+	// prompt+reserved-output total well under its 12k TPM.
+	opencodeMaxOutputTokens = 1024
+	// opencodeContextWindow is a generous context limit; opencode clamps
+	// it to the model's real window. Required alongside output by the
+	// per-model limit schema.
+	opencodeContextWindow = 131072
+)
 
 // opencodeModelFromEnv resolves the opencode provider/model string from
 // the spawn env, mirroring scripts/agent-entrypoint.sh's selection EXACTLY:
@@ -2984,18 +3144,33 @@ func opencodeModelFromEnv(spec SpawnSpec) string {
 	if m := lookup("OPENCODE_MODEL"); m != "" {
 		return m
 	}
-	// #744 follow-up — prefer Cerebras over Groq. opencode emits ~40k-token
-	// requests (system prompt + tools + briefing + file context); Groq's free
-	// tier caps at 12k TPM and rejects them with 413, so a Groq-default opencode
-	// agent never works (operator-observed). Cerebras's free tier has the
-	// throughput headroom. cerebras/gpt-oss-120b is a verified-available model
-	// id (the old cerebras/llama-3.3-70b 404s — Cerebras serves gpt-oss-120b /
-	// zai-glm-4.7, not llama-3.3-70b).
-	if lookup("CEREBRAS_API_KEY") != "" {
-		return "cerebras/gpt-oss-120b"
-	}
+	// Prefer Groq over Cerebras for the opencode default (REVERSES the #744
+	// Cerebras-first preference, which the TPM slim + a live A/B made obsolete).
+	//
+	// The #744 comment claimed "Groq 413s, never works" — that was true while
+	// opencode reserved the model's full 40,960 max_tokens, which Groq counts
+	// against its 12k TPM. The per-model output cap (opencodeProviderOutputCap,
+	// writeFlavorMCPConfig) drops that reservation to 1024, so a full
+	// knock→get_task→reply round-trip now fits Groq 12k (measured live
+	// 2026-06-21: sum 8,272 prompt_tokens, no 413).
+	//
+	// Why Groq is now the BETTER default: Cerebras's free models (gpt-oss-120b,
+	// zai-glm-4.7) are REASONING models. opencode replays the assistant's
+	// reasoning_content in the follow-up request, and Cerebras's OpenAI-compatible
+	// endpoint REJECTS that field ("messages.N.assistant.reasoning_content …
+	// unsupported"), which kills the multi-step tool loop on the SECOND request —
+	// reproduced live on the production path even with the output cap, and not
+	// fixable via opencode.json today. Groq's llama-3.3-70b-versatile is a
+	// non-reasoning model, so it has no reasoning_content to replay: the full
+	// round-trip completes cleanly (verified live on the production daemon).
+	// Cerebras stays selectable (per-agent pick / OPENCODE_MODEL) for short,
+	// single-shot work where the reasoning replay doesn't bite, and as a
+	// fallback when no Groq key is present.
 	if lookup("GROQ_API_KEY") != "" {
 		return "groq/llama-3.3-70b-versatile"
+	}
+	if lookup("CEREBRAS_API_KEY") != "" {
+		return "cerebras/gpt-oss-120b"
 	}
 	return ""
 }
