@@ -51,7 +51,7 @@
   import AgentSettings from '../v08/AgentSettings.svelte';
   import TeamSettings from '../v08/TeamSettings.svelte';
   import SpawnWizardV9 from '../v09/SpawnWizardV9.svelte';
-  import { registerRoster } from '../../lib/agentIdentity.js';
+  import { registerRoster, agentIdentity } from '../../lib/agentIdentity.js';
   import * as T from './layoutWs.js';
 
   let { version = 'ws' } = $props();
@@ -312,23 +312,61 @@
   // The Work seed's centre column is an AUTO-managed region (its parent split
   // carries autoRegion==='work', see layoutWs). The dashboard reactively
   // rebuilds that region into a balanced grid of up-to-4 live, non-shepherd
-  // agent terminals — ONE pane per live agent, capped at 4 — as the roster
-  // changes:  0 agents → 1 empty "no agent yet" pane; 1→1; 2→2; 3→3; 4→4;
-  // 5+ → first 4. Each pane is auto-bound to a distinct agent. The instant the
-  // operator manually edits the Work layout (split / close / rebind / change a
-  // pane's widget) we set the per-workspace `workManual` flag and stop touching
-  // the region, so we never clobber their arrangement. The Sessions (left) and
-  // Details (right) rails are OUTSIDE the region and are never auto-managed.
+  // agent terminals — ONE pane per live agent, capped at 4 VISIBLE — as the
+  // roster changes:  0 agents → 1 empty "no agent yet" pane; 1→1; 2→2; 3→3;
+  // 4→4. With >4 agents the grid still shows 4 panes but a compact SELECTOR
+  // (rendered over the canvas, see AUTO-SELECTOR below) lets the operator
+  // choose WHICH 4 occupy the panes, so no agent is ever unreachable; the
+  // default selection is the first 4 by spawn order. Each pane is auto-bound
+  // to a distinct agent. The instant the operator manually edits the Work
+  // layout (split / close / rebind / change a pane's widget) we set the
+  // per-workspace `workManual` flag and stop touching the region, so we never
+  // clobber their arrangement. The Sessions (left) and Details (right) rails
+  // are OUTSIDE the region and are never auto-managed.
+  //
+  // Team scoping: the roster is every live non-shepherd agent. In the common
+  // single-team deployment that IS "the team's agents"; multi-team operators
+  // keep cross-team visibility (filtering to one team here would HIDE peers
+  // and regress that case). The selector reaches all of them regardless.
 
-  // Up-to-4 live non-shepherd agent names, oldest-first (stable ordering so a
-  // given pane stays bound to the same agent across refreshes).
-  function liveWorkAgents() {
+  // MAX_TERMINAL_PANES — the hard cap on simultaneously-visible auto terminals.
+  // 1→full pane, 2→split, 3→one-over-pair, 4→2×2 (see layoutWs.gridOf). Beyond
+  // this the auto-selector swaps agents through the same 4 panes.
+  const MAX_TERMINAL_PANES = 4;
+
+  // FULL live non-shepherd agent roster, oldest-first (stable ordering so a
+  // given pane stays bound to the same agent across refreshes). NOT capped —
+  // the cap is applied per-workspace via the visible-selection logic so the
+  // selector can reach every agent.
+  function liveWorkRoster() {
     return sessions
       .filter((s) => !s.exited && s.live !== false && s.role !== 'shepherd')
       .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '') || (a.name || '').localeCompare(b.name || ''))
-      .slice(0, 4)
       .map((s) => s.name);
   }
+
+  // The ≤4 agent names that should currently occupy a workspace's auto-region
+  // panes, derived from the full roster and the operator's per-workspace
+  // visible selection (wsVisibleAgents). Pure: prunes selections whose agent
+  // has gone away, preserves the surviving selection order, then BACKFILLS from
+  // the front of the roster (spawn order) up to the cap. With ≤4 agents this is
+  // just the whole roster (no selector shown). With >4 it is the chosen subset,
+  // defaulting to the first 4 on first run.
+  function visibleAgentsFor(wsId, roster) {
+    if (roster.length <= MAX_TERMINAL_PANES) return roster.slice();
+    const chosen = (wsVisibleAgents[wsId] || []).filter((n) => roster.includes(n));
+    const out = chosen.slice(0, MAX_TERMINAL_PANES);
+    for (const n of roster) {
+      if (out.length >= MAX_TERMINAL_PANES) break;
+      if (!out.includes(n)) out.push(n);   // backfill first-by-spawn-order
+    }
+    return out;
+  }
+
+  // Per-workspace selection of which agents occupy the ≤4 auto panes when the
+  // roster exceeds MAX_TERMINAL_PANES. Empty / unset → default (first N by
+  // spawn order, via visibleAgentsFor's backfill). { workspaceId -> [name,…] }.
+  let wsVisibleAgents = $state({});
 
   // The ordered list of agent names currently bound in a region subtree (its
   // terminal leaves, left-to-right / top-to-bottom). Used to detect whether the
@@ -354,13 +392,13 @@
   // workspace the operator has taken manual control of.
   function syncAutoTerminalRegions() {
     if (!persistReady) return;
-    const names = liveWorkAgents();                 // 0..4 live agents
+    const roster = liveWorkRoster();                // full live roster (uncapped)
     for (const w of workspaces) {
       if (w.workManual) continue;                   // operator owns this layout
       const region = T.findAutoRegionSplit(w.layout);
       if (!region) continue;                        // not a Work-style desktop
       const have = regionAgentNames(region.a);
-      const want = names.slice();                   // [] when no agents
+      const want = visibleAgentsFor(w.id, roster);  // ≤4 chosen/default agents
       // Already in sync (same count + same bindings, in order)? Skip — don't
       // churn ids/focus. The empty case: have===[''] (one unbound terminal),
       // want===[] → rebuild to one empty pane only if not already a lone empty.
@@ -381,6 +419,49 @@
         if (firstTermId) { wsFocus = { ...wsFocus, [w.id]: firstTermId }; pushTermMru(w.id, firstTermId); }
       }
     }
+  }
+
+  // ---- AUTO-SELECTOR (roster > 4) ----------------------------------------
+  // When the active workspace is an AUTO-managed terminal desktop (not taken
+  // manual) AND the live roster exceeds MAX_TERMINAL_PANES, we render a compact
+  // selector strip over the canvas (see the BODY markup) so EVERY agent stays
+  // reachable through the ≤4 panes. The selector is purely a view over the
+  // auto-region — it does NOT mark the workspace manual.
+
+  // Full live roster (reactive). Drives both the grid sync and the selector.
+  let workRoster = $derived(
+    sessions
+      .filter((s) => !s.exited && s.live !== false && s.role !== 'shepherd')
+      .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '') || (a.name || '').localeCompare(b.name || ''))
+      .map((s) => s.name)
+  );
+  // True when the active desktop auto-manages terminals and we have overflow.
+  let showAgentSelector = $derived(
+    !!activeWs && !activeWs.workManual
+    && !!T.findAutoRegionSplit(activeWs.layout)
+    && workRoster.length > MAX_TERMINAL_PANES
+  );
+  // The ≤4 currently-visible agents on the active desktop (for chip highlight).
+  let visibleAgents = $derived(activeWs ? visibleAgentsFor(activeWs.id, workRoster) : []);
+
+  // Toggle an agent into / out of the visible ≤4 on the active auto desktop.
+  // Selecting a new agent when 4 are already visible swaps OUT the first
+  // (oldest-bound) one so we never exceed the pane cap. De-selecting an agent
+  // frees its slot, which visibleAgentsFor backfills from the roster front.
+  function toggleVisibleAgent(name) {
+    if (!activeWs || !name) return;
+    const wsId = activeWs.id;
+    const cur = visibleAgentsFor(wsId, workRoster);   // resolved current ≤4
+    let next;
+    if (cur.includes(name)) {
+      if (cur.length <= 1) return;                    // keep at least one pane
+      next = cur.filter((n) => n !== name);
+    } else {
+      next = (cur.length >= MAX_TERMINAL_PANES ? cur.slice(1) : cur.slice());
+      next.push(name);
+    }
+    wsVisibleAgents = { ...wsVisibleAgents, [wsId]: next };
+    selectedAgent = name; pushMRU(name);
   }
 
   function selectAgent(name) {
@@ -1031,6 +1112,7 @@
     if (!persistReady) return;
     void liveWorkKey;          // re-run when the live-agent set changes
     void workspaces.length;    // …and when a workspace is added/duplicated
+    void wsVisibleAgents;      // …and when the >4 visible-selection changes
     syncAutoTerminalRegions();
   });
 
@@ -1267,6 +1349,33 @@
          recursive tree of generic, resizable, content-changeable panes. -->
     <main class="center">
       <div class="canvas-body">
+        {#if showAgentSelector}
+          <!-- AUTO-SELECTOR: roster > 4 → choose which agents fill the ≤4
+               panes. Every agent reachable; none ever hidden. -->
+          <div class="agent-selector" role="toolbar" aria-label="Choose which agents fill the terminal panes" data-testid="ws-agent-selector">
+            <span class="as-lede" title="Showing {visibleAgents.length} of {workRoster.length} agents — click to swap which fill the {MAX_TERMINAL_PANES} panes">
+              {visibleAgents.length}/{workRoster.length}
+            </span>
+            <div class="as-chips">
+              {#each workRoster as name (name)}
+                {@const on = visibleAgents.includes(name)}
+                {@const id = agentIdentity(name)}
+                <button
+                  class="as-chip {on ? 'on' : ''}"
+                  aria-pressed={on}
+                  data-testid="ws-agent-chip"
+                  data-agent={name}
+                  data-on={on}
+                  title={on ? `${name} — visible (click to hide)` : `${name} — hidden (click to show)`}
+                  onclick={() => toggleVisibleAgent(name)}
+                >
+                  <span class="as-dot" style={`background:${id.color}`}></span>
+                  <span class="as-name">{name}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
         {#if activeWs}
           {#key activeWs.id}
             <div class="stage-grid">
@@ -1419,8 +1528,20 @@
 
   /* ===================== BODY — ONE GENERIC TREE ===================== */
   .center { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 0.45rem; }
-  .canvas-body { flex: 1; min-height: 0; min-width: 0; overflow: hidden; position: relative; background: var(--calm-bg); }
-  .stage-grid { width: 100%; height: 100%; min-height: 0; min-width: 0; }
+  .canvas-body { flex: 1; min-height: 0; min-width: 0; overflow: hidden; position: relative; background: var(--calm-bg); display: flex; flex-direction: column; }
+  .stage-grid { flex: 1; width: 100%; min-height: 0; min-width: 0; }
+
+  /* AUTO-SELECTOR (roster > 4): a compact strip above the ≤4-pane grid that
+     lets the operator swap which agents fill the panes. Every agent reachable. */
+  .agent-selector { flex: 0 0 auto; display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.4rem 0.4rem; min-width: 0; }
+  .as-lede { flex: 0 0 auto; font-size: 0.7rem; font-weight: 600; color: var(--calm-fg-faint); padding: 0.1rem 0.4rem; border: 1px solid var(--calm-border); border-radius: 999px; white-space: nowrap; }
+  .as-chips { display: flex; align-items: center; gap: 0.3rem; overflow-x: auto; min-width: 0; padding-bottom: 0.1rem; }
+  .as-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.35rem; max-width: 14rem; padding: 0.2rem 0.55rem; font-size: 0.74rem; line-height: 1.2; color: var(--calm-fg-muted); background: var(--calm-chip); border: 1px solid var(--calm-border); border-radius: 999px; cursor: pointer; transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease; }
+  .as-chip:hover { background: var(--calm-chip-hover); }
+  .as-chip.on { color: var(--calm-fg); background: var(--calm-surface-2); border-color: var(--calm-border-strong); box-shadow: var(--calm-shadow-sm); }
+  .as-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; opacity: 0.45; }
+  .as-chip.on .as-dot { opacity: 1; }
+  .as-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* ===================== CONTEXT MENU ===================== */
   .ctx-menu { position: fixed; z-index: 1300; min-width: 12rem; }
