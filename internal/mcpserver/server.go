@@ -85,6 +85,22 @@ type Server struct {
 	// so agents can fetch tasks emitted via knock markers. nil
 	// disables the tool (returns -32000 "task store not wired").
 	taskStore persistence.TaskRepository
+
+	// keepAliveInterval overrides the streamable-HTTP SSE keep-alive
+	// cadence. Zero (the default in both constructors) means use the
+	// package const sseKeepAliveInterval; tests inject a short interval
+	// to assert keep-alive frames flow without waiting 15s. Read via
+	// sseKeepAlive().
+	keepAliveInterval time.Duration
+}
+
+// sseKeepAlive returns the effective SSE keep-alive interval: the
+// per-server override when set (>0), otherwise the package default.
+func (s *Server) sseKeepAlive() time.Duration {
+	if s.keepAliveInterval > 0 {
+		return s.keepAliveInterval
+	}
+	return sseKeepAliveInterval
 }
 
 // SetAuthToken configures the bearer token required on every WS upgrade

@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -42,6 +43,32 @@ import (
 // mcpSessionIDHeader is the spec-defined header name for the
 // MCP session-id round-trip.
 const mcpSessionIDHeader = "Mcp-Session-Id"
+
+// sseKeepAliveInterval is how often handleStreamableGET emits an SSE
+// comment frame on the otherwise-idle server→client channel.
+//
+// Root cause it fixes (#copilot SSE death, 2026-06-20): the streamable
+// GET handler used to open the SSE stream, write one comment frame, and
+// block until the request context cancelled — emitting ZERO bytes for
+// the rest of the connection's life. An idle SSE stream that never
+// receives data is torn down by the client transport's idle timeout.
+// GitHub Copilot CLI (a Node/Ink app on the MCP TypeScript SDK's
+// StreamableHTTPClientTransport over undici `fetch`) tore the stream
+// down + logged `SSE stream disconnected: TypeError: fetch failed` on a
+// suspiciously regular ~11-minute cadence, reconnecting each time; the
+// repeated failures eventually killed the copilot process so it stopped
+// answering knocks. claude-code/gemini-cli/opencode share the same
+// transport and the same latent exposure (they just retry more
+// gracefully).
+//
+// 15s is the conventional SSE heartbeat interval — comfortably under
+// every client idle timeout (undici's default request/body timeout is
+// 300s; the observed copilot teardown was ~660s) and under any NAT /
+// proxy conntrack idle window — while adding negligible traffic (one
+// ~14-byte comment frame per agent every 15s). SSE comment frames
+// (lines starting with ":") are ignored by every conformant SSE client,
+// so this is invisible to the agents but keeps the socket warm.
+const sseKeepAliveInterval = 15 * time.Second
 
 // handleStreamableHTTP serves the canonical /mcp endpoint per
 // Anthropic's MCP Streamable HTTP transport spec. Method dispatch:
@@ -109,12 +136,14 @@ func (s *Server) handleStreamablePOST(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleStreamableGET opens the server-initiated SSE channel. v0.9.4
-// ships a minimum-viable keep-alive: the connection stays open until
-// the client cancels OR the server tears down. Future Waves push
-// task-progress / log events through it; today's chepherd MCP server
-// is response-only so the GET path emits a single comment frame and
-// holds.
+// handleStreamableGET opens the server-initiated SSE channel. The
+// connection stays open until the client cancels OR the server tears
+// down. Today's chepherd MCP server is response-only over POST, so the
+// GET channel carries no application messages — but it MUST emit a
+// periodic keep-alive frame: an SSE stream that never sends bytes is
+// reaped by the client transport's idle timeout (see
+// sseKeepAliveInterval for the #copilot ~11-min disconnect RCA). Future
+// Waves push task-progress / log events through this same channel.
 func (s *Server) handleStreamableGET(w http.ResponseWriter, r *http.Request) {
 	if code, msg := s.requireAuth(r); code != 0 {
 		http.Error(w, msg, code)
@@ -130,10 +159,34 @@ func (s *Server) handleStreamableGET(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set(mcpSessionIDHeader, sessionID)
 	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-	if flusher != nil {
-		_, _ = fmt.Fprintf(w, ": chepherd streamable session %s\n\n", sessionID)
-		flusher.Flush()
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// No flusher → we can't stream incrementally; without flushing,
+		// keep-alive frames would buffer and never reach the client.
+		// Hold the connection open until the client/server tears down so
+		// behaviour matches the pre-keepalive minimum-viable handler.
+		<-r.Context().Done()
+		return
 	}
-	<-r.Context().Done()
+	_, _ = fmt.Fprintf(w, ": chepherd streamable session %s\n\n", sessionID)
+	flusher.Flush()
+
+	ticker := time.NewTicker(s.sseKeepAlive())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			// SSE comment frame (line starts with ":") — ignored by
+			// conformant SSE clients, but keeps the stream from going
+			// idle so the client transport doesn't reap it. A write
+			// error means the peer is gone; return and let the handler
+			// (and its goroutine) exit.
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
