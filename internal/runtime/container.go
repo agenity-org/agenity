@@ -380,6 +380,12 @@ func (r *PodmanRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 	// spawn; (3) the canonical update path is bumping the chepherd-agent
 	// image tag, not mutating a running container. Disable the noisy banner.
 	podArgs = append(podArgs, "-e", "DISABLE_AUTOUPDATER=1")
+	// Same trap for the GitHub Copilot CLI: @github/copilot self-updates its
+	// linux-x64 binary on start and hits EACCES on the root-owned
+	// /usr/lib/node_modules — which DERAILS the agent (operator-observed
+	// 2026-06-20: qa/copilot connected MCP but never called get_task, stuck on
+	// the failed update). COPILOT_AUTO_UPDATE=false disables that self-update.
+	podArgs = append(podArgs, "-e", "COPILOT_AUTO_UPDATE=false")
 
 	podArgs = append(podArgs, "chepherd-agent:latest")
 	podArgs = append(podArgs, argv...)
@@ -567,6 +573,7 @@ func (r *DockerRuntime) SpawnArgs(agentName, agentHomeDir, agentSecretsDir, cwd 
 		"-e", "TERM=xterm-256color",
 		"-e", "COLORTERM=truecolor",
 		"-e", "DISABLE_AUTOUPDATER=1",
+		"-e", "COPILOT_AUTO_UPDATE=false", // #copilot self-update EACCES-derails the agent; disable it
 	}
 	// #172 — same per-agent PVC mount as PodmanRuntime above. Docker
 	// has no equivalent of podman's --root scoping; create the named
