@@ -1184,6 +1184,20 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// (#89). Read by the bridge in BridgeStdioToHTTP via os.Getenv.
 	envWithMCP = append(envWithMCP, "CHEPHERD_AGENT_NAME="+spec.Name)
 
+	// opencode — honor the wizard's per-agent model pick. opencode reads its
+	// model from the OPENCODE_MODEL env var (a "provider/model" string like
+	// "cerebras/gpt-oss-120b" / "groq/llama-3.3-70b-versatile" / "google/…"),
+	// NOT a --model flag, so the model_tier switch above (which appends
+	// --model for claude-code/qwen-code/lean-coder) can't reach it. The global
+	// vault OPENCODE_MODEL overlay was appended above and hard-pinned EVERY
+	// opencode agent to ONE model regardless of what the operator selected
+	// per-agent in the spawn wizard (operator-reported 2026-06-20: "I select
+	// groq/cerebras for opencode but it's hardcoded to gemini"). Append the
+	// per-agent value LAST so envSliceToMap's last-wins dedup overrides the
+	// vault default for THIS agent only; agents spawned without a pick still
+	// fall back to the vault OPENCODE_MODEL.
+	envWithMCP = append(envWithMCP, opencodeModelOverrideEnv(spec.AgentSlug, spec.StatSheet.ModelTier)...)
+
 	// For Claude Code, pass the absolute mcp-config path explicitly.
 	// Without --mcp-config, Claude only loads .mcp.json after the
 	// operator approves it in the workspace-trust dialog — which our
@@ -3968,6 +3982,23 @@ func envSliceToMap(env []string) map[string]string {
 		}
 	}
 	return m
+}
+
+// opencodeModelOverrideEnv returns the per-agent OPENCODE_MODEL override for an
+// opencode agent whose operator picked a model in the spawn wizard, or nil.
+// opencode resolves its model from OPENCODE_MODEL (a "provider/model" string,
+// e.g. "groq/llama-3.3-70b-versatile" / "cerebras/gpt-oss-120b" / "google/…"),
+// NOT a --model flag — so the per-agent pick can't ride the model_tier→--model
+// path the other flavors use. Returned to be appended AFTER the global vault
+// OPENCODE_MODEL overlay so envSliceToMap's last-wins dedup makes the operator's
+// per-agent selection win over the vault default (operator-reported 2026-06-20:
+// picked groq/cerebras for opencode but every agent ran on the hardcoded
+// vault gemini). Only opencode is affected; other slugs return nil.
+func opencodeModelOverrideEnv(slug, modelTier string) []string {
+	if slug == "opencode" && modelTier != "" {
+		return []string{"OPENCODE_MODEL=" + modelTier}
+	}
+	return nil
 }
 
 // claudeOAuthClientID is the public client_id claude-code uses in its
