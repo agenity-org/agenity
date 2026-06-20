@@ -85,36 +85,31 @@ func TestOpencodeModelOverride_NonOpencodeSlug_NoOverride(t *testing.T) {
 	}
 }
 
-// FINDING (documented, NOT fixed here): opencodeModelOverrideEnv /
-// opencodeModelFromEnv gate on `modelTier != ""`, NOT on a TrimSpace. A
-// whitespace-only ModelTier (e.g. a client POSTing "model_tier": "  ") is
-// therefore treated as a REAL pick: the override emits OPENCODE_MODEL="  " and
-// opencodeModelFromEnv returns "  " instead of falling back to the vault
-// default. The ticket's stated intent is "whitespace/empty model_tier falls
-// back to vault" — the empty case does, the whitespace case does NOT. ModelTier
-// is set verbatim from JSON (catalog.go) with no trimming on the path, so this
-// is reachable from a malformed client request (not the normal wizard, which
-// sends real model ids). These tests PIN CURRENT BEHAVIOR so the gap is visible
-// and a future trim-fix flips them deliberately rather than silently. See the
-// agent report for the recommended fix (TrimSpace at the gate).
-func TestOpencodeModelOverride_WhitespaceModelTier_CurrentBehavior_NotTrimmed(t *testing.T) {
+// FIXED: opencodeModelOverrideEnv / opencodeModelFromEnv now TrimSpace the
+// model_tier before the gate. A whitespace-only ModelTier (e.g. a malformed
+// client POSTing "model_tier": "  ", set verbatim from JSON with no trim on the
+// path) is NOT a real pick — it now falls back to the vault default instead of
+// emitting OPENCODE_MODEL="  " / returning "  " as a bogus provider/model. The
+// ticket's stated intent ("whitespace/empty model_tier falls back to vault")
+// holds for BOTH the empty and the whitespace case. These tests pin the
+// trimmed behavior (flipped from the earlier NotTrimmed pins).
+func TestOpencodeModelOverride_WhitespaceModelTier_TrimmedToVaultFallback(t *testing.T) {
 	out := opencodeModelOverrideEnv("opencode", "   ")
-	// Current behavior: whitespace is NOT empty, so an override IS emitted.
-	if len(out) != 1 || out[0] != "OPENCODE_MODEL=   " {
-		t.Fatalf("documenting current (untrimmed) behavior: got %v, want [OPENCODE_MODEL=   ]"+
-			" — if this now returns nil, the code started trimming; update this test + the finding", out)
+	// Whitespace trims to empty → no override emitted → vault default applies.
+	if out != nil {
+		t.Fatalf("whitespace model_tier should trim to empty (no override); got %v", out)
 	}
 }
 
-func TestOpencodeModelFromEnv_WhitespaceModelTier_CurrentBehavior_NotTrimmed(t *testing.T) {
+func TestOpencodeModelFromEnv_WhitespaceModelTier_TrimmedToVaultFallback(t *testing.T) {
 	spec := SpawnSpec{AgentSlug: "opencode"}
 	spec.StatSheet.ModelTier = "  "
 	spec.Env = []string{"OPENCODE_MODEL=cerebras/gpt-oss-120b"} // a valid vault default present
 	got := opencodeModelFromEnv(spec)
-	// Current behavior: whitespace ModelTier wins over the valid env vault default.
-	if got != "  " {
-		t.Fatalf("documenting current (untrimmed) behavior: opencode.json model = %q, want \"  \" "+
-			"(whitespace ModelTier currently beats the vault default; a trim-fix would make this fall back)", got)
+	// Whitespace ModelTier trims to empty → falls back to the env vault default.
+	if got != "cerebras/gpt-oss-120b" {
+		t.Fatalf("whitespace model_tier should fall back to the vault default: "+
+			"opencode model = %q, want cerebras/gpt-oss-120b", got)
 	}
 }
 

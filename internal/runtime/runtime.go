@@ -3128,8 +3128,12 @@ func opencodeModelFromEnv(spec SpawnSpec) string {
 	// (operator-reported 2026-06-20: picked groq/cerebras, every opencode agent
 	// still ran google/gemini-2.5-flash — its log showed providerID=google even
 	// though the container env OPENCODE_MODEL was the picked provider).
-	if spec.StatSheet.ModelTier != "" {
-		return spec.StatSheet.ModelTier
+	// A whitespace-only model_tier ("  ") is NOT a real pick (a malformed
+	// client can set it verbatim from JSON with no trim on the path) — trim
+	// it so it falls through to the provider-key defaults / vault default
+	// rather than returning "  " as a bogus provider/model string.
+	if tier := strings.TrimSpace(spec.StatSheet.ModelTier); tier != "" {
+		return tier
 	}
 	lookup := func(key string) string {
 		prefix := key + "="
@@ -4186,6 +4190,12 @@ func envSliceToMap(env []string) map[string]string {
 // picked groq/cerebras for opencode but every agent ran on the hardcoded
 // vault gemini). Only opencode is affected; other slugs return nil.
 func opencodeModelOverrideEnv(slug, modelTier string) []string {
+	// A whitespace-only model_tier ("  ") is NOT a real pick — a malformed
+	// client can set it verbatim from JSON with no trim on the path. Treat it
+	// as empty so the global vault OPENCODE_MODEL default applies, rather than
+	// emitting OPENCODE_MODEL="  " (which opencode would try to resolve as a
+	// provider/model and fail).
+	modelTier = strings.TrimSpace(modelTier)
 	if slug == "opencode" && modelTier != "" {
 		return []string{"OPENCODE_MODEL=" + modelTier}
 	}
