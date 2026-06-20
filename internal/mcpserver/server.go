@@ -836,6 +836,23 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			NoSubmit   bool `json:"no_submit"`
 		}
 		_ = json.Unmarshal(args, &a)
+		// "operator"/"human" is the human, NOT an agent PTY session, so
+		// s.rt.Get returns nil and the shim used to reply "no such session:
+		// operator" — silently dropping every agent reply addressed to the
+		// operator. An operator message arrives with from="operator", so when
+		// the agent replies via send_to_session to that handle (exactly as the
+		// knock-pattern briefing instructs) it hit this dead path and the
+		// operator saw nothing in Talk (operator-reported 2026-06-20: messaged
+		// all 5 agents, the MCP log showed send_to_session→operator → OK, but
+		// the transcript had zero replies). Route operator-addressed messages
+		// into the HumanInbox — the same sink alert_human uses — so they
+		// surface in the Talk transcript (collectTranscriptRows section 3) AND
+		// the dashboard inbox. No Deliverer/PTY session needed for this path.
+		if name := strings.ToLower(strings.TrimSpace(a.Name)); name == "operator" || name == "human" {
+			s.rt.HumanInbox(s.CurrentCaller(), strings.TrimRight(a.Body, "\r\n"))
+			resp.Result = map[string]any{"ok": true, "routed": "operator-inbox"}
+			return resp
+		}
 		if s.deliverer == nil {
 			resp.Error = &rpcErr{Code: -32000, Message: "send_to_session shim unavailable: mcpserver constructed without a2a.Deliverer (use mcpserver.NewWithDeliverer)"}
 			return resp
