@@ -84,10 +84,4 @@ func TestTaskList_Newest_TieBreakIsDeterministic(t *testing.T) {
 	}
 }
 
-func idsOf(ts []*persistence.Task) []string {
-	out := make([]string, len(ts))
-	for i, x := range ts {
-		out[i] = x.ID
-	}
-	return out
-}
+// idsOf lives in tasks_newest_test.go (same package); reused here.
