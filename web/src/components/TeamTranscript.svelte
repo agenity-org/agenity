@@ -10,7 +10,12 @@
 
   let { team = 'default' } = $props();
 
-  let selectedScope = $state(team); // 'all' or specific team name
+  // The "All" aggregate scope was removed from the picker — it confused more
+  // than it helped (team = the current view; recipient lives in the @mention).
+  // Consumers may still pass team="all" as a prop, so resolve that to a real
+  // team rather than leaving an unselectable scope. The backend ?teams=all
+  // endpoint is untouched; we just stop offering it in the UI.
+  let selectedScope = $state(team === 'all' ? 'default' : team);
   let teams = $state([]);            // list of teams from /api/v1/teams
   let transcript = $state({ channel: null, messages: [] });
   let composeBody = $state('');
@@ -43,21 +48,18 @@
 
   const API = '/api/v1';
 
-  // Pick a stable color per team name (HSL hash). Used for the team chip
-  // when "all" scope is selected so the operator can scan by color.
-  function teamColor(name) {
-    if (!name) return '#888';
-    let h = 0;
-    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-    return `hsl(${h % 360}, 55%, 55%)`;
-  }
-
   async function loadTeams() {
     try {
       const r = await fetch(`${API}/teams`);
       if (!r.ok) return;
       const j = await r.json();
       teams = (j.teams || []).map(t => t.name || t);
+      // If the resolved scope isn't a real team (e.g. consumer passed
+      // team="all", or "default" doesn't exist), snap to the first team so
+      // the picker always shows a valid, selectable option.
+      if (teams.length && !teams.includes(selectedScope)) {
+        selectedScope = teams[0];
+      }
     } catch {}
   }
 
@@ -214,15 +216,6 @@
     return prev && prev.author === cur.author &&
       (new Date(cur.created_at) - new Date(prev.created_at)) < 180000;
   }
-  // Recipient shown inline ONLY when it isn't a broadcast.
-  function inlineRecipient(m) {
-    const r = m.recipients || [];
-    if (!r.length || r.includes('everyone')) return '';
-    if (m.routed_to_default && m.default_target) return ''; // routed-sub line carries it
-    if (r.length === 1) return r[0];
-    return r.join(', ');
-  }
-
   // Body rendering: @-mention highlight + #-ticket auto-link.
   // Per-row team_github_url (backend #665/#662 contract) drives the repo
   // for #-ticket links; falls back to the chepherd repo for legacy rows
@@ -516,27 +509,22 @@
     <div class="header-row">
       <label>Teams:
         <select bind:value={selectedScope} class="team-picker" data-testid="team-picker">
-          <option value="all">▾ all</option>
           {#each teams as t}
             <option value={t}>{t}</option>
           {/each}
-          {#if !teams.includes(team) && team !== 'all'}
-            <option value={team}>{team}</option>
+          {#if !teams.includes(selectedScope) && selectedScope !== 'all'}
+            <option value={selectedScope}>{selectedScope}</option>
           {/if}
         </select>
       </label>
       <div class="members">
-        {#if selectedScope === 'all'}
-          Member of: {teams.join(' · ') || '(no teams)'}
-        {:else}
-          {#each (transcript.channel?.members || []).slice(0, 8) as mem}
-            <span class="member-chip" style="color: {agentIdentity(mem).color}">{agentIdentity(mem).icon} {mem}</span>
-          {/each}
-          {#if (transcript.channel?.members || []).length > 8}
-            <span class="member-chip muted">+{(transcript.channel?.members || []).length - 8}</span>
-          {/if}
-          {#if !(transcript.channel?.members || []).length}(none){/if}
+        {#each (transcript.channel?.members || []).slice(0, 8) as mem}
+          <span class="member-chip" style="color: {agentIdentity(mem).color}">{agentIdentity(mem).icon} {mem}</span>
+        {/each}
+        {#if (transcript.channel?.members || []).length > 8}
+          <span class="member-chip muted">+{(transcript.channel?.members || []).length - 8}</span>
         {/if}
+        {#if !(transcript.channel?.members || []).length}(none){/if}
       </div>
     </div>
   </header>
@@ -562,12 +550,11 @@
             <span class="chip from" class:ghost={isGrouped(msgs, mi)} style="color: {agentIdentity(m.author).color}" title={'@' + m.author + ' · ' + new Date(m.created_at).toLocaleString()}><span aria-hidden="true">{agentIdentity(m.author).icon}</span> {m.author}</span>
           </span>
           <span class="content-col">
-            {#if selectedScope === 'all' && m.team}
-              <span class="team-chip" style="background: {teamColor(m.team)}">{m.team}</span>
-            {/if}
-            {#if inlineRecipient(m)}
-              <span class="chip to" title={(m.recipients || []).join(', ')}>▸ {inlineRecipient(m)}</span>
-            {/if}
+            <!-- #695 row was "<author> > <team> ▸ <recipient> <body>" — the
+                 team is the current view and the recipient already lives in
+                 the @mention inside the body, so the breadcrumb was pure
+                 redundancy. Render "<author> <body>" only; keep alert kind
+                 labels, multi-recipient badge, routed-sub, and links. -->
             {#if kindLabel(m)}
               <span class="kind-label kind-{(m.kind || '').replace('alert:', '')}">{kindLabel(m)}</span>
             {/if}
@@ -692,16 +679,11 @@
   .kind-label.kind-stuck { background: rgba(243,156,18,0.18); color: #f39c12; }
   .kind-label.kind-question { background: rgba(241,196,15,0.18); color: #f1c40f; }
   .kind-label.kind-accomplishment { background: rgba(92,213,127,0.18); color: #5cd57f; }
-  .team-chip {
-    color: #0a0a0a; font-weight: 700; font-size: 0.7rem;
-    padding: 0.08rem 0.45rem; border-radius: 3px; text-transform: lowercase;
-  }
   .chip {
     background: var(--bg-elevated, #1a1a1a); border: 1px solid var(--border, #333);
     padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.78rem; font-family: ui-monospace, monospace;
   }
   .chip.from { color: var(--accent-2, #87ceeb); border-color: var(--accent-2, #87ceeb); }
-  .chip.to { color: #aaa; }
   .arrow { color: var(--fg-muted, #666); }
   .ts { color: var(--fg-muted, #666); font-size: 0.75rem; margin-left: auto; }
   .badge.multi { background: rgba(135,206,235,0.18); color: var(--accent-2, #87ceeb); font-size: 0.7rem; padding: 0.05rem 0.4rem; border-radius: 3px; }
@@ -757,7 +739,6 @@
   .msg.compact .chip-col { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .msg.compact .chip.from { font-weight: 600; font-size: 0.82rem; }
   .msg.compact .content-col { min-width: 0; overflow-wrap: anywhere; font-size: 0.85rem; }
-  .msg.compact .chip.to { color: var(--fg-muted, #999); font-size: 0.78rem; margin-right: 0.3rem; }
   .msg.compact .body { display: inline; }
   .msg.compact .ts { color: var(--fg-muted, #666); font-size: 0.72rem; white-space: nowrap; }
   .msg.compact .routed-sub { display: inline; font-size: 0.78rem; color: var(--fg-muted, #999); margin-right: 0.3rem; }
