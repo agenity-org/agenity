@@ -102,3 +102,63 @@ func TestTaskList_DefaultOrder_StaysAscendingForPagination(t *testing.T) {
 		t.Fatalf("default order must be ascending id (got[0]=%v)", got[0].ID)
 	}
 }
+
+// SinceID cursor pagination must keep working AFTER the Newest change: with
+// Newest=false (the default), List(SinceID=cursor) returns rows with id >
+// cursor in ascending id order. If the Newest fix had flipped the DEFAULT
+// order to DESC, `id > cursor` would page the wrong direction and a poller
+// would never advance. This walks two cursor pages end-to-end.
+func TestTaskList_SinceIDPagination_AscendingCursor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := NewStore(ctx, filepath.Join(t.TempDir(), "tasks_since.db"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+	r := store.Tasks()
+
+	base := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	const n = 10
+	for i := 0; i < n; i++ {
+		if err := r.Save(ctx, &persistence.Task{
+			ID: fmt.Sprintf("task-%04d", i), RunnerSID: "runner", State: "working",
+			Method: "message/send", CreatedAt: base.Add(time.Duration(i) * time.Minute),
+		}); err != nil {
+			t.Fatalf("Save %d: %v", i, err)
+		}
+	}
+
+	// Page 1: first 4 in ascending id order, starting from the very beginning.
+	page1, err := r.List(ctx, persistence.TaskListOpts{Limit: 4})
+	if err != nil {
+		t.Fatalf("List page1: %v", err)
+	}
+	if len(page1) != 4 || page1[0].ID != "task-0000" || page1[3].ID != "task-0003" {
+		t.Fatalf("page1 must be task-0000..task-0003 ascending, got %v", idsOf(page1))
+	}
+
+	// Page 2: cursor at the last id of page1 → must return strictly-greater ids,
+	// still ascending, with NO overlap and NO regression.
+	cursor := page1[len(page1)-1].ID // "task-0003"
+	page2, err := r.List(ctx, persistence.TaskListOpts{Limit: 4, SinceID: cursor})
+	if err != nil {
+		t.Fatalf("List page2: %v", err)
+	}
+	if len(page2) != 4 || page2[0].ID != "task-0004" || page2[3].ID != "task-0007" {
+		t.Fatalf("page2 (SinceID=%s) must be task-0004..task-0007 ascending, got %v", cursor, idsOf(page2))
+	}
+	for _, x := range page2 {
+		if x.ID <= cursor {
+			t.Fatalf("SinceID cursor leaked a non-advancing id %q (<= cursor %q) — pagination would loop", x.ID, cursor)
+		}
+	}
+}
+
+func idsOf(ts []*persistence.Task) []string {
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = t.ID
+	}
+	return out
+}

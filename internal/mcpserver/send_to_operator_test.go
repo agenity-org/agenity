@@ -78,3 +78,43 @@ func TestSendToSession_UnknownAgent_StillErrors(t *testing.T) {
 		t.Fatalf("unknown agent: want -32000 'no such session', got %+v", resp.Error)
 	}
 }
+
+// Casing / whitespace robustness: the server lowercases+trims the recipient
+// (server.go: strings.ToLower(strings.TrimSpace(a.Name))), so an LLM that
+// echoes the from= handle with stray casing/padding ("Operator", " operator ",
+// "HUMAN", "  Human") still routes to the HumanInbox rather than hitting the
+// "no such session" dead path. These document + lock that handling — if the
+// code ever stops normalizing, they go RED instead of silently regressing to
+// the original drop bug. (Verified against server.go: it DOES normalize, so
+// these are GREEN — confirming behavior, not papering over a gap.)
+func TestSendToSession_OperatorHandle_CasingAndWhitespace_RoutesToInbox(t *testing.T) {
+	cases := []struct {
+		name      string
+		recipient string
+	}{
+		{"capitalized Operator", "Operator"},
+		{"padded operator", " operator "},
+		{"uppercase HUMAN", "HUMAN"},
+		{"padded+capitalized Human", "  Human  "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, rt := newServerWithRuntime(t)
+			body := "reply for " + tc.name
+			resp := sendToSession(s, "qa", tc.recipient, body)
+			if resp.Error != nil {
+				t.Fatalf("send_to_session→%q returned error %d: %s (casing/whitespace must still route to operator inbox, not 'no such session')",
+					tc.recipient, resp.Error.Code, resp.Error.Message)
+			}
+			var found bool
+			for _, e := range rt.Inbox() {
+				if e.From == "qa" && e.Body == body {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("recipient %q: reply not in HumanInbox; inbox=%+v", tc.recipient, rt.Inbox())
+			}
+		})
+	}
+}
