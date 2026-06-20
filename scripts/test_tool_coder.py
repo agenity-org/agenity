@@ -98,8 +98,9 @@ def main():
         tool_call("call-1", "run_bash", '{"cmd": "echo TOOLCODER_MARKER"}'),
         final_text("the command printed TOOLCODER_MARKER"),
     ])
-    reply, steps = m.run_tool_loop("run echo and tell me what it printed")
+    reply, steps, ok = m.run_tool_loop("run echo and tell me what it printed")
     check("tool loop final reply", reply, "the command printed TOOLCODER_MARKER")
+    check_true("tool loop ok=True on a real answer", ok)
     check("tool loop executed exactly 1 tool", len(steps), 1)
     tname, targs, result = steps[0]
     check("tool name executed", tname, "run_bash")
@@ -140,16 +141,18 @@ def main():
 
     m = load()
     m._chat = strict_chat([final_text("42")])
-    reply, steps = m.run_tool_loop("what is the answer?")
+    reply, steps, ok = m.run_tool_loop("what is the answer?")
     check("plain-text terminates immediately", reply, "42")
+    check_true("plain-text answer ok=True", ok)
     check("plain-text runs no tools", len(steps), 0)
     check("plain-text issues exactly one _chat call", m._chat.state["i"], 1)
 
     # ── 2b. <think> scratchpad is stripped from the final answer (qwen3)
     m = load()
     m._chat = scripted_chat([final_text("<think>scratch</think>clean answer")])
-    reply, _ = m.run_tool_loop("x")
+    reply, _, ok = m.run_tool_loop("x")
     check("final answer strips <think>", reply, "clean answer")
+    check_true("stripped-but-nonempty answer ok=True", ok)
 
     # ── 3. --max-steps BOUNDS a runaway loop. Model ALWAYS asks for a tool.
     m = load(argv=["--max-steps", "3"])
@@ -169,11 +172,12 @@ def main():
         return {"choices": [{"message": {"content": "forced final after budget"}}]}
 
     m._post = fake_post
-    reply, steps = m.run_tool_loop("loop forever")
+    reply, steps, ok = m.run_tool_loop("loop forever")
     check("runaway bounded to MAX_STEPS _chat rounds", m._chat.state["i"], 3)
     check("runaway executed MAX_STEPS tools", len(steps), 3)
     check("fall-through made exactly one final _post", post_calls["n"], 1)
     check("runaway returns the forced final text", reply, "forced final after budget")
+    check_true("budget fall-through with text still ok=True", ok)
 
     # ── 4. handle_knock: get_task → loop → reply routing (mirrors lean-coder test)
     # 4a. peer sender → send_to_session
