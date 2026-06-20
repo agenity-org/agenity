@@ -2955,6 +2955,17 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 // process env (operator-registered keys). Returns "" when none apply —
 // opencode then auto-resolves from any provider key present at runtime.
 func opencodeModelFromEnv(spec SpawnSpec) string {
+	// The operator's PER-AGENT pick in the spawn wizard (stat_sheet.model_tier,
+	// a "provider/model" string) wins over everything. opencode reads its model
+	// from opencode.json (this value), and that config file takes precedence
+	// over the OPENCODE_MODEL env var — so without this branch the wizard pick
+	// was silently overridden by the global vault default written below
+	// (operator-reported 2026-06-20: picked groq/cerebras, every opencode agent
+	// still ran google/gemini-2.5-flash — its log showed providerID=google even
+	// though the container env OPENCODE_MODEL was the picked provider).
+	if spec.StatSheet.ModelTier != "" {
+		return spec.StatSheet.ModelTier
+	}
 	lookup := func(key string) string {
 		prefix := key + "="
 		// per-spawn env wins

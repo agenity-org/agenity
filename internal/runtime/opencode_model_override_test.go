@@ -44,3 +44,26 @@ func TestOpencodeModelOverride_OnlyOpencode(t *testing.T) {
 		}
 	}
 }
+
+// opencode.json's model (written via opencodeModelFromEnv) is what opencode
+// actually obeys — it overrides the OPENCODE_MODEL env var. So the per-agent
+// pick must win HERE, or the wizard selection is silently dropped even though
+// the container env is correct (the exact 2026-06-20 symptom: env=groq but
+// opencode.log showed providerID=google).
+func TestOpencodeModelFromEnv_PerAgentPickWins(t *testing.T) {
+	spec := SpawnSpec{AgentSlug: "opencode"}
+	spec.StatSheet.ModelTier = "groq/llama-3.3-70b-versatile"
+	// Even with a conflicting per-spawn OPENCODE_MODEL, the pick wins.
+	spec.Env = []string{"OPENCODE_MODEL=google/gemini-2.5-flash"}
+	if got := opencodeModelFromEnv(spec); got != "groq/llama-3.3-70b-versatile" {
+		t.Fatalf("opencode.json model = %q, want the per-agent pick groq/llama-3.3-70b-versatile", got)
+	}
+}
+
+func TestOpencodeModelFromEnv_NoPick_UsesEnv(t *testing.T) {
+	spec := SpawnSpec{AgentSlug: "opencode"}
+	spec.Env = []string{"OPENCODE_MODEL=cerebras/gpt-oss-120b"}
+	if got := opencodeModelFromEnv(spec); got != "cerebras/gpt-oss-120b" {
+		t.Fatalf("no-pick: opencode.json model = %q, want the env OPENCODE_MODEL", got)
+	}
+}
