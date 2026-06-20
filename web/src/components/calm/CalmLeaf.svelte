@@ -177,7 +177,9 @@
       <CalmInspector {boundSession} {sessions} />
     {:else if node.widget === 'transcript'}
       <div class="transcript-host">
-        <TeamTranscript team="all" />
+        <!-- No team prop: TeamTranscript defaults to the first real team
+             (the "all" aggregate was removed from the picker, 991e700). -->
+        <TeamTranscript />
       </div>
     {/if}
   </div>

@@ -116,10 +116,11 @@ func (r *TaskRepository) List(ctx context.Context, opts persistence.TaskListOpts
 	}
 	// See sqlite tasks.List: Newest flips to created_at DESC so a bounded
 	// Limit returns the most-recent N (the transcript needs this); default
-	// stays ascending id for SinceID cursor pagination.
+	// stays ascending id for SinceID cursor pagination. id DESC is a
+	// deterministic tie-break for rows sharing a created_at at the boundary.
 	order := "ORDER BY id"
 	if opts.Newest {
-		order = "ORDER BY created_at DESC"
+		order = "ORDER BY created_at DESC, id DESC"
 	}
 	q := fmt.Sprintf(
 		`SELECT id, runner_sid, state, method, input_blob, output_blob,

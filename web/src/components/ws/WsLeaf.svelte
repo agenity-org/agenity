@@ -331,7 +331,9 @@
         </div>
       </div>
     {:else if node.widget === 'transcript'}
-      <div class="full-host"><TeamTranscript team="all" /></div>
+      <!-- No team prop: TeamTranscript defaults to the first real team
+           (the "all" aggregate was removed from the picker, 991e700). -->
+      <div class="full-host"><TeamTranscript /></div>
     {:else if node.widget === 'inspector'}
       <CalmInspector boundSession={boundSession || focusedSession} {sessions} />
     {:else if node.widget === 'mesh'}

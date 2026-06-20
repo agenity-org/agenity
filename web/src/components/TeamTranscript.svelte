@@ -65,51 +65,17 @@
 
   async function refresh() {
     try {
-      // 'all' scope: prefer the multi-team transcript endpoint that returns
-      // pre-tagged rows + per-row team_github_url (#665 backend contract);
-      // fall back to per-team iteration when the endpoint isn't live yet.
+      // selectedScope is always a single real team (the "all" aggregate was
+      // removed from the picker in 991e700 and consumers no longer pass it).
       let merged = { channel: { name: selectedScope, members: [] }, messages: [] };
-      if (selectedScope === 'all') {
+      const r = await fetch(`${API}/teams/${encodeURIComponent(selectedScope)}/messages`);
+      if (r.ok) {
+        const text = await r.text();
         try {
-          const r = await fetch(`${API}/transcript?teams=all`);
-          if (r.ok) {
-            const j = await r.json();
-            if (Array.isArray(j.messages)) {
-              merged.messages = j.messages;
-              const grew = merged.messages.length > lastMessageCount;
-              transcript = merged;
-              lastMessageCount = merged.messages.length;
-              if (grew && !userScrolledUp) {
-                setTimeout(() => { if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight; }, 50);
-              }
-              lastFetchError = '';
-              return;
-            }
-          }
+          const j = JSON.parse(text);
+          (j.messages || []).forEach(m => merged.messages.push({ ...m, team: selectedScope }));
+          if (j.channel) merged.channel = j.channel;
         } catch {}
-        // Fallback: iterate per-team.
-        const scopes = teams.length ? teams : [team];
-        const allMsgs = [];
-        for (const s of scopes) {
-          const r = await fetch(`${API}/teams/${encodeURIComponent(s)}/messages`);
-          if (!r.ok) continue;
-          const text = await r.text();
-          try {
-            const j = JSON.parse(text);
-            (j.messages || []).forEach(m => allMsgs.push({ ...m, team: s }));
-          } catch {}
-        }
-        merged.messages = allMsgs;
-      } else {
-        const r = await fetch(`${API}/teams/${encodeURIComponent(selectedScope)}/messages`);
-        if (r.ok) {
-          const text = await r.text();
-          try {
-            const j = JSON.parse(text);
-            (j.messages || []).forEach(m => merged.messages.push({ ...m, team: selectedScope }));
-            if (j.channel) merged.channel = j.channel;
-          } catch {}
-        }
       }
       const grew = merged.messages.length > lastMessageCount;
       transcript = merged;
@@ -134,9 +100,8 @@
     if (!body) return;
     composeError = '';
     composeSending = true;
-    const targetTeam = selectedScope === 'all' ? team : selectedScope;
     try {
-      const r = await fetch(`${API}/teams/${encodeURIComponent(targetTeam)}/messages`, {
+      const r = await fetch(`${API}/teams/${encodeURIComponent(selectedScope)}/messages`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ author: 'operator', body }),
@@ -280,8 +245,8 @@
   // aliases + the two magic broadcast tokens.
   const mentionCandidates = $derived.by(() => {
     const live = (transcript.channel?.members || []).slice();
-    // Also surface members of OTHER teams in 'all' scope by scraping
-    // recent message authors/recipients — best-effort, no extra fetch.
+    // Also surface handles seen in recent message authors/recipients that
+    // aren't current channel members — best-effort, no extra fetch.
     const seen = new Set(live);
     for (const m of (transcript.messages || [])) {
       if (m.author && !seen.has(m.author) && m.author !== 'operator') {
@@ -403,7 +368,7 @@
   // compose meta strip. If the backend doesn't have the endpoint yet we
   // just leave the hint empty (graceful degrade).
   async function ensureLead(teamName) {
-    if (!teamName || teamName === 'all') return;
+    if (!teamName) return;
     if (leadTargets[teamName] !== undefined) return;
     leadTargets = { ...leadTargets, [teamName]: '' }; // mark in-flight
     try {
@@ -429,9 +394,7 @@
     leadTargets = { ...leadTargets, [teamName]: lead };
   }
 
-  const defaultTarget = $derived(
-    selectedScope === 'all' ? '' : (leadTargets[selectedScope] || '')
-  );
+  const defaultTarget = $derived(leadTargets[selectedScope] || '');
 
   // ── Per-row alert-kind styling (#667) ────────────────────────────────
   function kindClass(m) {
@@ -457,12 +420,10 @@
   // #660 — live push via SSE. The per-team /stream endpoint ticks the
   // instant the transcript changes (operator post OR agent activity);
   // we refetch on tick (~50ms) instead of busy-polling every 5s. A slow
-  // 15s safety poll remains for the 'all' scope (no merged stream) and
-  // to survive a dropped SSE.
+  // 15s safety poll remains to survive a dropped SSE.
   let evtSource = null;
   function subscribeStream() {
     if (evtSource) { evtSource.close(); evtSource = null; }
-    if (selectedScope === 'all') return; // multi-team merge has no stream; safety poll covers it
     let tok = '';
     try { tok = localStorage.getItem('chepherd-token') || ''; } catch {}
     const q = tok ? ('?token=' + encodeURIComponent(tok)) : '';
@@ -512,7 +473,7 @@
           {#each teams as t}
             <option value={t}>{t}</option>
           {/each}
-          {#if !teams.includes(selectedScope) && selectedScope !== 'all'}
+          {#if !teams.includes(selectedScope)}
             <option value={selectedScope}>{selectedScope}</option>
           {/if}
         </select>

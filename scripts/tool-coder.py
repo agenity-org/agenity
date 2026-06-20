@@ -245,7 +245,11 @@ def _chat(messages):
 
 
 def run_tool_loop(task):
-    """The native-function-calling loop. Returns the final text answer.
+    """The native-function-calling loop.
+
+    Returns (text, steps, ok) where ok is False when the turn could not produce
+    a real answer (model returned no content, or the step budget was exhausted).
+    Callers use ok to tag the operator reply kind correctly — see handle_knock.
 
     Context stays tight: system + task + (assistant tool_calls / tool results),
     each tool result capped. This is what keeps a multi-step loop inside free TPM.
@@ -259,9 +263,9 @@ def run_tool_loop(task):
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
             # Final answer. Strip qwen-style <think> + reasoning fallback.
-            text = msg.get("content") or msg.get("reasoning") or "(no content)"
-            text = re.sub(r"(?s)<think>.*?</think>", "", text).strip() or "(no content)"
-            return text, steps
+            raw = msg.get("content") or msg.get("reasoning")
+            text = re.sub(r"(?s)<think>.*?</think>", "", raw or "").strip()
+            return (text or "(no content)", steps, bool(text))
         # The assistant turn that requested tools MUST be echoed back verbatim
         # (with its tool_calls) before the tool results, per the OpenAI schema.
         messages.append({"role": "assistant",
@@ -288,8 +292,24 @@ def run_tool_loop(task):
     headers = {"Content-Type": "application/json", "Authorization": "Bearer " + LLM_KEY}
     resp = _post(LLM_BASE + "/chat/completions", payload, headers, timeout=90)
     m = resp["choices"][0]["message"]
-    text = (m.get("content") or m.get("reasoning") or "(step budget exhausted)")
-    return re.sub(r"(?s)<think>.*?</think>", "", text).strip(), steps
+    raw = m.get("content") or m.get("reasoning")
+    text = re.sub(r"(?s)<think>.*?</think>", "", raw or "").strip()
+    # Falling through the step budget without a clean final answer is a failed
+    # turn — ok=False so the operator reply is tagged failure, not accomplishment.
+    return (text or "(step budget exhausted)", steps, bool(text))
+
+
+def _deliver(sender, reply, ok):
+    """Send `reply` to `sender`. Operator replies carry a kind that reflects the
+    turn outcome: accomplishment on success, failure when the turn errored —
+    NOT a blanket accomplishment (an error tagged accomplishment is theater)."""
+    sender = sender.strip()
+    if sender in ("operator", "human", "shepherd"):
+        kind = "accomplishment" if ok else "failure"
+        mcp_call("alert_human", {"body": "[%s] %s" % (NAME, reply), "kind": kind})
+    else:
+        mcp_call("send_to_session", {"name": sender, "body": reply})
+    print("[tool-coder] delivered to %s (ok=%s)" % (sender, ok), flush=True)
 
 
 def handle_knock(task_id, sender):
@@ -297,18 +317,20 @@ def handle_knock(task_id, sender):
     env = mcp_call("get_task", {"taskID": task_id})
     prompt = task_text(env)
     print("[tool-coder] task: %s" % prompt[:160], flush=True)
-    reply, steps = run_tool_loop(prompt)
+    try:
+        reply, steps, ok = run_tool_loop(prompt)
+    except Exception as e:
+        # A hard error mid-turn is a failed turn — tell the sender, tagged
+        # failure for the operator, instead of silently swallowing it.
+        print("[tool-coder] tool loop ERROR: %s" % e, flush=True)
+        _deliver(sender, "tool-coder errored handling this task: %s" % e, ok=False)
+        return
     print("[tool-coder] %d tool step(s); reply: %s" % (len(steps), reply[:200]), flush=True)
-    sender = sender.strip()
-    if sender in ("operator", "human", "shepherd"):
-        mcp_call("alert_human", {"body": "[%s] %s" % (NAME, reply), "kind": "accomplishment"})
-    else:
-        mcp_call("send_to_session", {"name": sender, "body": reply})
-    print("[tool-coder] delivered to %s" % sender, flush=True)
+    _deliver(sender, reply, ok)
 
 
 def handle_interactive(line):
-    reply, steps = run_tool_loop(line)
+    reply, steps, _ok = run_tool_loop(line)
     print("\n%s> %s\n" % (NAME, reply), flush=True)
 
 
