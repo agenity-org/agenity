@@ -1155,6 +1155,11 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 			// "provider/model" prefix (cerebras/groq/gemini), so the wizard's
 			// model pick selects the free provider directly.
 			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+		case "tool-coder":
+			// tool-coder shares lean-coder's --model provider self-config
+			// (cerebras/groq/gemini), so the wizard's model pick selects the
+			// free provider the native tool loop runs on.
+			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
 		}
 	}
 

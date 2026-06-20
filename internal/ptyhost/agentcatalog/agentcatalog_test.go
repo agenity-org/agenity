@@ -23,11 +23,13 @@ import (
 
 // realAgentSlugs is the slug set the FE / catalyst-api / chart CRD agree
 // on. `sovereign-shell` is the rescue slug carried only by pty-server.
-// Includes copilot + gemini-cli (#741 free-agent builtins) and lean-coder
-// (chepherd-native free-tier MCP mesh agent).
+// Includes copilot + gemini-cli (#741 free-agent builtins), lean-coder
+// (chepherd-native free-tier MCP mesh agent) and tool-coder (lean-coder's
+// native-function-calling sibling).
 var realAgentSlugs = []string{
 	"aider", "claude-code", "copilot", "cursor-agent",
 	"gemini-cli", "lean-coder", "little-coder", "opencode", "qwen-code",
+	"tool-coder",
 }
 
 func TestLookup_KnownSlugs(t *testing.T) {

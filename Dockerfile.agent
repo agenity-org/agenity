@@ -73,6 +73,11 @@ RUN pip3 install --no-cache-dir aider-chat \
 # (already installed). The free mesh node opencode/gemini/qwen/aider can't be.
 COPY --chmod=755 scripts/lean-coder.py /usr/local/bin/lean-coder
 
+# tool-coder — lean-coder's NATIVE-FUNCTION-CALLING sibling. Same pure-stdlib
+# MCP-over-HTTP path, but runs a real tool loop (read_file/write_file/run_bash)
+# driven by the model's tool_calls — proven on free Cerebras/Groq/Gemini.
+COPY --chmod=755 scripts/tool-coder.py /usr/local/bin/tool-coder
+
 # Non-root agent user (UID 1000) — required by chepherd's spawn contract.
 # Host UID 1000 in rootless Podman maps to container root; the actual
 # agent user inside is UID 1000 ≠ container root. All credentials and

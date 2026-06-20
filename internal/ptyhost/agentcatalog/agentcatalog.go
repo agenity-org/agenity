@@ -162,6 +162,14 @@ var Builtin = []Agent{
 		Notes:       "chepherd-native ultra-lean MCP mesh agent (scripts/lean-coder.py). Speaks chepherd MCP over HTTP directly and keeps each LLM request tiny (one system line + the task text), so a full knock->reply round-trip is a single small request that fits free-tier TPM (Cerebras 30k/5RPM, Groq 6k) — the caps opencode busts. Reads CEREBRAS_API_KEY by default (or LLM_API_KEY/LLM_BASE_URL/LLM_MODEL to point elsewhere). The free mesh node that off-the-shelf CLIs can't be: opencode too heavy, gemini/qwen don't emit tool calls, aider has no MCP.",
 	},
 	{
+		Slug:        "tool-coder",
+		Binary:      "/usr/local/bin/tool-coder",
+		DefaultArgs: []string{},
+		DefaultCwd:  "/workspace",
+		RequiredEnv: nil,
+		Notes:       "lean-coder's NATIVE-FUNCTION-CALLING sibling (scripts/tool-coder.py). lean-coder is chat-only by design; tool-coder runs a REAL tool loop: the model emits OpenAI-style tool_calls, tool-coder executes read_file/write_file/run_bash locally, feeds results back, and repeats until a final answer, then replies over chepherd MCP. Context is kept tight (system + task + capped tool results) so a multi-step loop still fits free TPM. Proven live 2026-06-21: Cerebras gpt-oss-120b, Groq llama-3.3-70b-versatile and Gemini 2.5-flash all emit native tool_calls (free is a QUANTITY cap, not a capability one). Same provider selection as lean-coder (--model provider/model, or CEREBRAS_API_KEY default).",
+	},
+	{
 		Slug:        "sovereign-shell",
 		Binary:      "/bin/sh",
 		DefaultArgs: []string{"-l"},
