@@ -114,7 +114,7 @@ jobs:
           retention-days: 90
 
       - name: Trivy vulnerability scan (HIGH/CRITICAL gate)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: ${{ steps.push.outputs.registry-path }}@${{ steps.push.outputs.digest }}
           severity: 'HIGH,CRITICAL'
