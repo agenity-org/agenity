@@ -114,11 +114,19 @@ func (r *TaskRepository) List(ctx context.Context, opts persistence.TaskListOpts
 	if limit <= 0 {
 		limit = 1000
 	}
+	// Default order is ascending id (UUIDv7 == chronological) so SinceID
+	// cursor pagination (`id > cursor`) stays consistent. Newest flips to
+	// created_at DESC so a bounded Limit returns the MOST-RECENT N — the
+	// team transcript needs this or recent messages drop once tasks > Limit.
+	order := "ORDER BY id"
+	if opts.Newest {
+		order = "ORDER BY created_at DESC"
+	}
 	q := fmt.Sprintf(
 		`SELECT id, runner_sid, state, method, input_blob, output_blob,
 		        auth_challenge, created_at, updated_at
-		 FROM tasks %s ORDER BY id LIMIT %d`,
-		where, limit,
+		 FROM tasks %s %s LIMIT %d`,
+		where, order, limit,
 	)
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {

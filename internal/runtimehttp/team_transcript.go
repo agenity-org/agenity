@@ -440,7 +440,11 @@ func (s *Server) collectTranscriptRows(ctx context.Context, ch *persistence.Chan
 	// 2. A2A TaskStore rows (agent↔agent + human↔agent comms via
 	//    chepherd.send_to_session / A2A message/send).
 	if s.TaskStore != nil {
-		tasks, err := s.TaskStore.List(ctx, persistence.TaskListOpts{Limit: 200})
+		// Newest:true — without it List orders by ascending UUIDv7 id, so
+		// `LIMIT 200` returns the OLDEST 200 tasks and recent operator/agent
+		// messages vanish from the Talk feed once the daemon has >200 tasks
+		// (operator-reported 2026-06-20: "message delivered but I can't see it").
+		tasks, err := s.TaskStore.List(ctx, persistence.TaskListOpts{Limit: 200, Newest: true})
 		if err == nil {
 			for _, t := range tasks {
 				if len(t.InputBlob) == 0 {
