@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,6 +66,17 @@ type A2ADeliverer struct {
 	// for tests + intra-org deployments where every caller is
 	// already trusted).
 	grantCheck GrantCheckFn
+
+	// #79 re-knock watchdog — observes whether a delivered task's
+	// recipient actually called chepherd.get_task. The MCP server
+	// records each successfully-served get_task via MarkTaskFetched;
+	// the watchdog (started per non-claude Deliver) re-injects the
+	// knock if get_task is still unseen after the delay. fetched is
+	// the shared set of taskIDs whose get_task has been served.
+	// Guarded by fetchedMu. nil-safe: zero-value map is lazily
+	// created on first use.
+	fetchedMu sync.Mutex
+	fetched   map[string]struct{}
 }
 
 // GrantCheckFn is the pre-execution RBAC seam injected via
@@ -165,7 +177,36 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	if from == "" {
 		from = "daemon"
 	}
-	marker := knock.FormatKnock(task.ID, from)
+	if err := d.injectKnock(sess, info.AgentSlug, task.ID, from); err != nil {
+		failed := d.failedTask(msg, err.Error())
+		d.persistTask(ctx, msg, failed, "message/send")
+		return failed, err
+	}
+	// #79 — re-knock watchdog for non-claude CLIs. opencode/gemini-cli/
+	// qwen-code intermittently swallow a knock without calling get_task:
+	// observed live 2026-06-21 (opencode/Groq) — 5 knocks delivered, only
+	// the first produced a get_task → the model emitted a malformed Groq
+	// tool-call (invalid_request_error, NOT retried by opencode's AI SDK
+	// since 400s are non-retryable) OR stacked the markers in the TUI input
+	// box mid-turn and stalled, leaving the task in "working" forever. A
+	// daemon-side re-knock recovers it: if get_task is still unseen after
+	// the delay AND the task is still "working", re-inject the marker once
+	// (bounded by CHEPHERD_REKNOCK_MAX). claude-code follows the bare marker
+	// reliably (it has the briefing pattern-detector), so it's excluded.
+	if info.AgentSlug != "" && info.AgentSlug != "claude-code" {
+		go d.reKnockWatch(sess, info.AgentSlug, task.ID, from)
+	}
+	return task, nil
+}
+
+// injectKnock writes the knock marker + submit sequence into the
+// recipient session's PTY. Factored out of Deliver so the #79 re-knock
+// watchdog can replay the exact same injection. Non-claude flavors get
+// the inline ACTION-REQUIRED directive appended (they don't reliably act
+// on the bare marker); claude-code gets the bare marker (its briefing
+// pattern-detector handles it).
+func (d *A2ADeliverer) injectKnock(sess interface{ Inject([]byte) (int, error) }, agentSlug, taskID, from string) error {
+	marker := knock.FormatKnock(taskID, from)
 	// Strip the trailing \n from the Marker wire format before PTY
 	// injection. The \n is correct for log/pipe contexts but toxic for
 	// TUI PTY injection: it triggers claude-code's multi-line textarea
@@ -178,13 +219,11 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	// explores/reasons with its builtins instead of calling the MCP get_task.
 	// Append an explicit, inline directive so the model calls get_task FIRST.
 	// claude-code keeps the exact bare marker (it follows the briefing already).
-	if info.AgentSlug != "" && info.AgentSlug != "claude-code" {
-		markerForPTY += fmt.Sprintf(" — ACTION REQUIRED: immediately call the chepherd.get_task tool with taskID \"%s\" to read this message, then reply by calling chepherd.send_to_session to \"%s\". Do this now as your first tool call; do not read files, list directories, or plan first.", task.ID, from)
+	if agentSlug != "" && agentSlug != "claude-code" {
+		markerForPTY += fmt.Sprintf(" — ACTION REQUIRED: immediately call the chepherd.get_task tool with taskID \"%s\" to read this message, then reply by calling chepherd.send_to_session to \"%s\". Do this now as your first tool call; do not read files, list directories, or plan first.", taskID, from)
 	}
 	if _, err := sess.Inject([]byte(markerForPTY)); err != nil {
-		failed := d.failedTask(msg, "PTY knock write: "+err.Error())
-		d.persistTask(ctx, msg, failed, "message/send")
-		return failed, err
+		return fmt.Errorf("PTY knock write: %w", err)
 	}
 	// Give the TUI 120ms to render the marker into the input box before
 	// sending the submit sequence. Without this gap, the TUI may process
@@ -193,13 +232,11 @@ func (d *A2ADeliverer) Deliver(ctx context.Context, msg a2a.Message) (*a2a.Task,
 	time.Sleep(120 * time.Millisecond)
 	// Submit sequence — CR for claude-code; Inject (not Write) so
 	// lastOperatorWrite is not bumped (this is a system injection).
-	submitSeq := d.submitSequenceFor(info.AgentSlug)
+	submitSeq := d.submitSequenceFor(agentSlug)
 	if _, err := sess.Inject(submitSeq); err != nil {
-		failed := d.failedTask(msg, "PTY knock submit: "+err.Error())
-		d.persistTask(ctx, msg, failed, "message/send")
-		return failed, err
+		return fmt.Errorf("PTY knock submit: %w", err)
 	}
-	return task, nil
+	return nil
 }
 
 // taskCompleter returns the callback pumpPTYToBroker invokes once

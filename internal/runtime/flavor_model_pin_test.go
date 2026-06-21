@@ -1,10 +1,13 @@
-// internal/runtime/flavor_model_pin_test.go — pins the c9ff5d0 fix: the daemon
-// writes settings.model.name = gemini-2.5-flash for gemini-cli so agents do NOT
-// default to gemini-3.5-flash, whose FREE tier is only ~20 req/day. Observed live
-// 2026-06-17: a gemini-cli agent called chepherd.get_task -> OK then died
-// "Usage limit reached for gemini-3.5-flash" before it could send_to_session.
-// qwen-code is a gemini fork but runs qwen models, so it must NOT get the gemini
-// pin. Format verified from the gemini-cli bundle (reads settings.model?.name).
+// internal/runtime/flavor_model_pin_test.go — pins the #79 fix: the daemon
+// writes settings.model.name = gemini-3.1-flash-lite for gemini-cli. The earlier
+// gemini-2.5-flash pin (c9ff5d0/#743) does NOT stick — gemini-cli v0.46 under
+// gemini-api-key auth force-remaps every 2.x/3.x "flash" model to gemini-3.5-flash
+// inside resolveModel (isFlashModel && useGemini3_5Flash → DEFAULT_GEMINI_FLASH_MODEL
+// = "gemini-3.5-flash"). Proven live 2026-06-21: --model gemini-2.5-flash hit
+// "limit: 20, model: gemini-3.5-flash". gemini-3.1-flash-lite ends in "flash-lite"
+// (isFlashModel false) so the pin survives the remap, verified live (agent replied
+// on gemini-3.1-flash-lite). qwen-code is a gemini fork but runs qwen models, so it
+// must NOT get the gemini pin. Format verified from the bundle (reads settings.model?.name).
 package runtime
 
 import (
@@ -35,15 +38,16 @@ func TestWriteFlavorMCPConfig_GeminiModelPin(t *testing.T) {
 		return cfg
 	}
 
-	// gemini-cli MUST pin settings.model.name = gemini-2.5-flash (off the 20/day
-	// gemini-3.5-flash default).
+	// gemini-cli MUST pin settings.model.name = gemini-3.1-flash-lite (a model the
+	// 3.5-flash remap can't reach, since isFlashModel keys off the "flash" suffix
+	// and "flash-lite" doesn't match).
 	g := readSettings("gemini-cli", filepath.Join(".gemini", "settings.json"))
 	model, ok := g["model"].(map[string]any)
 	if !ok {
 		t.Fatalf("gemini-cli: settings.model missing or not an object: %#v", g["model"])
 	}
-	if got := model["name"]; got != "gemini-2.5-flash" {
-		t.Errorf("gemini-cli: settings.model.name = %v, want gemini-2.5-flash (c9ff5d0)", got)
+	if got := model["name"]; got != "gemini-3.1-flash-lite" {
+		t.Errorf("gemini-cli: settings.model.name = %v, want gemini-3.1-flash-lite (#79)", got)
 	}
 
 	// qwen-code is a gemini fork but runs qwen models — it must NOT inherit the

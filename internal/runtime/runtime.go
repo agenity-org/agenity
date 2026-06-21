@@ -2868,17 +2868,23 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 			"mcpServers": map[string]any{"chepherd": entry},
 			"security":   security,
 		}
-		// gemini-cli defaults to gemini-3.5-flash, whose FREE tier is only
-		// ~20 requests/day. Observed live 2026-06-17: an agent connects, calls
-		// chepherd.get_task → OK, then dies mid-task with "Usage limit reached
-		// for gemini-3.5-flash" before it can send_to_session — i.e. it burns
-		// its last daily slot on the get_task turn. Pin the primary model to
-		// gemini-2.5-flash (far larger free daily quota) so agents don't default
-		// to the thinnest model; the CLI only falls back to 3.5-flash on a 2.5
-		// 503. settings.model.name is the gemini-cli config key (bundle reads
-		// settings.model?.name). qwen-code runs its own (qwen) models — gemini only.
+		// #79 — pin gemini-3.1-flash-lite via settings.model.name (mirrors the
+		// catalog --model flag). The earlier gemini-2.5-flash pin (#743/c9ff5d0)
+		// does NOT stick: gemini-cli v0.46 under gemini-api-key auth force-
+		// remaps EVERY 2.x/3.x "flash" model to gemini-3.5-flash inside
+		// resolveModel (useGemini3_5Flash && isFlashModel(resolved) →
+		// DEFAULT_GEMINI_FLASH_MODEL="gemini-3.5-flash"). Proven live 2026-06-21:
+		// --model gemini-2.5-flash hit "limit: 20, model: gemini-3.5-flash".
+		// gemini-3.1-flash-lite ends in "flash-lite" (isFlashModel false), so the
+		// pin survives the remap (verified live — agent replied on
+		// gemini-3.1-flash-lite, no remap) AND has free daily headroom (200) when
+		// the *-flash variants are 20/day-exhausted. Residual: every free gemini
+		// model is 20 req/day; on exhaustion gemini-cli still shows the
+		// interactive "Usage limit reached" modal an unattended agent can't
+		// dismiss (no non-interactive daily-quota fallback exists in the bundle).
+		// qwen-code runs its own (qwen) models — gemini-only pin.
 		if flavor == "gemini-cli" {
-			cfg["model"] = map[string]any{"name": "gemini-2.5-flash"}
+			cfg["model"] = map[string]any{"name": "gemini-3.1-flash-lite"}
 		}
 	case "copilot":
 		rel = filepath.Join(".copilot", "mcp-config.json")

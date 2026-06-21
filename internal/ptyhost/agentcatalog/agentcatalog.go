@@ -121,12 +121,27 @@ var Builtin = []Agent{
 		RequiredEnv: []string{"LLM_GATEWAY_URL"},
 	},
 	{
-		Slug:        "gemini-cli",
-		Binary:      "/usr/local/bin/gemini",
-		// #743 — pin gemini-2.5-flash: the v0.46 default (gemini-3.5-flash) and
-		// gemini-2.0-flash are quota-exhausted on the free tier (429
-		// RESOURCE_EXHAUSTED); gemini-2.5-flash has free quota (200 verified).
-		DefaultArgs: []string{"--yolo", "--model", "gemini-2.5-flash"},
+		Slug:   "gemini-cli",
+		Binary: "/usr/local/bin/gemini",
+		// #79 — pin gemini-3.1-flash-lite. The earlier gemini-2.5-flash pin
+		// (#743) does NOT stick: gemini-cli v0.46 under gemini-api-key auth
+		// force-remaps EVERY 2.x/3.x "flash" model to gemini-3.5-flash
+		// (resolveModel: useGemini3_5Flash && isFlashModel(resolved) →
+		// DEFAULT_GEMINI_FLASH_MODEL, set to "gemini-3.5-flash" by
+		// setFlashModels for api-key auth). Proven live 2026-06-21: a
+		// --model gemini-2.5-flash run hit "limit: 20, model: gemini-3.5-flash".
+		// gemini-3.1-flash-lite ends in "flash-lite" (NOT "flash"), so
+		// isFlashModel() is false and the pin survives — verified live: the
+		// agent replied on gemini-3.1-flash-lite with NO remap. It also has
+		// free daily headroom right now (200) when 2.5/3.5-flash + their
+		// flash-lite siblings are 20/day-exhausted. NOTE: all free-tier gemini
+		// models are 20 req/day; if 3.1-flash-lite exhausts, gemini-cli still
+		// raises the interactive "Usage limit reached / Keep trying" modal,
+		// which an unattended agent CANNOT dismiss (gemini-cli has no
+		// non-interactive auto-fallback for a daily TerminalQuotaError). For a
+		// resilient Google slot under sustained load, prefer opencode pointed
+		// at the Gemini API or a different provider — see #79 report.
+		DefaultArgs: []string{"--yolo", "--model", "gemini-3.1-flash-lite"},
 		DefaultCwd:  "/workspace",
 		RequiredEnv: nil,
 		Notes:       "Google Gemini CLI (@google/gemini-cli). --yolo auto-approves all tool calls (the documented full-autonomy approval mode). RequiredEnv is empty by design: the free path is Google-OAuth login dir (gemini-oauth provider, file-mount) — a GEMINI_API_KEY (google-api provider) is the alternative, so neither is mandatory at create() time.",
@@ -144,7 +159,7 @@ var Builtin = []Agent{
 		DefaultArgs: []string{},
 		DefaultCwd:  "/workspace",
 		RequiredEnv: []string{"OPENAI_BASE_URL", "OPENAI_API_KEY"},
-		Notes: "Standard agent for raw OpenAI-compatible free providers (Cerebras 30k TPM, Groq 12k TPM). The daemon's writeFlavorMCPConfig emits a TPM-fit opencode.json (measured live 2026-06-21): tools allow-list (37→4 tools), focused build-agent system prompt (system 21,850→1,257 chars), instructions:[], and a per-model output-token cap (max_tokens 40,960→1,024 so Groq's prompt+reserved-output total fits 12k). A trivial turn drops 11,034→730 prompt_tokens; a full knock→get_task→reply round-trip fits Cerebras 30k (max 3,783/req) and Groq 12k (sum 8,272). The output cap also avoids the Cerebras reasoning_content replay error (3/3 clean round-trips).",
+		Notes:       "Standard agent for raw OpenAI-compatible free providers (Cerebras 30k TPM, Groq 12k TPM). The daemon's writeFlavorMCPConfig emits a TPM-fit opencode.json (measured live 2026-06-21): tools allow-list (37→4 tools), focused build-agent system prompt (system 21,850→1,257 chars), instructions:[], and a per-model output-token cap (max_tokens 40,960→1,024 so Groq's prompt+reserved-output total fits 12k). A trivial turn drops 11,034→730 prompt_tokens; a full knock→get_task→reply round-trip fits Cerebras 30k (max 3,783/req) and Groq 12k (sum 8,272). The output cap also avoids the Cerebras reasoning_content replay error (3/3 clean round-trips).",
 	},
 	{
 		Slug:        "qwen-code",

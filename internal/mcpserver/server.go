@@ -45,6 +45,15 @@ func (s *Server) SetTaskStore(store persistence.TaskRepository) {
 	s.taskStore = store
 }
 
+// taskFetchMarker is the optional #79 seam: an a2a.Deliverer that wants
+// to know when a recipient called chepherd.get_task implements
+// MarkTaskFetched. runtime.A2ADeliverer does; federation deliverers and
+// test fakes don't (the get_task handler's type-assert is a no-op for
+// them). Kept here (not in a2a) so the deliverer interface stays minimal.
+type taskFetchMarker interface {
+	MarkTaskFetched(taskID string)
+}
+
 // Server hosts the chepherd MCP JSON-RPC surface. Constructed once per
 // chepherd-run process. The HTTP/WebSocket listener is started via
 // StartHTTP() and torn down via Stop().
@@ -724,6 +733,15 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			resp.Error = &rpcErr{Code: -32004, Message: fmt.Sprintf("chepherd.get_task: forbidden (caller %q is not task recipient %q)", callerName, inputMsg.ContextID)}
 			break
 		}
+		// #79 — tell the re-knock watchdog the recipient actually fetched
+		// this task, so it won't re-inject the knock. Recorded only after
+		// the recipient-scope check above passes (a forbidden caller's
+		// get_task must NOT count as the real recipient acting). Best-
+		// effort: deliverers that don't implement the marker (federation /
+		// tests) are a no-op.
+		if m, ok := s.deliverer.(taskFetchMarker); ok {
+			m.MarkTaskFetched(a.TaskID)
+		}
 		// Return the canonical A2A task envelope. OutputBlob already
 		// carries it (runnerDeliverer marshals task there on Save).
 		var taskEnv map[string]any
@@ -734,9 +752,9 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		}
 	case "set_scorecard":
 		var a struct {
-			Name           string
-			G, V, F, E, D  float64
-			Note           string
+			Name          string
+			G, V, F, E, D float64
+			Note          string
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
