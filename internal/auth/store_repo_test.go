@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 // TestNewLocalProviderFromRepository verifies that the Repository-backed

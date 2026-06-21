@@ -189,7 +189,7 @@
     if (m && m.team_github_url) {
       return m.team_github_url.replace(/\/+$/, '');
     }
-    return 'https://github.com/chepherd/chepherd';
+    return 'https://github.com/agenity-org/agenity';
   }
 
   function renderBody(m) {

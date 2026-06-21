@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 func TestA2ADeliverer_RejectsEmptyContextID(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func TestP2_646_ClaudeLoginCancel_DeletesPersistedRow(t *testing.T) {

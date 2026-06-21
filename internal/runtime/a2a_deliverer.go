@@ -11,11 +11,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
-	"github.com/chepherd/chepherd/internal/runtime/agentpatterns"
-	"github.com/chepherd/chepherd/internal/runtime/knock"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/ptyhost/agentcatalog"
+	"github.com/agenity-org/agenity/internal/runtime/agentpatterns"
+	"github.com/agenity-org/agenity/internal/runtime/knock"
 )
 
 // A2ADeliverer implements a2a.Deliverer by routing A2A SendMessage

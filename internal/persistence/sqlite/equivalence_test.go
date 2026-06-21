@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence/equivalence"
+	"github.com/agenity-org/agenity/internal/persistence/equivalence"
 )
 
 // TestEquivalence_Sqlite runs the chepherd v0.9.2 persistence

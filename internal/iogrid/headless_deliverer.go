@@ -29,8 +29,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // HeadlessIOgridDeliverer implements a2a.Deliverer by persisting

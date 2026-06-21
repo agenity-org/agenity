@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // SkillRepository implements persistence.SkillRepository against SQLite.

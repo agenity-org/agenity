@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 func TestWaveA5_IsTerminal_TerminalStatesOnly(t *testing.T) {

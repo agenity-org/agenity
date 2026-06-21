@@ -35,7 +35,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/agenity-org/agenity/internal/auth"
 )
 
 // stubKeyStoreSigner is the bridge between the cross_org_jwt Minter

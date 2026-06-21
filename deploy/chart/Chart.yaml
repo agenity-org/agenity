@@ -15,7 +15,7 @@ keywords:
   - multi-agent
   - a2a-v1.0
 sources:
-  - https://github.com/chepherd/chepherd
+  - https://github.com/agenity-org/agenity
 maintainers:
   - name: chepherd
 home: https://chepherd.io

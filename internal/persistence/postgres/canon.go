@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // CanonRepository implements persistence.CanonRepository against

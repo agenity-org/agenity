@@ -9,8 +9,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/chepherd/chepherd/internal/state"
-	"github.com/chepherd/chepherd/internal/style"
+	"github.com/agenity-org/agenity/internal/state"
+	"github.com/agenity-org/agenity/internal/style"
 )
 
 // DaemonHealth describes the current liveness of the supervisor daemon.

@@ -32,7 +32,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	rh "github.com/chepherd/chepherd/internal/runtimehttp"
+	rh "github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 // newTestRuntimeServer spins up a minimal Server with just the routes

@@ -19,8 +19,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/chepherd/chepherd/internal/discovery"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/discovery"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // discoveryRouter dispatches /api/v1/discovery/{token-id}/* paths.

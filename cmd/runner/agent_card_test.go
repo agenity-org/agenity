@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 // TestR3_BuildRunnerAgentCard_RequiredFields pins the A2A v1.0

@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/scrummaster"
+	"github.com/agenity-org/agenity/internal/scrummaster"
 )
 
 // Interval is how often the light-signal goroutine refreshes each session's

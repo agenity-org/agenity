@@ -3,7 +3,7 @@ package tui
 import (
 	"sort"
 
-	"github.com/chepherd/chepherd/internal/state"
+	"github.com/agenity-org/agenity/internal/state"
 )
 
 // SortMode is one of 4 sort orderings for the session list.

@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func newAuditStore(t *testing.T) persistence.AuditEventRepository {

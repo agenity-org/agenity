@@ -21,7 +21,7 @@ import (
 
 	"net/http/httptest"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 // TestP0_377_DeleteOrphan_CleansStore_Returns200 is the contract:

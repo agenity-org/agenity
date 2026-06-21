@@ -14,7 +14,7 @@ spec:
   summary: AI engineering team — supervised, observable, multi-agent dashboard
   source:
     type: thirdparty
-    repository: https://github.com/chepherd/chepherd
+    repository: https://github.com/agenity-org/agenity
     version: {{ .Chart.AppVersion | quote }}
   card:
     icon: chepherd.svg

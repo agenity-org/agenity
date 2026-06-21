@@ -1,6 +1,6 @@
 # chepherd
 
-[![daemon release](https://img.shields.io/badge/daemon-v0.9.2-green)](https://github.com/chepherd/chepherd/releases/tag/v0.9.2)
+[![daemon release](https://img.shields.io/badge/daemon-v0.9.2-green)](https://github.com/agenity-org/agenity/releases/tag/v0.9.2)
 [![license](https://img.shields.io/github/license/chepherd/chepherd)](LICENSE)
 [![chepherd-rc client](https://img.shields.io/badge/chepherd--rc%20client-v0.2.0--rc3-blue)](https://chepherd.org)
 
@@ -61,7 +61,7 @@ brew install chepherd/chepherd/chepherd                          # macOS via hom
 curl -fsSL https://chepherd.org/install.sh | sh                  # universal installer (soon)
 
 # from source
-go install github.com/chepherd/chepherd@latest
+go install github.com/agenity-org/agenity@latest
 ```
 
 ## Quick start
@@ -91,7 +91,7 @@ See [docs/V0.9.2-ARCHITECTURE.md](docs/V0.9.2-ARCHITECTURE.md) for the full desi
 ## v0.9.2 ship gate — end-to-end walk
 
 The v0.9.2 release closes via the canonical 9-step walk on a fresh provision
-(epic [#208](https://github.com/chepherd/chepherd/issues/208)). The in-process
+(epic [#208](https://github.com/agenity-org/agenity/issues/208)). The in-process
 regression gate runs in CI on every commit:
 
 ```bash
@@ -166,4 +166,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-Issues + PRs welcome via the [GitHub issue tracker](https://github.com/chepherd/chepherd/issues).
+Issues + PRs welcome via the [GitHub issue tracker](https://github.com/agenity-org/agenity/issues).

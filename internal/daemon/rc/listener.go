@@ -19,9 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/daemon/rc/envelope"
-	"github.com/chepherd/chepherd/internal/daemon/rc/signaling"
-	"github.com/chepherd/chepherd/internal/daemon/rc/transport"
+	"github.com/agenity-org/agenity/internal/daemon/rc/envelope"
+	"github.com/agenity-org/agenity/internal/daemon/rc/signaling"
+	"github.com/agenity-org/agenity/internal/daemon/rc/transport"
 )
 
 // Config — the parsed form of ~/.config/chepherd/rc.toml.

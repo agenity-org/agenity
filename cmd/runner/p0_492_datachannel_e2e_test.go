@@ -21,7 +21,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 )
 
 // TestWaveF2_RunnerMountsWebRTCOffer verifies the per-session mux

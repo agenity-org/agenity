@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/ptyhost/agentcatalog"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 )
 
 func resetAgentCatalogCache() { agentcatalog.ResetCache() }

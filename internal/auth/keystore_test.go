@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // memoryAuthSecretRepo is a minimal in-memory AuthSecretRepository

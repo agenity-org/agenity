@@ -61,10 +61,10 @@
 ## Defects found by this UI walkthrough (none of which the prior API checklist caught)
 | # | Severity | What the user hits | Ticket |
 |---|---|---|---|
-| Launcher | P1 | `scripts/start.sh` didn't pass `--hub-url`/`--org-id`, so the dashboard daemon never joined the mesh → Federation pane permanently "0 peers". **FIXED** (env passthrough). | [#676](https://github.com/chepherd/chepherd/issues/676) |
-| Dead-session WS | P2 | Terminal pane retries a gone session's WebSocket attach → 404 loop, console floods with errors. | [#677](https://github.com/chepherd/chepherd/issues/677) |
-| Stale empty-state copy | P3 | Federation/Multi-host empty state tells the user to set `--federation-registry-url` (the older flag), not `--hub-url`. | [#678](https://github.com/chepherd/chepherd/issues/678) |
-| Multi-host fetch | P2 | Multi-host shows **"Failed to fetch"** for hub-only peers (tries to HTTP a `hub://` URL directly). | [#679](https://github.com/chepherd/chepherd/issues/679) |
+| Launcher | P1 | `scripts/start.sh` didn't pass `--hub-url`/`--org-id`, so the dashboard daemon never joined the mesh → Federation pane permanently "0 peers". **FIXED** (env passthrough). | [#676](https://github.com/agenity-org/agenity/issues/676) |
+| Dead-session WS | P2 | Terminal pane retries a gone session's WebSocket attach → 404 loop, console floods with errors. | [#677](https://github.com/agenity-org/agenity/issues/677) |
+| Stale empty-state copy | P3 | Federation/Multi-host empty state tells the user to set `--federation-registry-url` (the older flag), not `--hub-url`. | [#678](https://github.com/agenity-org/agenity/issues/678) |
+| Multi-host fetch | P2 | Multi-host shows **"Failed to fetch"** for hub-only peers (tries to HTTP a `hub://` URL directly). | [#679](https://github.com/agenity-org/agenity/issues/679) |
 
 ## Honest note on methodology
 The previous version of this document asserted "remote peers visible in dashboard = PASS" based on `curl`/`go test` evidence — it was never validated in the product UI, and when actually walked, the dashboard showed **zero** mesh peers until the launcher was fixed (#676). A UAT must be driven through the UI a real user touches; this version is. Evidence screenshots captured during the walk: `uat-dashboard-federation-empty.png` (before fix), `uat-dashboard-mesh-peer-visible.png` (after fix), `uat-dashboard-msg-sent.png`.

@@ -25,11 +25,11 @@ import (
 	"sync"
 	"time"
 
-	agententity "github.com/chepherd/chepherd/internal/agent"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
-	"github.com/chepherd/chepherd/internal/scrummaster"
+	agententity "github.com/agenity-org/agenity/internal/agent"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/ptyhost/agentcatalog"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/scrummaster"
 	"github.com/google/uuid"
 )
 

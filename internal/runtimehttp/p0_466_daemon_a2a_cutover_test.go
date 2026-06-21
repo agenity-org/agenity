@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	rh "github.com/chepherd/chepherd/internal/runtimehttp"
+	"github.com/agenity-org/agenity/internal/a2a"
+	rh "github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 func r5Server(t *testing.T) *httptest.Server {

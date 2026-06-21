@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/chepherd/chepherd.git"
+REPO_URL="https://github.com/agenity-org/agenity.git"
 INSTALL_DIR="$HOME/.local/bin"
 STATE_DIR="$HOME/.local/state/chepherd"
 SRC_DIR="$HOME/src/chepherd"

@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/scrummaster"
-	"github.com/chepherd/chepherd/internal/lightsignals"
-	stylepkg "github.com/chepherd/chepherd/internal/style"
+	"github.com/agenity-org/agenity/internal/scrummaster"
+	"github.com/agenity-org/agenity/internal/lightsignals"
+	stylepkg "github.com/agenity-org/agenity/internal/style"
 )
 
 var (

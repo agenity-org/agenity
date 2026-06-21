@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 func TestP0_586_Deliver_RejectsUnknownContextID(t *testing.T) {

@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func newStreamingTestServer(t *testing.T) (*httptest.Server, *Router, *StreamBroker, *MethodBodies) {

@@ -35,7 +35,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 )
 
 // stubA2ARouter is the unit-of-work both transports drive — same

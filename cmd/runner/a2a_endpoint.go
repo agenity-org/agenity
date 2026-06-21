@@ -38,13 +38,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/auth"
-	"github.com/chepherd/chepherd/internal/runtime/knock"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/auth"
+	"github.com/agenity-org/agenity/internal/runtime/knock"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // a2aEndpoint is the runner's HTTP server hosting /a2a/<sid>/jsonrpc.

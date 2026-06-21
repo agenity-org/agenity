@@ -3,7 +3,7 @@ package a2a
 // ChepherdP2PExtension is the chepherd-specific Agent Card extension
 // advertising the WebRTC P2P plumbing for chepherd-aware A2A clients.
 // Published as an open spec at
-// https://github.com/chepherd/chepherd-p2p-extension (Apache-2.0);
+// https://github.com/agenity-org/agenity-p2p-extension (Apache-2.0);
 // AGNTCY working group submission tracked in #208.
 //
 // Vanilla A2A clients ignore this block (per A2A spec on unknown

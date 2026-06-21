@@ -1,4 +1,4 @@
-module github.com/chepherd/chepherd-relay
+module github.com/agenity-org/agenity-relay
 
 go 1.25.0
 

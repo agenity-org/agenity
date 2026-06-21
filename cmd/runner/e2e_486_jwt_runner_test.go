@@ -30,8 +30,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
-	rh "github.com/chepherd/chepherd/internal/runtimehttp"
+	"github.com/agenity-org/agenity/internal/auth"
+	rh "github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 func TestE2E_486_RunnerJWT_AcceptsMintedRejectsRest(t *testing.T) {

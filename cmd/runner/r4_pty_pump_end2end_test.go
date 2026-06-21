@@ -35,8 +35,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // waitFor polls `check` every 5ms up to 2s. Used in the post-#549

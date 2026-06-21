@@ -32,8 +32,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/ptyhost/agentcatalog"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 )
 
 // Handler is the root http.Handler for pty-server.

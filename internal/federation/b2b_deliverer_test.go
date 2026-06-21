@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 type fakeInbox struct {

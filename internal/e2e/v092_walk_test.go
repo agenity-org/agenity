@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/scrummaster"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/scrummaster"
 )
 
 // fakeDeliverer captures the SendMessage params + returns a canned

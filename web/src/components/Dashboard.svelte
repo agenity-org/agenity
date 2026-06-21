@@ -551,7 +551,7 @@
     <nav class="links">
       <a href="/docs">Docs</a>
       <a href="/download">Download</a>
-      <a href="https://github.com/chepherd/chepherd" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/agenity-org/agenity" target="_blank" rel="noopener">GitHub</a>
     </nav>
     <button class="icon-btn" on:click={toggleTheme} title="Toggle light/dark theme" aria-label="Toggle theme" data-testid="theme-toggle">
       {theme === 'light' ? '☾' : '☀'}

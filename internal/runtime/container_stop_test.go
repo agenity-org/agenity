@@ -19,7 +19,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 	"github.com/google/uuid"
 )
 

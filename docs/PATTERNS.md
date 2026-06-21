@@ -15,7 +15,7 @@ conversational form lives, and the CLAUDE.md principle it derives from.
 > them.
 
 Cross-reference key:
-- **PR** — the github.com/chepherd/chepherd PR number that exhibits
+- **PR** — the github.com/agenity-org/agenity PR number that exhibits
   the pattern (or fixed the violation that surfaced it).
 - **Memory** — the worker-side `~/.claude/projects/.../memory/<slug>.md`
   filename. These are conversational notes; this doc is the

@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 // InboxRecorder is the seam between this Deliverer and chepherd's

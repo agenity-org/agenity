@@ -13,8 +13,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 )
 
 // StartClaudeCredRefresher exports the daemon-side Claude credential

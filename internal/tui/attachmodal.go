@@ -13,7 +13,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/chepherd/chepherd/internal/style"
+	"github.com/agenity-org/agenity/internal/style"
 )
 
 // uiState is the persisted user-preference file at ~/.config/chepherd/state.json.

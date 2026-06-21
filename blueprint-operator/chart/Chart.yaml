@@ -34,7 +34,7 @@ maintainers:
   - name: chepherd team
     url: https://chepherd.io
 sources:
-  - https://github.com/chepherd/chepherd
+  - https://github.com/agenity-org/agenity
 icon: https://chepherd.io/brand/icon.svg
 annotations:
   category: AI/Agent Runtime

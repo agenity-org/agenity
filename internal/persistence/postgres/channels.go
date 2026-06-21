@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 type ChannelRepository struct {

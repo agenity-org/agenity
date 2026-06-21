@@ -36,7 +36,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // PushConfigStore is the seam between the dispatcher and the

@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // IsTerminal reports whether `s` is a terminal state — one for which

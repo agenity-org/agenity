@@ -1,7 +1,7 @@
 // chepherd-relay — signaling + auth + push proxy for chepherd-rc.
 //
 // See README.md for the privacy contract + endpoint surface.
-// See https://github.com/chepherd/chepherd/blob/main/docs/PROTOCOL.md for
+// See https://github.com/agenity-org/agenity/blob/main/docs/PROTOCOL.md for
 // the wire protocol this server implements.
 package main
 
@@ -18,11 +18,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chepherd/chepherd-relay/internal/auth"
-	"github.com/chepherd/chepherd-relay/internal/obs"
-	"github.com/chepherd/chepherd-relay/internal/push"
-	"github.com/chepherd/chepherd-relay/internal/registry"
-	"github.com/chepherd/chepherd-relay/internal/wsrelay"
+	"github.com/agenity-org/agenity-relay/internal/auth"
+	"github.com/agenity-org/agenity-relay/internal/obs"
+	"github.com/agenity-org/agenity-relay/internal/push"
+	"github.com/agenity-org/agenity-relay/internal/registry"
+	"github.com/agenity-org/agenity-relay/internal/wsrelay"
 )
 
 // Version is overridden at build time via -ldflags.

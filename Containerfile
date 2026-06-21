@@ -28,9 +28,9 @@ ARG COMMIT=unknown
 ARG BUILDDATE=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags "-s -w \
-      -X 'github.com/chepherd/chepherd/cmd.Version=${VERSION}' \
-      -X 'github.com/chepherd/chepherd/cmd.Commit=${COMMIT}' \
-      -X 'github.com/chepherd/chepherd/cmd.BuildDate=${BUILDDATE}'" \
+      -X 'github.com/agenity-org/agenity/cmd.Version=${VERSION}' \
+      -X 'github.com/agenity-org/agenity/cmd.Commit=${COMMIT}' \
+      -X 'github.com/agenity-org/agenity/cmd.BuildDate=${BUILDDATE}'" \
     -o /usr/local/bin/chepherd .
 
 # ─── Stage 3: runtime image ───────────────────────────────────────────────────

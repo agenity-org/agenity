@@ -28,7 +28,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // TestWaveD1_AgentsDirectory_EmptyShape — bare Server, no rt wired.

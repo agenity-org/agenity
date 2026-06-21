@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	rh "github.com/chepherd/chepherd/internal/runtimehttp"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
+	rh "github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 func TestE2E_489_AuditEvent_PersistsAndQueries(t *testing.T) {

@@ -27,7 +27,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 
-	"github.com/chepherd/chepherd/internal/daemon/rc/transport"
+	"github.com/agenity-org/agenity/internal/daemon/rc/transport"
 )
 
 // HTTPClient is the REST signaling implementation. Implements

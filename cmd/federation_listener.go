@@ -20,8 +20,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/federation"
-	"github.com/chepherd/chepherd/internal/runtimehttp"
+	"github.com/agenity-org/agenity/internal/federation"
+	"github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 // startFederationListener binds the federation-facing TLS listener

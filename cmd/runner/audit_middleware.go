@@ -23,8 +23,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/auth"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // auditMiddleware wraps next with an audit.received emission on the

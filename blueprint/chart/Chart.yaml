@@ -19,7 +19,7 @@ maintainers:
   - name: chepherd team
     url: https://chepherd.io
 sources:
-  - https://github.com/chepherd/chepherd
+  - https://github.com/agenity-org/agenity
   - https://github.com/openova-io/openova (pty-host source, see LICENSE-NOTICE)
 icon: https://chepherd.io/brand/icon.svg
 annotations:

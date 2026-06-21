@@ -19,7 +19,7 @@ package runtime
 import (
 	"context"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // ResumableSessions queries the SessionRepository for sessions with a

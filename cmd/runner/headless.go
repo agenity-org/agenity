@@ -41,8 +41,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/runtime/agentpatterns"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/runtime/agentpatterns"
 )
 
 // headlessConfig collects flags specific to --headless mode.

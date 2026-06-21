@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // fakePushStore is an in-memory PushConfigLister for tests.

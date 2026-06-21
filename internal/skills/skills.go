@@ -17,7 +17,7 @@
 package skills
 
 import (
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 	"encoding/json"
 	"errors"
 	"fmt"

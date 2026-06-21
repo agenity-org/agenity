@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/federation"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/federation"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func TestV094Walk_TwoDaemonsCrossPinnedMTLSHandshake(t *testing.T) {

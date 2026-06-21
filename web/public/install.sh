@@ -70,7 +70,7 @@ fi
 if [ -z "${TAG}" ]; then
   color warn "no releases published yet — falling back to 'go install'"
   if command -v go > /dev/null 2>&1; then
-    go install github.com/chepherd/chepherd@latest
+    go install github.com/agenity-org/agenity@latest
     color ok "installed via go install"
     exit 0
   fi

@@ -7,7 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/chepherd/chepherd/internal/style"
+	"github.com/agenity-org/agenity/internal/style"
 )
 
 // LogMode is W6 — full-screen filtered log viewer.

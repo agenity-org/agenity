@@ -23,7 +23,7 @@ agreed between the chepherd and openova teams.
 ## Modifications applied during the lift
 
 1. Import paths rewritten: `github.com/openova-io/openova/products/sandbox/pty-server/internal/*`
-   → `github.com/chepherd/chepherd/internal/ptyhost/*`
+   → `github.com/agenity-org/agenity/internal/ptyhost/*`
 2. Environment variable rename: `OPENOVA_SANDBOX_AGENTS_PATH` → `CHEPHERD_AGENTS_PATH`
 3. No other modifications. The runtime semantics, wire protocol, ring buffer
    behavior, and agent-spawn contract are bit-identical to the openova source

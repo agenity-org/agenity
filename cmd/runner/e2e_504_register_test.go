@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	rh "github.com/chepherd/chepherd/internal/runtimehttp"
+	rh "github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 func TestE2E_504_RunnerBinaryRegistersWithDaemon(t *testing.T) {

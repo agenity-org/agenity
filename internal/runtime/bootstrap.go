@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 )
 
 // BootstrapShepherd starts the shepherd's watch + tick loop on the given

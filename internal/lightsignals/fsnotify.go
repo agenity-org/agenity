@@ -7,7 +7,7 @@
 // but throttled to 30 sec idle + immediate refresh on any local-commit
 // signal (since issues often correlate with commits).
 //
-// Tracking: github.com/chepherd/chepherd#22
+// Tracking: github.com/agenity-org/agenity#22
 package lightsignals
 
 import (
@@ -18,7 +18,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/chepherd/chepherd/internal/scrummaster"
+	"github.com/agenity-org/agenity/internal/scrummaster"
 )
 
 // EventDrivenRefresher is the fsnotify-based replacement for Refresher.Loop.

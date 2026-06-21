@@ -44,7 +44,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // decodeAuditEvent parses a runner-uploaded audit.event params blob

@@ -16,7 +16,7 @@
 | **Surface** | Responsive **web** (desktop browser) |
 | **Tester** | `@p0-474-lonely` (UAT executor) — driven with Playwright |
 | **Walk date** | 2026-06-03 |
-| **Overall verdict** | 🟢 **PASS (after fixes)** — all four walked journeys pass on screen; TC-02 and TC-04 each failed on the first walk, were fixed ([#676](https://github.com/chepherd/chepherd/issues/676)–[#679](https://github.com/chepherd/chepherd/issues/679), [#682](https://github.com/chepherd/chepherd/issues/682)) and **re-walked** before acceptance. See roll-up. |
+| **Overall verdict** | 🟢 **PASS (after fixes)** — all four walked journeys pass on screen; TC-02 and TC-04 each failed on the first walk, were fixed ([#676](https://github.com/agenity-org/agenity/issues/676)–[#679](https://github.com/agenity-org/agenity/issues/679), [#682](https://github.com/agenity-org/agenity/issues/682)) and **re-walked** before acceptance. See roll-up. |
 
 ---
 
@@ -67,7 +67,7 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 | 2 | Header | Look at the top bar | A peer switcher **`openova-bastion ▾`** is present | ✅ | [📷 tc02-2-federation-peer](evidence/tc02-2-federation-peer.png) |
 | 3 | **multi-host** pane | Look at the peer's row | Peer shown reachable (*"Reachable via hub mesh"*), not a red error | ✅ | [📷 tc02-2-federation-peer](evidence/tc02-2-federation-peer.png) |
 
-- **Journey verdict:** 🟢 **PASS (after fixes)** — On the **first** walk this journey **FAILED**: the federation pane showed *"Federation (0) — configure --federation-registry-url"* ([📷 before](evidence/tc02-1-federation-empty-before.png)) because the launcher never connected the daemon to the hub ([#676](https://github.com/chepherd/chepherd/issues/676)); the multi-host row showed *"Failed to fetch"* ([#679](https://github.com/chepherd/chepherd/issues/679)); the empty-state pointed at the wrong flag ([#678](https://github.com/chepherd/chepherd/issues/678)). After those fixes the re-walk passes as recorded above.
+- **Journey verdict:** 🟢 **PASS (after fixes)** — On the **first** walk this journey **FAILED**: the federation pane showed *"Federation (0) — configure --federation-registry-url"* ([📷 before](evidence/tc02-1-federation-empty-before.png)) because the launcher never connected the daemon to the hub ([#676](https://github.com/agenity-org/agenity/issues/676)); the multi-host row showed *"Failed to fetch"* ([#679](https://github.com/agenity-org/agenity/issues/679)); the empty-state pointed at the wrong flag ([#678](https://github.com/agenity-org/agenity/issues/678)). After those fixes the re-walk passes as recorded above.
 
 ---
 
@@ -98,14 +98,14 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 |---|---|---|---|---|---|
 | 1 | Workspace header | Click **+ new** | The **"+ Spawn workspace"** wizard opens on step 1 *Shape* (Solo / Pair / Trio / Scrum Team / Squad / Custom) | ✅ | [📷 tc04-1-wizard-shape](evidence/tc04-1-wizard-shape.png) |
 | 2 | Step 1 *Shape* | Keep **Solo** selected, click **Next →** | Step 2 *Repo* — *"Where's the code?"* with providers (Built-in / GitHub / GitLab / Bitbucket / Gitea / On-prem) | ✅ | [📷 tc04-1-wizard-shape](evidence/tc04-1-wizard-shape.png) |
-| 3 | Step 2 *Repo* | Click **Built-in (Embedded sandbox)**, type a repo name (e.g. `verify-682`), click **Next →** | Typing a valid name auto-commits — **Next** enables with no Enter needed; step 3 *Skills* — *"Who's bringing what?"* skill matrix | ✅ | re-walked after [#682](https://github.com/chepherd/chepherd/issues/682) fix — see journey verdict |
+| 3 | Step 2 *Repo* | Click **Built-in (Embedded sandbox)**, type a repo name (e.g. `verify-682`), click **Next →** | Typing a valid name auto-commits — **Next** enables with no Enter needed; step 3 *Skills* — *"Who's bringing what?"* skill matrix | ✅ | re-walked after [#682](https://github.com/agenity-org/agenity/issues/682) fix — see journey verdict |
 | 4 | Step 3 *Skills* | Accept defaults, click **Next →** | Step 4 *Agents* — *"Which agents + which models?"* (claude-code · claude-opus-4-7) | ✅ | [📷 tc04-2-wizard-skills](evidence/tc04-2-wizard-skills.png) |
 | 5 | Step 4 *Agents* | Accept defaults, click **Next →** | Step 5 *Accounts* — a saved Claude account auto-selects; *"✓ All 1 agents have an account selected"* | ✅ | [📷 tc04-3-wizard-accounts](evidence/tc04-3-wizard-accounts.png) |
 | 6 | Step 5 *Accounts* | Click **Next →** | Step 6 *Launch* — review table + pre-flight; the embedded sandbox is reported honestly as **"⏳ Embedded sandbox — provisioned on launch"** (amber, not a green it can't verify), alongside *"✓ All accounts valid · ✓ 1/1 agent slots ready"* | ✅ | [📷 tc04-4-wizard-preflight](evidence/tc04-4-wizard-preflight.png) *(pre-fix frame; post-fix copy verified on the re-walk)* |
 | 7 | Step 6 *Launch* | Click **⚡ Launch 1 agents** | The wizard closes; the header agent count increments (1 → **2 agents · 1 team · 1 membership**) and the new **`generalist`** agent appears live in the **sessions** pane | ✅ | [📷 tc04-682-fixed-agent-live](evidence/tc04-682-fixed-agent-live.png) |
 | 8 | Workspace → **sessions** pane | Click the new **generalist** | **agent-details** shows the spawned agent: agent `claude-code`, role `worker`, team `solo`, repo **`chepherd-admin/verify-682`** (the embedded sandbox repo, cloned) | ✅ | [📷 tc04-682-generalist-details](evidence/tc04-682-generalist-details.png) |
 
-- **Journey verdict:** 🟢 **PASS (after fixes)** — On the **first** walk this journey **FAILED**: Launch errored **`⚠ 1 of 1 agents failed` → `provider "embedded" not registered`** ([📷 before](evidence/tc04-5-spawn-failed.png)) right after a **false-green** pre-flight (*"✓ Embedded Gitea ready"*), and the repo step's *"valid name auto-commits"* hint was untrue (commit only fired on Enter). All three were filed as **[#682](https://github.com/chepherd/chepherd/issues/682) (P1)**; the fix ([PR #683](https://github.com/chepherd/chepherd/pull/683)) also caught a latent second failure the dead-end had been hiding (the embedded Gitea sidecar's bind-mounts used the wrong path namespace). After the fixes were deployed, the **full journey was re-walked live**: name auto-commits on input, the pre-flight is honest amber, and Launch produced a real running agent with the embedded repo cloned — as recorded above.
+- **Journey verdict:** 🟢 **PASS (after fixes)** — On the **first** walk this journey **FAILED**: Launch errored **`⚠ 1 of 1 agents failed` → `provider "embedded" not registered`** ([📷 before](evidence/tc04-5-spawn-failed.png)) right after a **false-green** pre-flight (*"✓ Embedded Gitea ready"*), and the repo step's *"valid name auto-commits"* hint was untrue (commit only fired on Enter). All three were filed as **[#682](https://github.com/agenity-org/agenity/issues/682) (P1)**; the fix ([PR #683](https://github.com/agenity-org/agenity/pull/683)) also caught a latent second failure the dead-end had been hiding (the embedded Gitea sidecar's bind-mounts used the wrong path namespace). After the fixes were deployed, the **full journey was re-walked live**: name auto-commits on input, the pre-flight is honest amber, and Launch produced a real running agent with the embedded repo cloned — as recorded above.
 
 ---
 
@@ -119,7 +119,7 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 | TC-04 | web | Spawn local agent (built-in) | 8 | 8 | 8 | 0 | 0 | 🟢 PASS *(after fixes)* |
 | | | **Total** | **15** | **15** | **15** | **0** | **0** | |
 
-**Overall verdict:** 🟢 **PASS (after fixes).** Every walked journey passes on screen: sign-in, discovering an independent party through the central hub, messaging it cross-host, and spawning a local agent from scratch on the built-in sandbox. Two journeys initially **FAILED** and were fixed + **re-walked** before acceptance: TC-02 ([#676](https://github.com/chepherd/chepherd/issues/676)/[#678](https://github.com/chepherd/chepherd/issues/678)/[#679](https://github.com/chepherd/chepherd/issues/679)) and TC-04 ([#682](https://github.com/chepherd/chepherd/issues/682)). One caveat: spawning onto an **external** git provider (GitHub/GitLab/…) was **not walked** (needs a connected account) — its verdict is unknown, not assumed.
+**Overall verdict:** 🟢 **PASS (after fixes).** Every walked journey passes on screen: sign-in, discovering an independent party through the central hub, messaging it cross-host, and spawning a local agent from scratch on the built-in sandbox. Two journeys initially **FAILED** and were fixed + **re-walked** before acceptance: TC-02 ([#676](https://github.com/agenity-org/agenity/issues/676)/[#678](https://github.com/agenity-org/agenity/issues/678)/[#679](https://github.com/agenity-org/agenity/issues/679)) and TC-04 ([#682](https://github.com/agenity-org/agenity/issues/682)). One caveat: spawning onto an **external** git provider (GitHub/GitLab/…) was **not walked** (needs a connected account) — its verdict is unknown, not assumed.
 
 ---
 
@@ -129,13 +129,13 @@ Evidence is a committed screenshot under [`evidence/`](evidence), linked `[📷 
 
 | Defect | Step | What the user saw | Severity | Ticket |
 |---|---|---|---|---|
-| Built-in-sandbox spawn fails | TC-04.7 | *"⚠ 1 of 1 agents failed — provider 'embedded' not registered"* | P1 | [#682](https://github.com/chepherd/chepherd/issues/682) ✅ fixed + re-walked |
-| Launch pre-flight false green | TC-04.6 | *"✓ Embedded Gitea ready"* immediately before the spawn fails on the embedded provider | P2 | [#682](https://github.com/chepherd/chepherd/issues/682) ✅ fixed (now honest amber) |
-| Repo "auto-commit" copy is wrong | TC-04.3 | *"valid name auto-commits"* but a valid name doesn't commit; **Next** stays disabled until you press **Enter** | P3 | [#682](https://github.com/chepherd/chepherd/issues/682) ✅ fixed (commits on input) |
-| Federation pane empty (launcher didn't pass `--hub-url`) | TC-02.1 | *"Federation (0) — configure --federation-registry-url"* despite a live mesh | P1 | [#676](https://github.com/chepherd/chepherd/issues/676) ✅ fixed |
-| Terminal retried a dead session's WebSocket → 404 loop | dashboard load | Repeating `…/attach` 404 errors every ~5s | P2 | [#677](https://github.com/chepherd/chepherd/issues/677) ✅ fixed |
-| Empty-state copy pointed at the wrong flag | TC-02.1 | *"configure --federation-registry-url"* (older mechanism, not the hub mesh) | P3 | [#678](https://github.com/chepherd/chepherd/issues/678) ✅ fixed |
-| Multi-host showed a red error for hub peers | TC-02.3 | *"Failed to fetch"* under `openova-bastion` | P2 | [#679](https://github.com/chepherd/chepherd/issues/679) ✅ fixed |
+| Built-in-sandbox spawn fails | TC-04.7 | *"⚠ 1 of 1 agents failed — provider 'embedded' not registered"* | P1 | [#682](https://github.com/agenity-org/agenity/issues/682) ✅ fixed + re-walked |
+| Launch pre-flight false green | TC-04.6 | *"✓ Embedded Gitea ready"* immediately before the spawn fails on the embedded provider | P2 | [#682](https://github.com/agenity-org/agenity/issues/682) ✅ fixed (now honest amber) |
+| Repo "auto-commit" copy is wrong | TC-04.3 | *"valid name auto-commits"* but a valid name doesn't commit; **Next** stays disabled until you press **Enter** | P3 | [#682](https://github.com/agenity-org/agenity/issues/682) ✅ fixed (commits on input) |
+| Federation pane empty (launcher didn't pass `--hub-url`) | TC-02.1 | *"Federation (0) — configure --federation-registry-url"* despite a live mesh | P1 | [#676](https://github.com/agenity-org/agenity/issues/676) ✅ fixed |
+| Terminal retried a dead session's WebSocket → 404 loop | dashboard load | Repeating `…/attach` 404 errors every ~5s | P2 | [#677](https://github.com/agenity-org/agenity/issues/677) ✅ fixed |
+| Empty-state copy pointed at the wrong flag | TC-02.1 | *"configure --federation-registry-url"* (older mechanism, not the hub mesh) | P3 | [#678](https://github.com/agenity-org/agenity/issues/678) ✅ fixed |
+| Multi-host showed a red error for hub peers | TC-02.3 | *"Failed to fetch"* under `openova-bastion` | P2 | [#679](https://github.com/agenity-org/agenity/issues/679) ✅ fixed |
 
 ---
 

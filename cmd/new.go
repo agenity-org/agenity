@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	stylepkg "github.com/chepherd/chepherd/internal/style"
+	stylepkg "github.com/agenity-org/agenity/internal/style"
 )
 
 var (

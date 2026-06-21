@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // TestP0_404_AgentCardEndpoint_404OnUnknownSession — bare-Server

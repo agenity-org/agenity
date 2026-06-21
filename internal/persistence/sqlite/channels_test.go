@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 func TestChannelRepository_RoundTrip(t *testing.T) {

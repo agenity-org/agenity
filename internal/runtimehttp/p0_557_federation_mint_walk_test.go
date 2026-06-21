@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/auth"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func TestV094Walk_F81_CrossOrgMint_RealKeyStore(t *testing.T) {

@@ -28,8 +28,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/chepherd/chepherd/internal/federation"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/federation"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func main() {

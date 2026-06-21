@@ -31,8 +31,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // App is the v0.5 TUI client.

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/scrummaster"
+	"github.com/agenity-org/agenity/internal/scrummaster"
 )
 
 // fakeShepherd captures events broadcast via Runtime.RecordEvent so the

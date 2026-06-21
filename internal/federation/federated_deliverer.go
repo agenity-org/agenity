@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // FederatedDeliverer wraps a local a2a.Deliverer + an AgentCardRepository

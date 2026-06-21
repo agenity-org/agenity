@@ -1,4 +1,4 @@
-module github.com/chepherd/chepherd
+module github.com/agenity-org/agenity
 
 go 1.25.0
 

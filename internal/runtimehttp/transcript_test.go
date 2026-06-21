@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // newTestServer builds a Server with a fresh SQLite-backed ChannelStore + a
@@ -253,14 +253,14 @@ func TestTeamGithubURLDerivation(t *testing.T) {
 	})
 	rt.UpsertSessionInfoForTest(&runtime.SessionInfo{
 		ID: "sid-scrum-1", Name: "scrum-worker", Team: "scrum",
-		Role: "worker", GitHubURL: "https://github.com/chepherd/chepherd",
+		Role: "worker", GitHubURL: "https://github.com/agenity-org/agenity",
 	})
 
 	// Direct unit check on teamGitHubURL.
 	if got := s.teamGitHubURL("trio"); got != "https://github.com/ping-cash/ping-cash" {
 		t.Errorf("teamGitHubURL(trio) = %q, want trimmed ping-cash url", got)
 	}
-	if got := s.teamGitHubURL("scrum"); got != "https://github.com/chepherd/chepherd" {
+	if got := s.teamGitHubURL("scrum"); got != "https://github.com/agenity-org/agenity" {
 		t.Errorf("teamGitHubURL(scrum) = %q", got)
 	}
 	if got := s.teamGitHubURL("nonexistent"); got != "" {

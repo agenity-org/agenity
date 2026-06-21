@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/canon"
-	"github.com/chepherd/chepherd/internal/roles"
+	"github.com/agenity-org/agenity/internal/canon"
+	"github.com/agenity-org/agenity/internal/roles"
 )
 
 // newTestServerWithCanon builds a minimal Server with just canon +

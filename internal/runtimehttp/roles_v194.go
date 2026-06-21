@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/chepherd/chepherd/internal/roles"
+	"github.com/agenity-org/agenity/internal/roles"
 )
 
 // rolesRoot — list + create.
