@@ -304,8 +304,9 @@ func TestCreate_Neither_Returns400(t *testing.T) {
 }
 
 func TestCreate_Agent_MissingRequiredEnv_Returns400(t *testing.T) {
-	// qwen-code requires OPENAI_API_KEY + OPENAI_BASE_URL. Force them
-	// unset for this test.
+	// opencode requires OPENAI_API_KEY + OPENAI_BASE_URL (qwen-code's
+	// RequiredEnv was cleared in #741 — it uses OAuth, so it's no longer a
+	// valid subject for a missing-env check). Force them unset for this test.
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 	mgr := session.NewManager()
@@ -315,7 +316,7 @@ func TestCreate_Agent_MissingRequiredEnv_Returns400(t *testing.T) {
 	defer srv.Close()
 
 	resp, body := postSessionsJSON(t, srv.URL, map[string]any{
-		"agent": "qwen-code",
+		"agent": "opencode",
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s want 400", resp.StatusCode, body)
