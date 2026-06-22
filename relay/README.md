@@ -47,7 +47,7 @@ This relay implements the server side of the chepherd-rc protocol; the canonical
 The canonical deployment is via the `bp-chepherd-relay` Blueprint in `openova-io/openova/products/chepherd-relay/chart/`. To self-host:
 
 ```bash
-git clone https://github.com/chepherd/chepherd-relay
+git clone https://github.com/agenity-org/agenity-relay
 cd chepherd-relay
 helm install chepherd-relay ./chart \
   --namespace chepherd-relay --create-namespace \
@@ -73,7 +73,7 @@ MIT.
 
 ## Related
 
-- chepherd (main repo + daemon + TUI): https://github.com/chepherd/chepherd
-- chepherd-rc-web (browser client): https://github.com/chepherd/chepherd-rc-web (TBD)
-- chepherd-rc-ios: https://github.com/chepherd/chepherd-rc-ios (TBD)
-- chepherd-rc-android: https://github.com/chepherd/chepherd-rc-android (TBD)
+- chepherd (main repo + daemon + TUI): https://github.com/agenity-org/agenity
+- chepherd-rc-web (browser client): https://github.com/agenity-org/agenity-rc-web (TBD)
+- chepherd-rc-ios: https://github.com/agenity-org/agenity-rc-ios (TBD)
+- chepherd-rc-android: https://github.com/agenity-org/agenity-rc-android (TBD)

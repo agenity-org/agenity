@@ -11,7 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/chepherd/chepherd/internal/style"
+	"github.com/agenity-org/agenity/internal/style"
 )
 
 // NewSessionWizard is W2 — modal multi-step form for creating a watched session.

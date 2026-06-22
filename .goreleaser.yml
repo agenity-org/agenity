@@ -14,9 +14,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/chepherd/chepherd/cmd.Version={{.Version}}
-      - -X github.com/chepherd/chepherd/cmd.Commit={{.ShortCommit}}
-      - -X github.com/chepherd/chepherd/cmd.BuildDate={{.Date}}
+      - -X github.com/agenity-org/agenity/cmd.Version={{.Version}}
+      - -X github.com/agenity-org/agenity/cmd.Commit={{.ShortCommit}}
+      - -X github.com/agenity-org/agenity/cmd.BuildDate={{.Date}}
     goos:
       - linux
       - darwin

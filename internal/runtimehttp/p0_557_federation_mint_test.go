@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/agenity-org/agenity/internal/auth"
 )
 
 // inMemoryKeyStore is a minimal KeyStore stand-in for the F8.1 unit

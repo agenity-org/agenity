@@ -34,9 +34,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/runtime"
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/runtime"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 )
 
 // hubAnnounceInterval is the heartbeat cadence for re-announcing self to

@@ -14,7 +14,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func iconTestServer(t *testing.T) (*httptest.Server, *runtime.Runtime) {

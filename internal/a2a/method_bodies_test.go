@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func newTestRouter(t *testing.T) (*Router, *MethodBodies) {

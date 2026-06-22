@@ -28,7 +28,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 func (s *Server) handleAuditEventsQuery(w http.ResponseWriter, r *http.Request) {

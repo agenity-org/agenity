@@ -17,8 +17,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func TestTasksList_NoStoreReturnsEmpty(t *testing.T) {

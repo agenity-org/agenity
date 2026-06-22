@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 )
 
 // pumpSendMark coordinates the byte-offset send-mark between Deliver

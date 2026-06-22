@@ -351,6 +351,15 @@ type TaskListOpts struct {
 	State     string
 	SinceID   string // cursor
 	Limit     int
+	// Newest, when true, orders by created_at DESC so a Limit returns the
+	// MOST-RECENT N tasks instead of the oldest N. The default (false)
+	// keeps the ascending id order that SinceID cursor pagination relies on
+	// (`id > cursor`). The team transcript needs Newest=true: without it,
+	// `ORDER BY id LIMIT 200` over UUIDv7 (time-ordered) ids returns the
+	// OLDEST 200 tasks, so once a daemon accumulates >200 tasks the most
+	// recent operator/agent messages silently drop out of the Talk feed
+	// (operator-reported 2026-06-20: "message delivered but I can't see it").
+	Newest bool
 }
 
 // ─── 11. PushNotificationConfigRepository ─────────────────────────

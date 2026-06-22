@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 // openTestStore wires a SQLite persistence.Store backed by a temp DB

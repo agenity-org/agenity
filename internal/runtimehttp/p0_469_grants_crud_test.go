@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/auth"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func newGrantStoreForTest(t *testing.T) persistence.RBACGrantRepository {

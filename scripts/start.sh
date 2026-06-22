@@ -213,6 +213,11 @@ exec podman run \
   -e CHEPHERD_HOST_REPOS_DIR="${REPOS_DIR}" \
   -e CHEPHERD_HOST_CLAUDE_DIR="${CLAUDE_DIR}" \
   -e CHEPHERD_MCP_LISTEN=0.0.0.0:9090 \
+  -e CHEPHERD_AGENT_MCP_URL=${CHEPHERD_AGENT_MCP_URL:-http://127.0.0.1:9090/mcp} \
+  `# ↑ make agents use the canonical Streamable-HTTP MCP transport (#478) instead` \
+  `# of the deprecated stdio bridge. copilot's strict JSON-RPC parser chokes on the` \
+  `# bridge framing ("Unexpected end of JSON input"); HTTP gives it clean responses.` \
+  `# Verified: POST /mcp initialize+tools/list return valid JSON from inside agents.` \
   -e CHEPHERD_CLEANUP_ORPHANS_ON_START=${CHEPHERD_CLEANUP_ORPHANS_ON_START:-true} \
   ${CHEPHERD_FEDERATION_REGISTRY_URL:+-e CHEPHERD_FEDERATION_REGISTRY_URL="${CHEPHERD_FEDERATION_REGISTRY_URL}"} \
   `# #676 — join the hub-relayed federation mesh so the dashboard's Federation/Multi-host` \

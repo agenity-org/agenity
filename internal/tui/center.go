@@ -21,7 +21,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/chepherd/chepherd/internal/style"
+	"github.com/agenity-org/agenity/internal/style"
 )
 
 // CenterRefreshInterval is how often capture-pane is re-run. 500ms is

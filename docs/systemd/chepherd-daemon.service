@@ -18,7 +18,7 @@
 
 [Unit]
 Description=chepherd Go supervisor daemon — coaches parallel Claude Code sessions
-Documentation=https://github.com/chepherd/chepherd/blob/main/docs/RUNBOOK-cutover-py-to-go.md
+Documentation=https://github.com/agenity-org/agenity/blob/main/docs/RUNBOOK-cutover-py-to-go.md
 # Don't start until the tmux server socket is reachable. The daemon
 # discovers sessions via `tmux ls`; without tmux running there's
 # nothing to watch.

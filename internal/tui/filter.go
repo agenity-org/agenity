@@ -6,8 +6,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"github.com/chepherd/chepherd/internal/state"
-	"github.com/chepherd/chepherd/internal/style"
+	"github.com/agenity-org/agenity/internal/state"
+	"github.com/agenity-org/agenity/internal/style"
 )
 
 // Filter is W3 — a slide-in filter box at the top of the session list.

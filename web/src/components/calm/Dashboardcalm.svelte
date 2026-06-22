@@ -561,7 +561,9 @@
                 <button class="tp-collapse" onclick={toggleTranscript} title="Hide transcript" aria-label="Hide transcript">⌄</button>
               </div>
               <div class="tp-inner">
-                <TeamTranscript team="all" />
+                <!-- No team prop: TeamTranscript defaults to the first real team
+                     (the "all" aggregate was removed from the picker, 991e700). -->
+                <TeamTranscript />
               </div>
             </section>
           {/if}

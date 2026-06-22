@@ -43,10 +43,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/runtime"
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/runtime"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 	"github.com/google/uuid"
 )
 
@@ -440,7 +440,11 @@ func (s *Server) collectTranscriptRows(ctx context.Context, ch *persistence.Chan
 	// 2. A2A TaskStore rows (agent↔agent + human↔agent comms via
 	//    chepherd.send_to_session / A2A message/send).
 	if s.TaskStore != nil {
-		tasks, err := s.TaskStore.List(ctx, persistence.TaskListOpts{Limit: 200})
+		// Newest:true — without it List orders by ascending UUIDv7 id, so
+		// `LIMIT 200` returns the OLDEST 200 tasks and recent operator/agent
+		// messages vanish from the Talk feed once the daemon has >200 tasks
+		// (operator-reported 2026-06-20: "message delivered but I can't see it").
+		tasks, err := s.TaskStore.List(ctx, persistence.TaskListOpts{Limit: 200, Newest: true})
 		if err == nil {
 			for _, t := range tasks {
 				if len(t.InputBlob) == 0 {
@@ -488,7 +492,7 @@ func (s *Server) collectTranscriptRows(ctx context.Context, ch *persistence.Chan
 				// Restrict to recipients (or authors) that belong to this
 				// team so the per-team feed doesn't bleed cross-team comms
 				// of agents who happen to span multiple teams.
-				if !s.taskRowBelongsToTeam(team, author, rcpt) {
+				if !s.taskRowBelongsToTeam(ctx, ch, team, author, rcpt) {
 					continue
 				}
 				rows = append(rows, transcriptRow{
@@ -545,19 +549,36 @@ func (s *Server) collectTranscriptRows(ctx context.Context, ch *persistence.Chan
 // taskRowBelongsToTeam returns true when either the author or recipient of
 // an A2A task row is a live member of the given team. Used to scope the
 // per-team transcript feed so cross-team comms don't leak between feeds.
-func (s *Server) taskRowBelongsToTeam(team, author, recipient string) bool {
-	if s.rt == nil {
-		return true // permissive when runtime is offline (tests)
-	}
-	for _, info := range s.rt.List() {
-		if info == nil || info.Team != team {
-			continue
+func (s *Server) taskRowBelongsToTeam(ctx context.Context, ch *persistence.Channel, team, author, recipient string) bool {
+	// Prefer PERSISTENT channel membership so a message stays on the team feed
+	// even after its sender/recipient agent stops or the daemon restarts.
+	// (Was: keyed on s.rt.List() — live agents only — so a daemon restart or a
+	// dead agent made that agent's whole conversation vanish from the Talk pane
+	// even though the messages are still persisted. Operator-reported 2026-06-20:
+	// "why do I not see any of the proper messages in Talk".)
+	if ch != nil && s.ChannelStore != nil {
+		if mems, err := s.ChannelStore.Members(ctx, ch.ID); err == nil {
+			for _, m := range mems {
+				if m != nil && (m.Member == author || m.Member == recipient) {
+					return true
+				}
+			}
 		}
-		if info.Name == author || info.Name == recipient {
-			return true
-		}
 	}
-	return false
+	// Fallback: live runtime membership (covers agents not yet recorded as
+	// channel members, e.g. mid-spawn before AddMember runs).
+	if s.rt != nil {
+		for _, info := range s.rt.List() {
+			if info == nil || info.Team != team {
+				continue
+			}
+			if info.Name == author || info.Name == recipient {
+				return true
+			}
+		}
+		return false
+	}
+	return true // permissive when both sources unavailable (tests)
 }
 
 // alertBelongsToTeam returns true when an alert_human entry should appear on

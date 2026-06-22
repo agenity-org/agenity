@@ -18,7 +18,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func TestP0_383_Healthz_ContainerRuntimeField(t *testing.T) {

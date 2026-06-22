@@ -43,9 +43,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
-	"github.com/chepherd/chepherd/internal/mcpserver"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/auth"
+	"github.com/agenity-org/agenity/internal/mcpserver"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func main() {

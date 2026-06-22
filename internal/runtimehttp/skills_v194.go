@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/chepherd/chepherd/internal/skills"
+	"github.com/agenity-org/agenity/internal/skills"
 )
 
 func (s *Server) skillsRoot(w http.ResponseWriter, r *http.Request) {

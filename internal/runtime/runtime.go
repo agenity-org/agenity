@@ -25,11 +25,11 @@ import (
 	"sync"
 	"time"
 
-	agententity "github.com/chepherd/chepherd/internal/agent"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/ptyhost/agentcatalog"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
-	"github.com/chepherd/chepherd/internal/scrummaster"
+	agententity "github.com/agenity-org/agenity/internal/agent"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/ptyhost/agentcatalog"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/scrummaster"
 	"github.com/google/uuid"
 )
 
@@ -305,6 +305,27 @@ type Runtime struct {
 	// so cross-token contention is irrelevant; per-token mutexes
 	// would add complexity for zero observable benefit.
 	claudeRefreshMu sync.Mutex
+
+	// #744 — the daemon is the SOLE refresher of every running claude-flavor
+	// agent's bind-mounted ~/.claude/.credentials.json. credRefreshInterval
+	// is how often startClaudeCredRefresher scans; credRefreshThreshold is
+	// how close to expiry a credential must be before the daemon re-resolves
+	// + rewrites it (with the refreshToken blanked). Production defaults are
+	// set in NewWithStore; same-package tests overwrite them directly for
+	// fast, deterministic ticks.
+	credRefreshInterval  time.Duration
+	credRefreshThreshold time.Duration
+
+	// credPusher writes the given credentials.json bytes into the named agent's
+	// running container at ~/.claude/.credentials.json (UID-translated via the
+	// container runtime). The daemon runs as host UID 1000 but the bind-mounted
+	// host file is chowned to the container's remapped UID (100999) by the `:U`
+	// mount option, so a host-side os.WriteFile gets EACCES every tick and the
+	// refresher silently never refreshes anything. Routing the write through
+	// `podman cp` (which translates UIDs) is the only path that lands. Default
+	// is r.pushCredToContainer (set in NewWithStore); overridable in tests so
+	// the unit test doesn't require a live podman. #744.
+	credPusher func(agentName, containerName, payload string) error
 
 	// extraAgentEnv is appended to every agent's spawn env. Used to
 	// inject the operator's MCP bearer token (CHEPHERD_TOKEN) so the
@@ -933,7 +954,15 @@ func NewWithStore(stateDir string, store persistence.Store) (*Runtime, error) {
 		sessionToAgent:   make(map[string]uuid.UUID),
 		instanceUUID:     instUUID,
 		peers:            NewPeerRegistry(),
+		// #744 — daemon cred-refresher cadence. Production defaults; tests
+		// overwrite directly (same package) for fast ticks.
+		credRefreshInterval:  5 * time.Minute,
+		credRefreshThreshold: 15 * time.Minute,
 	}
+	// #744 — default the container-write seam to the real podman-cp impl.
+	// Tests inject a fake credPusher to capture (containerName, payload)
+	// without requiring a live container runtime.
+	r.credPusher = r.pushCredToContainer
 	// #216 closes the Spawn ↔ SessionRepository seam left open by
 	// PR #211 (runtime migration) + PR #213 (daemon retire). With a
 	// store wired, Spawn writes the initial session row so shepherd's
@@ -1130,6 +1159,16 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 			extraArgs = append(extraArgs, "--model", modelTier)
 		case "qwen-code":
 			extraArgs = append(extraArgs, "--model", modelTier)
+		case "lean-coder":
+			// lean-coder reads --model and self-configures the provider from a
+			// "provider/model" prefix (cerebras/groq/gemini), so the wizard's
+			// model pick selects the free provider directly.
+			extraArgs = append(extraArgs, "--model", modelTier)
+		case "tool-coder":
+			// tool-coder shares lean-coder's --model provider self-config
+			// (cerebras/groq/gemini), so the wizard's model pick selects the
+			// free provider the native tool loop runs on.
+			extraArgs = append(extraArgs, "--model", modelTier)
 		}
 	}
 
@@ -1158,6 +1197,20 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	// the server can't tell which shepherd / worker made which call
 	// (#89). Read by the bridge in BridgeStdioToHTTP via os.Getenv.
 	envWithMCP = append(envWithMCP, "CHEPHERD_AGENT_NAME="+spec.Name)
+
+	// opencode — honor the wizard's per-agent model pick. opencode reads its
+	// model from the OPENCODE_MODEL env var (a "provider/model" string like
+	// "cerebras/gpt-oss-120b" / "groq/llama-3.3-70b-versatile" / "google/…"),
+	// NOT a --model flag, so the model_tier switch above (which appends
+	// --model for claude-code/qwen-code/lean-coder) can't reach it. The global
+	// vault OPENCODE_MODEL overlay was appended above and hard-pinned EVERY
+	// opencode agent to ONE model regardless of what the operator selected
+	// per-agent in the spawn wizard (operator-reported 2026-06-20: "I select
+	// groq/cerebras for opencode but it's hardcoded to gemini"). Append the
+	// per-agent value LAST so envSliceToMap's last-wins dedup overrides the
+	// vault default for THIS agent only; agents spawned without a pick still
+	// fall back to the vault OPENCODE_MODEL.
+	envWithMCP = append(envWithMCP, opencodeModelOverrideEnv(spec.AgentSlug, spec.StatSheet.ModelTier)...)
 
 	// For Claude Code, pass the absolute mcp-config path explicitly.
 	// Without --mcp-config, Claude only loads .mcp.json after the
@@ -2859,6 +2912,14 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		if httpURL != "" {
 			entry = map[string]any{"httpUrl": httpURL, "headers": headers}
 		}
+		// gemini-cli / qwen-code require the MCP server to be TRUSTED to
+		// auto-execute its tools without a per-call confirmation prompt.
+		// --yolo auto-approves the CLI's BUILTIN tools only, NOT MCP server
+		// tools — so without trust the agent connects + lists chepherd tools
+		// but never CALLS get_task/send_to_session (it silently waits on a
+		// confirmation that never comes). This was the gemini "doesn't emit
+		// tool calls" symptom. Trust the chepherd MCP server explicitly.
+		entry["trust"] = true
 		// #741 — security block: disable the folder-trust prompt (both flavors),
 		// and for gemini pin auth to the API key so it doesn't fall into the
 		// OAuth "Enter the authorization code" flow despite GEMINI_API_KEY set.
@@ -2869,6 +2930,24 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		cfg = map[string]any{
 			"mcpServers": map[string]any{"chepherd": entry},
 			"security":   security,
+		}
+		// #79 — pin gemini-3.1-flash-lite via settings.model.name (mirrors the
+		// catalog --model flag). The earlier gemini-2.5-flash pin (#743/c9ff5d0)
+		// does NOT stick: gemini-cli v0.46 under gemini-api-key auth force-
+		// remaps EVERY 2.x/3.x "flash" model to gemini-3.5-flash inside
+		// resolveModel (useGemini3_5Flash && isFlashModel(resolved) →
+		// DEFAULT_GEMINI_FLASH_MODEL="gemini-3.5-flash"). Proven live 2026-06-21:
+		// --model gemini-2.5-flash hit "limit: 20, model: gemini-3.5-flash".
+		// gemini-3.1-flash-lite ends in "flash-lite" (isFlashModel false), so the
+		// pin survives the remap (verified live — agent replied on
+		// gemini-3.1-flash-lite, no remap) AND has free daily headroom (200) when
+		// the *-flash variants are 20/day-exhausted. Residual: every free gemini
+		// model is 20 req/day; on exhaustion gemini-cli still shows the
+		// interactive "Usage limit reached" modal an unattended agent can't
+		// dismiss (no non-interactive daily-quota fallback exists in the bundle).
+		// qwen-code runs its own (qwen) models — gemini-only pin.
+		if flavor == "gemini-cli" {
+			cfg["model"] = map[string]any{"name": "gemini-3.1-flash-lite"}
 		}
 	case "copilot":
 		rel = filepath.Join(".copilot", "mcp-config.json")
@@ -2893,32 +2972,72 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 		cfg = map[string]any{
 			"$schema": "https://opencode.ai/config.json",
 			"mcp":     map[string]any{"chepherd": chepEntry},
-			// #743 — free-tier slim: Groq free = 12k tokens/min; opencode's full
-			// chepherd MCP tool schemas + briefing exceed it (413 "request too
-			// large"). Disable all chepherd tools then re-enable only the
-			// essential peer/canon ones so requests fit the free cap.
-			"tools": map[string]any{
-				"chepherd*":         false,
-				"*send_to_session*": true,
-				"*get_task*":        true,
-				"*list_sessions*":   true,
-				"*list_peers*":      true,
-				"*read_canon*":      true,
-				"*alert_human*":     true,
-			},
+			// TPM-fit slim, MEASURED live 2026-06-21 against Cerebras + Groq via
+			// a token-counting proxy. opencode's baseline per-turn request is huge
+			// (measured 11,034 prompt_tokens for a trivial reply): opencode's own
+			// ~10.5 kB builtin system prompt + the full 27-tool chepherd MCP schema
+			// set (34,255 chars / ~8.5 k tokens, surfaced to the model as 37 tools
+			// incl. 10 builtins) + the ~10.9 kB AGENTS.md briefing. That busts
+			// Cerebras 30k and Groq 12k TPM. Four levers, each measured:
+			//
+			//   (1) tools allow-list (opencodeToolSlim): 37→4 tools, tool schema
+			//       34,255→1,928 chars. The 4 mesh-essential tools are re-enabled;
+			//       everything else (other chepherd tools + opencode builtins) is
+			//       denied. This is the CORRECT version of the #743 tools-slim that
+			//       was reverted: that one used "chepherd*": false + single-prefix
+			//       re-enables ("chepherd_get_task") that NEVER matched the real
+			//       tool names. opencode names MCP tools <server>_<tool> where the
+			//       chepherd server's tools are ALREADY "chepherd.<x>", so the
+			//       sanitized name is the DOUBLE-prefixed "chepherd_chepherd_<x>"
+			//       (verified live). The deny-wildcard "chepherd_chepherd_*" sorts
+			//       BEFORE the specific allows under Go's alphabetical map marshal
+			//       ('*'=0x2A < '_a'/'_g'/'_l'/'_s'), and opencode applies last-
+			//       entry-wins over Object.entries insertion order, so the specific
+			//       allows win — the exact ordering the old bug got wrong.
+			//   (2) agent.build.prompt: replaces opencode's ~10.5 kB builtin system
+			//       prompt with a focused mesh-worker prompt (system 21,850→1,257
+			//       chars). Live-verified the model still emits real tool calls
+			//       (get_task + send_to_session both fired + delivered).
+			//   (3) instructions: [] — opencode merges (unions) every instructions
+			//       file into the prompt; empty keeps the daemon-written AGENTS.md
+			//       from being doubled by stray project rules files.
+			//   (4) per-model limit.output cap: opencode defaults max_tokens to the
+			//       model's full output limit (40,960 for cerebras gpt-oss). Groq
+			//       counts prompt_tokens + reserved max_tokens against its 12k TPM,
+			//       so EVERY request claimed ~32 k and 413'd regardless of prompt
+			//       size. Capping output to 1024 drops the reservation under the cap
+			//       (Groq full round-trip then fits: measured sum 8,272 tokens, max
+			//       single 1,759). Harmless on Cerebras (replies are short).
+			//
+			// Combined: a trivial turn drops 11,034→730 prompt_tokens; a full
+			// knock→get_task→reply round-trip fits 30k Cerebras (measured max
+			// 3,783/req) and 12k Groq (measured sum 8,272).
+			"tools":        opencodeToolSlim(),
+			"instructions": []string{},
 		}
 		// COORDINATION (#741): the daemon writes the COMPLETE
-		// opencode.json (schema + model + mcp) so it doesn't clobber —
-		// or get clobbered by — the entrypoint's model-only write.
-		// scripts/agent-entrypoint.sh's opencode.json write MUST be
-		// removed (flagged in the PR; not edited here — image build in
-		// flight). Model selection logic is preserved verbatim:
-		// OPENCODE_MODEL > GROQ → groq/llama-3.3-70b-versatile >
-		// CEREBRAS → cerebras/llama-3.3-70b. The daemon DOES see these
-		// env vars (they ride spec.Env / the agent-env overlay), so it
-		// resolves the model here too.
+		// opencode.json (schema + model + mcp + tools + agent + provider)
+		// so it doesn't clobber — or get clobbered by — the entrypoint's
+		// model-only write. scripts/agent-entrypoint.sh's opencode.json
+		// write was already removed (#741). Model selection logic:
+		// per-agent pick > OPENCODE_MODEL > GROQ → groq/llama-3.3-70b-versatile
+		// > CEREBRAS → cerebras/gpt-oss-120b (opencodeModelFromEnv).
 		if model := opencodeModelFromEnv(spec); model != "" {
 			cfg["model"] = model
+			// small_model drives the per-session title-generation request
+			// (a separate ~595-token call). Point it at the SAME model so
+			// there's no second provider/credential to configure; the
+			// output cap below keeps it cheap.
+			cfg["small_model"] = model
+			// Focused build-agent system prompt + per-model output cap. Both
+			// are model-aware: the provider id is the first path segment of
+			// the "provider/model" string.
+			cfg["agent"] = map[string]any{
+				"build": map[string]any{"prompt": opencodeMeshPrompt(spec.Name)},
+			}
+			if prov := opencodeProviderOutputCap(model); prov != nil {
+				cfg["provider"] = prov
+			}
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: no native MCP schema for flavor %q — skipping (#741)\n", spec.Name, flavor)
@@ -2943,6 +3062,123 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 	fmt.Fprintf(os.Stderr, "[chepherd-mcp-flavor] %s: wrote %s (flavor=%s, chepherd MCP via HTTP) (#741)\n", spec.Name, rel, flavor)
 }
 
+// opencodeMeshTools is the allow-list of chepherd MCP tools an opencode
+// mesh worker actually needs: read an inbound task, reply to a peer,
+// escalate to the operator, and enumerate peers. Everything else (the
+// other 23 chepherd tools + all opencode builtins) is denied to keep the
+// per-request tool schema tiny (measured 34,255→1,928 chars).
+//
+// Names are opencode's sanitized form <server>_<tool>. The chepherd MCP
+// server registers tools already named "chepherd.<x>", and opencode
+// prefixes the server id and replaces '.' with '_', yielding the
+// DOUBLE-prefixed "chepherd_chepherd_<x>" (verified live 2026-06-21).
+var opencodeMeshTools = []string{
+	"chepherd_chepherd_get_task",
+	"chepherd_chepherd_send_to_session",
+	"chepherd_chepherd_alert_human",
+	"chepherd_chepherd_list",
+}
+
+// opencodeToolSlim builds the opencode.json "tools" map: deny every
+// builtin + every chepherd tool via a wildcard, then re-enable only the
+// mesh-essential chepherd tools.
+//
+// CORRECTNESS (the #743 bug this fixes): opencode resolves the "tools"
+// map into permissions by iterating Object.entries and applying
+// last-entry-wins. Go's json.Marshal sorts map keys alphabetically, and
+// the deny-wildcard "chepherd_chepherd_*" sorts BEFORE the specific
+// "chepherd_chepherd_<x>" allows ('*' = 0x2A precedes '_a'/'_g'/'_l'/'_s'),
+// so the specific allows land last and win. The old #743 slim used
+// "chepherd*": false with single-prefix re-enables that never matched the
+// real double-prefixed names, so every chepherd tool stayed denied.
+//
+// Builtins are listed explicitly (a bare "*": false would also deny the
+// chepherd wildcard's specific re-enables if it sorted between them, and
+// keeping the builtin set explicit makes the deny surface auditable).
+func opencodeToolSlim() map[string]any {
+	t := map[string]any{
+		// opencode builtins this mesh worker doesn't need.
+		"bash": false, "edit": false, "write": false, "read": false,
+		"glob": false, "grep": false, "webfetch": false, "websearch": false,
+		"skill": false, "task": false, "todowrite": false, "patch": false,
+		// deny every chepherd MCP tool…
+		"chepherd_chepherd_*": false,
+	}
+	// …then re-enable only the mesh-essential ones.
+	for _, name := range opencodeMeshTools {
+		t[name] = true
+	}
+	return t
+}
+
+// opencodeMeshPrompt is the focused build-agent system prompt that
+// replaces opencode's ~10.5 kB builtin prompt. It carries the agent's
+// identity, the four MCP tool names, and the knock protocol so the model
+// can drive a full round-trip without the verbose AGENTS.md (system
+// prompt drops 21,850→1,257 chars; tool-calling verified intact live).
+func opencodeMeshPrompt(name string) string {
+	return fmt.Sprintf(`You are %q, a worker agent in a chepherd multi-agent mesh. `+
+		`You collaborate with peer agents and a human operator through MCP tools. `+
+		`Call MCP tools as native tool calls (never as bash).
+
+Available chepherd tools:
+- chepherd_chepherd_get_task(taskID): fetch an inbound task envelope
+- chepherd_chepherd_send_to_session(name, body): reply to or message a peer
+- chepherd_chepherd_alert_human(kind, urgency, body): escalate to the operator
+- chepherd_chepherd_list: list peers
+
+KNOCK PROTOCOL: when your input contains a line like [chepherd-knock taskID=<uuid> from=<name>], `+
+		`a peer sent you a task. Handle it now: (1) call chepherd_chepherd_get_task with that taskID `+
+		`to read the request; (2) do the task; (3) call chepherd_chepherd_send_to_session with `+
+		`name=<from> and body=<your reply>. Also print your reply. Be concise — do not call tools you do not need.`, name)
+}
+
+// opencodeProviderOutputCap returns the opencode.json "provider" block
+// that caps the model's max output tokens, or nil for models that don't
+// need it. opencode defaults max_tokens to the model's full output limit
+// (40,960 for cerebras gpt-oss). Groq counts prompt_tokens + reserved
+// max_tokens against its 12k TPM, so an uncapped request 413s
+// ("Request too large … Requested ~32 k") regardless of the actual
+// prompt size. Capping output to opencodeMaxOutputTokens drops the
+// reservation under the cap.
+//
+// The provider id is the first path segment of the "provider/model"
+// string (e.g. "groq/llama-3.3-70b-versatile" → "groq"). The per-model
+// limit requires BOTH context and output (opencode schema), so context is
+// set to a generous default that opencode clamps to the real window.
+func opencodeProviderOutputCap(model string) map[string]any {
+	slash := strings.IndexByte(model, '/')
+	if slash <= 0 || slash >= len(model)-1 {
+		return nil
+	}
+	providerID := model[:slash]
+	modelID := model[slash+1:]
+	return map[string]any{
+		providerID: map[string]any{
+			"models": map[string]any{
+				modelID: map[string]any{
+					"limit": map[string]any{
+						"context": opencodeContextWindow,
+						"output":  opencodeMaxOutputTokens,
+					},
+				},
+			},
+		},
+	}
+}
+
+const (
+	// opencodeMaxOutputTokens caps each opencode request's reserved
+	// completion budget. Mesh replies are short (a peer message / an
+	// operator alert), so 1024 is ample and keeps Groq's
+	// prompt+reserved-output total well under its 12k TPM.
+	opencodeMaxOutputTokens = 1024
+	// opencodeContextWindow is a generous context limit; opencode clamps
+	// it to the model's real window. Required alongside output by the
+	// per-model limit schema.
+	opencodeContextWindow = 131072
+)
+
 // opencodeModelFromEnv resolves the opencode provider/model string from
 // the spawn env, mirroring scripts/agent-entrypoint.sh's selection EXACTLY:
 //
@@ -2953,6 +3189,21 @@ func (r *Runtime) writeFlavorMCPConfig(spec SpawnSpec, agentHomeDir string) {
 // process env (operator-registered keys). Returns "" when none apply —
 // opencode then auto-resolves from any provider key present at runtime.
 func opencodeModelFromEnv(spec SpawnSpec) string {
+	// The operator's PER-AGENT pick in the spawn wizard (stat_sheet.model_tier,
+	// a "provider/model" string) wins over everything. opencode reads its model
+	// from opencode.json (this value), and that config file takes precedence
+	// over the OPENCODE_MODEL env var — so without this branch the wizard pick
+	// was silently overridden by the global vault default written below
+	// (operator-reported 2026-06-20: picked groq/cerebras, every opencode agent
+	// still ran google/gemini-2.5-flash — its log showed providerID=google even
+	// though the container env OPENCODE_MODEL was the picked provider).
+	// A whitespace-only model_tier ("  ") is NOT a real pick (a malformed
+	// client can set it verbatim from JSON with no trim on the path) — trim
+	// it so it falls through to the provider-key defaults / vault default
+	// rather than returning "  " as a bogus provider/model string.
+	if tier := strings.TrimSpace(spec.StatSheet.ModelTier); tier != "" {
+		return tier
+	}
 	lookup := func(key string) string {
 		prefix := key + "="
 		// per-spawn env wins
@@ -2966,11 +3217,33 @@ func opencodeModelFromEnv(spec SpawnSpec) string {
 	if m := lookup("OPENCODE_MODEL"); m != "" {
 		return m
 	}
+	// Prefer Groq over Cerebras for the opencode default (REVERSES the #744
+	// Cerebras-first preference, which the TPM slim + a live A/B made obsolete).
+	//
+	// The #744 comment claimed "Groq 413s, never works" — that was true while
+	// opencode reserved the model's full 40,960 max_tokens, which Groq counts
+	// against its 12k TPM. The per-model output cap (opencodeProviderOutputCap,
+	// writeFlavorMCPConfig) drops that reservation to 1024, so a full
+	// knock→get_task→reply round-trip now fits Groq 12k (measured live
+	// 2026-06-21: sum 8,272 prompt_tokens, no 413).
+	//
+	// Why Groq is now the BETTER default: Cerebras's free models (gpt-oss-120b,
+	// zai-glm-4.7) are REASONING models. opencode replays the assistant's
+	// reasoning_content in the follow-up request, and Cerebras's OpenAI-compatible
+	// endpoint REJECTS that field ("messages.N.assistant.reasoning_content …
+	// unsupported"), which kills the multi-step tool loop on the SECOND request —
+	// reproduced live on the production path even with the output cap, and not
+	// fixable via opencode.json today. Groq's llama-3.3-70b-versatile is a
+	// non-reasoning model, so it has no reasoning_content to replay: the full
+	// round-trip completes cleanly (verified live on the production daemon).
+	// Cerebras stays selectable (per-agent pick / OPENCODE_MODEL) for short,
+	// single-shot work where the reasoning replay doesn't bite, and as a
+	// fallback when no Groq key is present.
 	if lookup("GROQ_API_KEY") != "" {
 		return "groq/llama-3.3-70b-versatile"
 	}
 	if lookup("CEREBRAS_API_KEY") != "" {
-		return "cerebras/llama-3.3-70b"
+		return "cerebras/gpt-oss-120b"
 	}
 	return ""
 }
@@ -3226,11 +3499,21 @@ func (r *Runtime) materializeClaudeSecrets(spec SpawnSpec, dir string, fs agentO
 			}
 		}
 		r.claudeRefreshMu.Unlock()
-		if err := os.WriteFile(dst, []byte(payload), 0o644); err != nil {
+		// #744 — blank the refreshToken in the CONTAINER copy only. The
+		// vault UpdateValue above kept the UN-blanked refreshed payload (the
+		// vault is the master store and DOES need the refreshToken so the
+		// daemon can keep refreshing). But the container must NEVER hold a
+		// usable refreshToken: Anthropic rotates the refresh token on use, so
+		// a container that self-refreshes would invalidate the operator's own
+		// host claude-code (~1hr after spawn → HTTP 401 → "/login"). The
+		// daemon's background refresher (startClaudeCredRefresher) becomes the
+		// SOLE refresher. Blank AFTER the vault write, just before WriteFile.
+		containerPayload := blankClaudeRefreshToken(payload)
+		if err := os.WriteFile(dst, []byte(containerPayload), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: WRITE FAILED to %s: %v\n", spec.Name, dst, err)
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: wrote %d-byte credentials.json to %s\n", spec.Name, len(payload), dst)
+		fmt.Fprintf(os.Stderr, "[chepherd-spawn-secrets] %s: wrote %d-byte credentials.json to %s (refreshToken blanked, #744)\n", spec.Name, len(containerPayload), dst)
 		// Also write the onboarding stub claude-code v2.1.150 requires
 		// in ~/.claude.json. Without hasCompletedOnboarding: true +
 		// userID + oauthAccount, claude-code re-runs the welcome /
@@ -3240,6 +3523,210 @@ func (r *Runtime) materializeClaudeSecrets(spec SpawnSpec, dir string, fs agentO
 		if onboarding != "" {
 			_ = os.WriteFile(filepath.Join(dir, "claude-onboarding"), []byte(onboarding), 0o644)
 		}
+	}
+	return nil
+}
+
+// resolveFreshestClaudeCred resolves the freshest master Claude credential
+// using the SAME source-priority chain as materializeClaudeSecrets's resolve
+// phase (#369/#374): a pinned vault token-id (if any), then the most-recently-
+// updated claude-oauth vault entry, then the host's ~/.claude/.credentials.json
+// — picking whichever is FRESHER by expiresAt when comparing vault-vs-host.
+//
+// It returns the payload, a human-readable source label, the vault id the
+// payload came from (empty if it came from the host or no vault hit), and a
+// flag indicating the host-fallback path won (the #374 host-pin signal so the
+// caller does NOT re-read the vault and clobber the fresh host bytes).
+//
+// This is read-only: it does NOT refresh or write anything. The daemon
+// refresher (#744) and a potential future spawn refactor both layer the
+// claudeRefreshMu-guarded refresh + vault write-back on top of this.
+func (r *Runtime) resolveFreshestClaudeCred(tokenID string, fs agentOAuthCredsSpec) (payload, src, vaultID string, pickedFromHost bool) {
+	if r.vault != nil {
+		if tokenID != "" && tokenID != "__none__" {
+			if v, err := r.vault.GetValue(tokenID); err == nil {
+				payload = v
+				vaultID = tokenID
+				src = "vault:by-token-id:" + tokenID
+			}
+		}
+		if payload == "" {
+			creds := r.vault.ListByProvider(fs.oauthVaultProvider)
+			if len(creds) > 0 {
+				latest := creds[len(creds)-1]
+				if v, err := r.vault.GetValue(latest.ID); err == nil {
+					payload = v
+					vaultID = latest.ID
+					src = "vault:fallback-most-recent-" + fs.oauthVaultProvider + ":" + latest.ID
+				}
+			}
+		}
+	}
+	// #369 P0 — prefer the host file when it is fresher than the vault snapshot.
+	if hostSrc := hostOAuthCredsPath(fs); hostSrc != "" {
+		if b, err := os.ReadFile(hostSrc); err == nil {
+			hostPayload := string(b)
+			if claudeCredsExpiresAt(hostPayload) > claudeCredsExpiresAt(payload) {
+				payload = hostPayload
+				src = "host-fallback:" + hostSrc
+				vaultID = "" // host bytes are not a vault entry
+				pickedFromHost = true
+			}
+		}
+	}
+	return payload, src, vaultID, pickedFromHost
+}
+
+// startClaudeCredRefresher runs until ctx is cancelled. Every
+// r.credRefreshInterval it scans running claude-flavor agents; for each whose
+// bind-mounted ~/.claude/.credentials.json expiresAt is within
+// r.credRefreshThreshold of now, it re-resolves the freshest Claude
+// credential (same host-vs-vault #369 priority + refreshClaudeOAuthIfNeeded
+// under claudeRefreshMu as spawn), blanks the refreshToken, and overwrites the
+// agent's credential file. This makes the daemon the SOLE refresher (#744).
+func (r *Runtime) startClaudeCredRefresher(ctx context.Context) {
+	interval := r.credRefreshInterval
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.refreshClaudeCredsOnce()
+		}
+	}
+}
+
+// refreshClaudeCredsOnce is one scan-and-refresh pass over the running
+// claude-flavor agents. Factored out of the loop so tests can drive a single
+// deterministic tick without racing a ticker. Refs #744.
+func (r *Runtime) refreshClaudeCredsOnce() {
+	threshold := r.credRefreshThreshold
+	if threshold <= 0 {
+		threshold = 15 * time.Minute
+	}
+
+	// Snapshot the running agents' names+slugs under the lock; do the
+	// file/network work outside it.
+	type agentRef struct {
+		name string
+		slug string
+	}
+	r.mu.Lock()
+	refs := make([]agentRef, 0, len(r.info))
+	for _, info := range r.info {
+		refs = append(refs, agentRef{name: info.Name, slug: info.AgentSlug})
+	}
+	r.mu.Unlock()
+
+	fs := oauthCredsSpecFor("claude-code")
+	if fs == nil {
+		return // no claude-code OAuth row (should never happen)
+	}
+
+	nowMs := time.Now().UnixMilli()
+	for _, ref := range refs {
+		// claude-flavor = AgentSlug "claude-code" OR empty (empty defaults
+		// to claude-code, same as materializeAgentSecrets).
+		if ref.slug != "" && ref.slug != "claude-code" {
+			continue
+		}
+		credPath := filepath.Join(r.stateDir, "agents", ref.name, "home", ".claude", ".credentials.json")
+		b, err := os.ReadFile(credPath)
+		if err != nil {
+			continue // file missing (agent not booted yet / non-claude) — skip
+		}
+		exp := claudeCredsExpiresAt(string(b))
+		if exp > nowMs+threshold.Milliseconds() {
+			continue // still comfortably fresh — nothing to do
+		}
+
+		// Re-resolve the freshest master credential (no pinned token-id at
+		// the session level; resolveFreshestClaudeCred falls through to the
+		// most-recent claude-oauth vault entry vs. the host file).
+		payload, _, vaultID, pickedFromHost := r.resolveFreshestClaudeCred("", *fs)
+		if payload == "" {
+			continue // no master credential available — leave the file as-is
+		}
+
+		// Refresh under claudeRefreshMu (same serialization as spawn, #264)
+		// and persist the UN-blanked refreshed pair back to the vault when
+		// the source was a vault entry — never when the host was picked
+		// (#374: re-reading/overwriting the host pick would regress).
+		r.claudeRefreshMu.Lock()
+		if refreshed, ok := refreshClaudeOAuthIfNeeded(payload); ok {
+			payload = refreshed
+			if !pickedFromHost && r.vault != nil && vaultID != "" {
+				_ = r.vault.UpdateValue(vaultID, refreshed)
+			}
+		}
+		r.claudeRefreshMu.Unlock()
+
+		// Blank the refreshToken in the container copy (#744) and push it
+		// INTO the running container via the container runtime. We cannot
+		// os.WriteFile the bind-mounted host file: the `:U` mount option
+		// chowns it to the container's remapped UID (100999) but the daemon
+		// runs as host UID 1000, so a host write gets EACCES every tick. The
+		// credPusher (podman cp + chmod, UID-translated) is the only path
+		// that lands. #744.
+		out := blankClaudeRefreshToken(payload)
+		containerName := containerNamePrefix(r.instanceUUID) + ref.name
+		if err := r.credPusher(ref.name, containerName, out); err != nil {
+			fmt.Fprintf(os.Stderr, "[chepherd-cred-refresh] %s: push failed: %v\n", ref.name, err)
+			continue
+		}
+		newExp := claudeCredsExpiresAt(out)
+		minsLeft := (newExp - time.Now().UnixMilli()) / 60000
+		fmt.Fprintf(os.Stderr, "[chepherd-cred-refresh] %s: refreshed accessToken (exp in %dm), refreshToken blanked\n", ref.name, minsLeft)
+	}
+}
+
+// pushCredToContainer is the real (production) credPusher: it writes the
+// given credentials.json bytes into the named agent's RUNNING container at
+// ~/.claude/.credentials.json via `podman cp` so the container runtime
+// translates UIDs (the daemon runs as host UID 1000; the bind-mounted file
+// is owned by the container's remapped UID 100999 thanks to the `:U` mount,
+// so a direct host write fails with EACCES). Sequence:
+//
+//  1. write the payload to a host temp file the daemon CAN write (0600),
+//  2. `podman cp <tmp> <container>:/home/agent/.claude/.credentials.json`,
+//  3. `podman exec <container> chmod 600 <dest>` (claude-code requires 600),
+//  4. remove the temp file.
+//
+// Reuses podmanArgs() so rootless --remote/--url flags stay consistent with
+// the rest of the runtime's container exec convention. #744.
+func (r *Runtime) pushCredToContainer(agentName, containerName, payload string) error {
+	const dest = "/home/agent/.claude/.credentials.json"
+
+	tmp, err := os.CreateTemp("", "chepherd-cred-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.WriteString(payload); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+
+	base := podmanArgs()
+	cpArgs := append(append([]string{}, base[1:]...), "cp", tmpPath, containerName+":"+dest)
+	if out, err := exec.Command(base[0], cpArgs...).CombinedOutput(); err != nil {
+		return fmt.Errorf("podman cp: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	execArgs := append(append([]string{}, base[1:]...), "exec", containerName, "chmod", "600", dest)
+	if out, err := exec.Command(base[0], execArgs...).CombinedOutput(); err != nil {
+		return fmt.Errorf("podman exec chmod: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -3761,6 +4248,29 @@ func envSliceToMap(env []string) map[string]string {
 	return m
 }
 
+// opencodeModelOverrideEnv returns the per-agent OPENCODE_MODEL override for an
+// opencode agent whose operator picked a model in the spawn wizard, or nil.
+// opencode resolves its model from OPENCODE_MODEL (a "provider/model" string,
+// e.g. "groq/llama-3.3-70b-versatile" / "cerebras/gpt-oss-120b" / "google/…"),
+// NOT a --model flag — so the per-agent pick can't ride the model_tier→--model
+// path the other flavors use. Returned to be appended AFTER the global vault
+// OPENCODE_MODEL overlay so envSliceToMap's last-wins dedup makes the operator's
+// per-agent selection win over the vault default (operator-reported 2026-06-20:
+// picked groq/cerebras for opencode but every agent ran on the hardcoded
+// vault gemini). Only opencode is affected; other slugs return nil.
+func opencodeModelOverrideEnv(slug, modelTier string) []string {
+	// A whitespace-only model_tier ("  ") is NOT a real pick — a malformed
+	// client can set it verbatim from JSON with no trim on the path. Treat it
+	// as empty so the global vault OPENCODE_MODEL default applies, rather than
+	// emitting OPENCODE_MODEL="  " (which opencode would try to resolve as a
+	// provider/model and fail).
+	modelTier = strings.TrimSpace(modelTier)
+	if slug == "opencode" && modelTier != "" {
+		return []string{"OPENCODE_MODEL=" + modelTier}
+	}
+	return nil
+}
+
 // claudeOAuthClientID is the public client_id claude-code uses in its
 // PKCE OAuth flow against Anthropic's IdP. Surfaced in every login URL
 // claude-code prints (operator confirmed by inspecting the OAuth URL
@@ -3781,6 +4291,57 @@ const claudeOAuthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 const claudeOAuthTokenEndpoint = "https://console.anthropic.com/v1/oauth/token"
 
 var claudeOAuthTokenEndpointOverride string
+
+// blankClaudeRefreshToken returns the credentials.json payload with
+// claudeAiOauth.refreshToken set to "" while preserving EVERY other field
+// byte-for-byte-semantically (accessToken, expiresAt, scopes,
+// subscriptionType, rateLimitTier, and ANY unknown future fields). The
+// container must never hold a usable refreshToken: Anthropic rotates refresh
+// tokens on use, so a container that self-refreshes would invalidate the
+// operator's own host claude-code (issue #744). Parse into map[string]any —
+// NOT a fixed struct — so unknown fields survive (a fixed struct silently
+// drops rateLimitTier etc; see the json.Marshal-over-handcoded-maps lesson).
+// On any parse error return the input unchanged (fail-safe: better a working
+// token than a corrupted file).
+func blankClaudeRefreshToken(payload string) string {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(payload), &doc); err != nil {
+		return payload // fail-safe: leave the bytes untouched
+	}
+	switch {
+	case isMap(doc["claudeAiOauth"]):
+		// Wrapped shape (the canonical credentials.json claude-code writes):
+		// {"claudeAiOauth":{"accessToken":...,"refreshToken":...,...}}
+		inner := doc["claudeAiOauth"].(map[string]any)
+		inner["refreshToken"] = ""
+	case hasKey(doc, "refreshToken"):
+		// Unwrapped shape: refreshToken sits at the top level.
+		doc["refreshToken"] = ""
+	default:
+		// Unexpected shape — neither a claudeAiOauth map nor a top-level
+		// refreshToken. Leave it unchanged (fail-safe).
+		return payload
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return payload // fail-safe
+	}
+	return string(out)
+}
+
+// isMap reports whether v is a JSON object (map[string]any). Helper for
+// blankClaudeRefreshToken's shape dispatch.
+func isMap(v any) bool {
+	_, ok := v.(map[string]any)
+	return ok
+}
+
+// hasKey reports whether the JSON object m contains key k. Helper for
+// blankClaudeRefreshToken's shape dispatch.
+func hasKey(m map[string]any, k string) bool {
+	_, ok := m[k]
+	return ok
+}
 
 // claudeCredsExpiresAt extracts the expiresAt epoch-ms from a
 // credentials.json payload. Returns 0 on any parse failure (caller

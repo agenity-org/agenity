@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // TaskRepository implements persistence.TaskRepository against SQLite.
@@ -114,11 +114,19 @@ func (r *TaskRepository) List(ctx context.Context, opts persistence.TaskListOpts
 	if limit <= 0 {
 		limit = 1000
 	}
+	// See sqlite tasks.List: Newest flips to created_at DESC so a bounded
+	// Limit returns the most-recent N (the transcript needs this); default
+	// stays ascending id for SinceID cursor pagination. id DESC is a
+	// deterministic tie-break for rows sharing a created_at at the boundary.
+	order := "ORDER BY id"
+	if opts.Newest {
+		order = "ORDER BY created_at DESC, id DESC"
+	}
 	q := fmt.Sprintf(
 		`SELECT id, runner_sid, state, method, input_blob, output_blob,
 		        auth_challenge, created_at, updated_at
-		 FROM tasks %s ORDER BY id LIMIT %d`,
-		where, limit,
+		 FROM tasks %s %s LIMIT %d`,
+		where, order, limit,
 	)
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {

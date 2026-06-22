@@ -20,7 +20,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // daemonClient wraps the WS connection to chepherd-daemon.

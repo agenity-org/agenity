@@ -32,10 +32,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/graphify"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/graphify"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // SetTaskStore wires the runner's R2-owned TaskRepository so the
@@ -43,6 +43,15 @@ import (
 // tasks recipient-scoped. nil disables the tool.
 func (s *Server) SetTaskStore(store persistence.TaskRepository) {
 	s.taskStore = store
+}
+
+// taskFetchMarker is the optional #79 seam: an a2a.Deliverer that wants
+// to know when a recipient called chepherd.get_task implements
+// MarkTaskFetched. runtime.A2ADeliverer does; federation deliverers and
+// test fakes don't (the get_task handler's type-assert is a no-op for
+// them). Kept here (not in a2a) so the deliverer interface stays minimal.
+type taskFetchMarker interface {
+	MarkTaskFetched(taskID string)
 }
 
 // Server hosts the chepherd MCP JSON-RPC surface. Constructed once per
@@ -85,6 +94,22 @@ type Server struct {
 	// so agents can fetch tasks emitted via knock markers. nil
 	// disables the tool (returns -32000 "task store not wired").
 	taskStore persistence.TaskRepository
+
+	// keepAliveInterval overrides the streamable-HTTP SSE keep-alive
+	// cadence. Zero (the default in both constructors) means use the
+	// package const sseKeepAliveInterval; tests inject a short interval
+	// to assert keep-alive frames flow without waiting 15s. Read via
+	// sseKeepAlive().
+	keepAliveInterval time.Duration
+}
+
+// sseKeepAlive returns the effective SSE keep-alive interval: the
+// per-server override when set (>0), otherwise the package default.
+func (s *Server) sseKeepAlive() time.Duration {
+	if s.keepAliveInterval > 0 {
+		return s.keepAliveInterval
+	}
+	return sseKeepAliveInterval
 }
 
 // SetAuthToken configures the bearer token required on every WS upgrade
@@ -253,6 +278,21 @@ func (s *Server) dispatch(req *rpcReq) rpcResp {
 	// (claude tolerated it; gemini does not). Ack with a non-error empty result.
 	if strings.HasPrefix(req.Method, "notifications/") {
 		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}
+	}
+	// #744 follow-up — gemini-cli (unlike claude-code) probes the full MCP
+	// discovery surface after tools/list: prompts/list, resources/list, and
+	// resources/templates/list. chepherd is a tools-only server, so the old
+	// -32601 fall-through on these made gemini flag "MCP issues detected" even
+	// though initialize + tools/list succeeded. Answer with empty collections
+	// (a valid, spec-compliant "this server has none") so gemini sees a clean
+	// server. Operator-observed live on a gemini-cli agent stuck after a knock.
+	switch req.Method {
+	case "prompts/list":
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"prompts": []any{}}}
+	case "resources/list":
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"resources": []any{}}}
+	case "resources/templates/list":
+		return rpcResp{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"resourceTemplates": []any{}}}
 	}
 	fmt.Fprintf(os.Stderr, "[chepherd-mcp] %s: %s → -32601 method not found\n", caller, req.Method)
 	return rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcErr{Code: -32601, Message: "method not found: " + req.Method}}
@@ -693,6 +733,15 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			resp.Error = &rpcErr{Code: -32004, Message: fmt.Sprintf("chepherd.get_task: forbidden (caller %q is not task recipient %q)", callerName, inputMsg.ContextID)}
 			break
 		}
+		// #79 — tell the re-knock watchdog the recipient actually fetched
+		// this task, so it won't re-inject the knock. Recorded only after
+		// the recipient-scope check above passes (a forbidden caller's
+		// get_task must NOT count as the real recipient acting). Best-
+		// effort: deliverers that don't implement the marker (federation /
+		// tests) are a no-op.
+		if m, ok := s.deliverer.(taskFetchMarker); ok {
+			m.MarkTaskFetched(a.TaskID)
+		}
 		// Return the canonical A2A task envelope. OutputBlob already
 		// carries it (runnerDeliverer marshals task there on Save).
 		var taskEnv map[string]any
@@ -703,9 +752,9 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 		}
 	case "set_scorecard":
 		var a struct {
-			Name           string
-			G, V, F, E, D  float64
-			Note           string
+			Name          string
+			G, V, F, E, D float64
+			Note          string
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			resp.Error = &rpcErr{Code: -32602, Message: "invalid args: " + err.Error()}
@@ -821,6 +870,23 @@ func (s *Server) toolCallDirect(id any, name string, args json.RawMessage) rpcRe
 			NoSubmit   bool `json:"no_submit"`
 		}
 		_ = json.Unmarshal(args, &a)
+		// "operator"/"human" is the human, NOT an agent PTY session, so
+		// s.rt.Get returns nil and the shim used to reply "no such session:
+		// operator" — silently dropping every agent reply addressed to the
+		// operator. An operator message arrives with from="operator", so when
+		// the agent replies via send_to_session to that handle (exactly as the
+		// knock-pattern briefing instructs) it hit this dead path and the
+		// operator saw nothing in Talk (operator-reported 2026-06-20: messaged
+		// all 5 agents, the MCP log showed send_to_session→operator → OK, but
+		// the transcript had zero replies). Route operator-addressed messages
+		// into the HumanInbox — the same sink alert_human uses — so they
+		// surface in the Talk transcript (collectTranscriptRows section 3) AND
+		// the dashboard inbox. No Deliverer/PTY session needed for this path.
+		if name := strings.ToLower(strings.TrimSpace(a.Name)); name == "operator" || name == "human" {
+			s.rt.HumanInbox(s.CurrentCaller(), strings.TrimRight(a.Body, "\r\n"))
+			resp.Result = map[string]any{"ok": true, "routed": "operator-inbox"}
+			return resp
+		}
 		if s.deliverer == nil {
 			resp.Error = &rpcErr{Code: -32000, Message: "send_to_session shim unavailable: mcpserver constructed without a2a.Deliverer (use mcpserver.NewWithDeliverer)"}
 			return resp

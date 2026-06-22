@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/agenity-org/agenity/internal/auth"
 )
 
 func newES256ForTest(t *testing.T) *ecdsa.PrivateKey {

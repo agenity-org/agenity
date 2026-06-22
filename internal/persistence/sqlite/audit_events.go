@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // AuditEventRepository implements persistence.AuditEventRepository

@@ -36,8 +36,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 )
 
 // hubAnswererPollInterval is the cadence at which the answerer drains

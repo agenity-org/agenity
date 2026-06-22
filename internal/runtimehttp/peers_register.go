@@ -32,8 +32,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // peerRegisterRequest is the JSON body of POST /api/v1/peers/register.

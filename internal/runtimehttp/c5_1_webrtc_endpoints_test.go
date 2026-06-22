@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 	"github.com/pion/webrtc/v4"
 )
 

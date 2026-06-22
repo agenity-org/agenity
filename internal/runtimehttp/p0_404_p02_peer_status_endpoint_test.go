@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func TestP0_404_P02_PeerStatusEndpoint_404OnUnknownSession(t *testing.T) {

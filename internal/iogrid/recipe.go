@@ -33,7 +33,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/agenity-org/agenity/internal/auth"
 )
 
 // Recipe is the wire-shape of a single iogrid catalogue entry. v0.9.3

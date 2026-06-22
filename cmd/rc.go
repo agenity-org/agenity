@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	stylepkg "github.com/chepherd/chepherd/internal/style"
+	stylepkg "github.com/agenity-org/agenity/internal/style"
 )
 
 var rcCmd = &cobra.Command{
@@ -116,7 +116,7 @@ func runRCEnable(cmd *cobra.Command, args []string) error {
 	// v0.2.0 wires the actual transports here. v0.1 (this binary) prints the
 	// config + records intent so chepherd init can verify everything is set
 	// up correctly. The daemon-side rc client is being built incrementally;
-	// see github.com/chepherd/chepherd/issues/31.
+	// see github.com/agenity-org/agenity/issues/31.
 	intentFile := filepath.Join(configDir, "rc.toml")
 	intent := fmt.Sprintf(`# Written by 'chepherd rc enable' — do not edit by hand.
 # Driven by chepherd's daemon rc client (see #31).

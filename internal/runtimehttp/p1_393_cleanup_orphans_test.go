@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 // TestP1_393_CleanupOrphans_DeletesOrphansPreservesLive — seed 5

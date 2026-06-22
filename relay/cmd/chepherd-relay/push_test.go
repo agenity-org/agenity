@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd-relay/internal/auth"
+	"github.com/agenity-org/agenity-relay/internal/auth"
 )
 
 // authHandler wraps a handler with a fake auth context so the push

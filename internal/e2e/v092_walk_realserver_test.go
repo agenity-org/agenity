@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 // TestV092Walk_RealServerExposesA2A boots the real chepherd binary +

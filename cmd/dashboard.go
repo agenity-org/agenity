@@ -3,7 +3,7 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/tui"
+	"github.com/agenity-org/agenity/internal/tui"
 )
 
 var dashboardCmd = &cobra.Command{

@@ -12,7 +12,7 @@ track the implementations.
 label per semver (see §9). Backwards-incompatible envelope changes are a
 new major (`v2`); new optional fields are not breaking.
 
-**Repo:** `github.com/chepherd/chepherd`
+**Repo:** `github.com/agenity-org/agenity`
 **Schema:** `https://chepherd.org/schema/v1.json` (JSON Schema, served as
 static asset from the website repo once DNS lands)
 
@@ -467,9 +467,9 @@ new major. New optional fields are NOT a breaking change.
 ## §10. Reference implementations
 
 - Daemon (Go): `internal/daemon/rc/` + `internal/daemon/rc/webrtc/` + `internal/daemon/rc/ws/`
-- Web client (TypeScript): https://github.com/chepherd/chepherd-rc-web/tree/main/src/protocol
-- iOS client (Swift): https://github.com/chepherd/chepherd-rc-ios/tree/main/Sources/Protocol
-- Android client (Kotlin): https://github.com/chepherd/chepherd-rc-android/tree/main/protocol/src
+- Web client (TypeScript): https://github.com/agenity-org/agenity-rc-web/tree/main/src/protocol
+- iOS client (Swift): https://github.com/agenity-org/agenity-rc-ios/tree/main/Sources/Protocol
+- Android client (Kotlin): https://github.com/agenity-org/agenity-rc-android/tree/main/protocol/src
 
 Each implementation references this doc's commit SHA in its package header.
 

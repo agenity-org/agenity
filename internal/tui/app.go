@@ -18,9 +18,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	chepherdlog "github.com/chepherd/chepherd/internal/log"
-	"github.com/chepherd/chepherd/internal/state"
-	"github.com/chepherd/chepherd/internal/style"
+	chepherdlog "github.com/agenity-org/agenity/internal/log"
+	"github.com/agenity-org/agenity/internal/state"
+	"github.com/agenity-org/agenity/internal/style"
 )
 
 // RefreshInterval is how often the TUI re-reads state files from disk.

@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 func seedResubscribeTask(t *testing.T, store persistence.Store, taskID, state string) {

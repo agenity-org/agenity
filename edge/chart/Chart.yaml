@@ -18,7 +18,7 @@ maintainers:
   - name: chepherd team
     url: https://chepherd.io
 sources:
-  - https://github.com/chepherd/chepherd
+  - https://github.com/agenity-org/agenity
 annotations:
   category: Edge/Networking
   openova.io/blueprint-type: thirdparty

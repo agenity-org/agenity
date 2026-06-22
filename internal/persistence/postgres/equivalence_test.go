@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence/equivalence"
+	"github.com/agenity-org/agenity/internal/persistence/equivalence"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 

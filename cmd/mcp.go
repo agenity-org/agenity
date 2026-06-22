@@ -19,7 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/mcpserver"
+	"github.com/agenity-org/agenity/internal/mcpserver"
 )
 
 var mcpFlagURL string

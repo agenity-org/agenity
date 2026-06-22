@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 // TestP0_379_PumpCompletesTask_OnSilenceWindow drives the pump directly

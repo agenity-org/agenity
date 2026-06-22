@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 // TestStore_RepoBacked verifies that NewStoreFromRepository wired against

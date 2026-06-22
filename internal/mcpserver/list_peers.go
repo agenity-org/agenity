@@ -24,8 +24,8 @@
 package mcpserver
 
 import (
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // listPeerEntry is the per-peer wire shape. JSON tags MUST match

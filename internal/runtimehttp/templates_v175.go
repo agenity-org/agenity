@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/chepherd/chepherd/internal/templateregistry"
+	"github.com/agenity-org/agenity/internal/templateregistry"
 )
 
 func (s *Server) teamTemplatesRoot(w http.ResponseWriter, r *http.Request) {

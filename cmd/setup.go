@@ -22,8 +22,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/keychain"
-	"github.com/chepherd/chepherd/internal/provider"
+	"github.com/agenity-org/agenity/internal/keychain"
+	"github.com/agenity-org/agenity/internal/provider"
 )
 
 var setupCmd = &cobra.Command{

@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	rh "github.com/chepherd/chepherd/internal/runtimehttp"
+	rh "github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 func TestE2E_465_RunnerPTYToBroker_AndSilenceFinalize(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 )
 
 func TestP0_363_RingSnapshot_ExposesTailOutput(t *testing.T) {

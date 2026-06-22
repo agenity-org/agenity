@@ -8,11 +8,11 @@ Work toward **v0.9.4** (QA complete, not yet tagged).
 
 ### Added
 
-- **Cross-host federation mesh** — independent chepherd parties discover each other via the `chepherd-hub` rendezvous (`/v1/registry/{announce,peers}`) and exchange A2A over hub-relayed WebRTC with zero inbound ports. STUN P2P + TURN relay live at `signal.openova.io` ([#672](https://github.com/chepherd/chepherd/issues/672)). Hub-only peers route through `HubDeliverer` over WebRTC.
+- **Cross-host federation mesh** — independent chepherd parties discover each other via the `chepherd-hub` rendezvous (`/v1/registry/{announce,peers}`) and exchange A2A over hub-relayed WebRTC with zero inbound ports. STUN P2P + TURN relay live at `signal.openova.io` ([#672](https://github.com/agenity-org/agenity/issues/672)). Hub-only peers route through `HubDeliverer` over WebRTC.
 
 ### Deprecated
 
-- `chepherd mcp` stdio bridge subcommand ([#479](https://github.com/chepherd/chepherd/issues/479)). Use MCP HTTP transport via `/run/chepherd/mcp.sock` per [V0.9.2-ARCHITECTURE.md](docs/V0.9.2-ARCHITECTURE.md) §22 ([#525](https://github.com/chepherd/chepherd/issues/525)) instead. The subcommand stays functional in v0.9.4 but emits a deprecation warning to stderr on every invocation; suppress via `CHEPHERD_MCP_DEPRECATION_SILENT=1`. Slated for removal in a future release.
+- `chepherd mcp` stdio bridge subcommand ([#479](https://github.com/agenity-org/agenity/issues/479)). Use MCP HTTP transport via `/run/chepherd/mcp.sock` per [V0.9.2-ARCHITECTURE.md](docs/V0.9.2-ARCHITECTURE.md) §22 ([#525](https://github.com/agenity-org/agenity/issues/525)) instead. The subcommand stays functional in v0.9.4 but emits a deprecation warning to stderr on every invocation; suppress via `CHEPHERD_MCP_DEPRECATION_SILENT=1`. Slated for removal in a future release.
 
 ## [0.9.2] — 2026-05-29
 
@@ -20,10 +20,10 @@ Latest released daemon tag. A2A-compliant runtime: the runner becomes its own pr
 
 ### Added
 
-- **Persistence abstraction** — `internal/persistence/` with 13 Repository interfaces; SQLite (`modernc.org/sqlite`) + PostgreSQL (`jackc/pgx`) implementations behind `database/sql`, with a backend-equivalence test framework (testcontainers). One-time migration tool from `~/.local/state/chepherd` JSON → Store ([#208](https://github.com/chepherd/chepherd/issues/208)).
+- **Persistence abstraction** — `internal/persistence/` with 13 Repository interfaces; SQLite (`modernc.org/sqlite`) + PostgreSQL (`jackc/pgx`) implementations behind `database/sql`, with a backend-equivalence test framework (testcontainers). One-time migration tool from `~/.local/state/chepherd` JSON → Store ([#208](https://github.com/agenity-org/agenity/issues/208)).
 - **A2A runner** — `runtime.Runner` interface (Process + Pod variants); A2A agent-card + JSON-RPC routes wired into `cmd/run.go`'s HTTP server. `chepherd.send_to_session` MCP shim now routes through A2A `SendMessage`. A2A `contextId` accepts session ID OR @-name.
-- **Spawn credential resolution** — `Runtime.Spawn` propagates `vault.claude-oauth` → `CLAUDE_CODE_OAUTH_TOKEN` for claude-code workers; T+30s liveness gate + walk-script auth preflight ([#218](https://github.com/chepherd/chepherd/issues/218)).
-- **End-to-end walk** — in-process regression test (`go test ./internal/e2e/...`) + operator-walk script (`scripts/v092-e2e-walk.sh`) closing epic [#208](https://github.com/chepherd/chepherd/issues/208).
+- **Spawn credential resolution** — `Runtime.Spawn` propagates `vault.claude-oauth` → `CLAUDE_CODE_OAUTH_TOKEN` for claude-code workers; T+30s liveness gate + walk-script auth preflight ([#218](https://github.com/agenity-org/agenity/issues/218)).
+- **End-to-end walk** — in-process regression test (`go test ./internal/e2e/...`) + operator-walk script (`scripts/v092-e2e-walk.sh`) closing epic [#208](https://github.com/agenity-org/agenity/issues/208).
 
 ### Changed
 
@@ -37,7 +37,7 @@ Latest released daemon tag. A2A-compliant runtime: the runner becomes its own pr
 
 ### Added
 
-- **Runtime TUI polish** — per-pane workspace tabs, `Ctrl+Arrow` pane focus, empty-tab center card picker, right-click cascade, role-logo agent cards, uniform-width member cards ([#114](https://github.com/chepherd/chepherd/issues/114), [#179](https://github.com/chepherd/chepherd/issues/179), [#180](https://github.com/chepherd/chepherd/issues/180)).
+- **Runtime TUI polish** — per-pane workspace tabs, `Ctrl+Arrow` pane focus, empty-tab center card picker, right-click cascade, role-logo agent cards, uniform-width member cards ([#114](https://github.com/agenity-org/agenity/issues/114), [#179](https://github.com/agenity-org/agenity/issues/179), [#180](https://github.com/agenity-org/agenity/issues/180)).
 
 ## [0.9.0] — 2026-05-27
 

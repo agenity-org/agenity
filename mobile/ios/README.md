@@ -4,8 +4,8 @@
 > **Component line:** chepherd-rc client (versioned independently from the chepherd daemon, which is at v0.9.2)
 > **Audience:** iOS contributors building/sideloading the chepherd-rc mobile client
 
-[![ios-build](https://github.com/chepherd/chepherd-rc-ios/actions/workflows/ios-build.yml/badge.svg)](https://github.com/chepherd/chepherd-rc-ios/actions/workflows/ios-build.yml)
-[![release](https://img.shields.io/github/v/tag/chepherd/chepherd-rc-ios?label=release&sort=semver)](https://github.com/chepherd/chepherd-rc-ios/releases)
+[![ios-build](https://github.com/agenity-org/agenity-rc-ios/actions/workflows/ios-build.yml/badge.svg)](https://github.com/agenity-org/agenity-rc-ios/actions/workflows/ios-build.yml)
+[![release](https://img.shields.io/github/v/tag/chepherd/chepherd-rc-ios?label=release&sort=semver)](https://github.com/agenity-org/agenity-rc-ios/releases)
 
 Native iOS client for chepherd-rc. Swift 6, SwiftUI, WidgetKit.
 

@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 // captureBroker records Publish calls so tests can assert what

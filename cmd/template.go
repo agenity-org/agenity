@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/catalog"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/catalog"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 var templateCmd = &cobra.Command{

@@ -31,8 +31,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/chepherd/chepherd/internal/auth"
-	rh "github.com/chepherd/chepherd/internal/runtimehttp"
+	"github.com/agenity-org/agenity/internal/auth"
+	rh "github.com/agenity-org/agenity/internal/runtimehttp"
 )
 
 func TestE2E_488_W4_JWTCallerPropagatesIntoAuditEvent(t *testing.T) {

@@ -4,14 +4,14 @@
 // on goal/velocity/focus/end-state-proximity, and coaches them when they drift
 // using the operator's own ~/.claude/CLAUDE.md as the rubric.
 //
-// See https://github.com/chepherd/chepherd for documentation.
+// See https://github.com/agenity-org/agenity for documentation.
 package main
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/chepherd/chepherd/cmd"
+	"github.com/agenity-org/agenity/cmd"
 )
 
 func main() {

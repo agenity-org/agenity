@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/agenity-org/agenity/internal/auth"
 )
 
 // newTestIssuer stands up an httptest.Server serving a JWKS document

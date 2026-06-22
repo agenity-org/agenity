@@ -54,4 +54,4 @@ ENTRYPOINT ["/chepherd-hub"]
 # informational metadata.
 LABEL org.opencontainers.image.title="chepherd-hub" \
       org.opencontainers.image.description="Public-internet chepherd-org services: F1 scaffold + F5 signaling + F6 TURN" \
-      org.opencontainers.image.source="https://github.com/chepherd/chepherd"
+      org.opencontainers.image.source="https://github.com/agenity-org/agenity"

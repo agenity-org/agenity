@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // repoBackend implements Backend backed by a persistence.KeychainRepository.

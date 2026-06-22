@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func TestP0_357_GetSession_PersistedButNotLive_Returns410(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // fakeRuntime is a minimal seam used by these tests to feed

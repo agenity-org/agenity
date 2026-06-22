@@ -30,8 +30,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func TestK5_KnockBracketedResponse_EndToEnd(t *testing.T) {

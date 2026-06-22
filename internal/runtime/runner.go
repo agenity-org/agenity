@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // Runner is the spawn-and-manage abstraction backing the chepherd

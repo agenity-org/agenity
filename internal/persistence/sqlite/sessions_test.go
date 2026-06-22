@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/persistence/migrate"
+	"github.com/agenity-org/agenity/internal/persistence/migrate"
 
 	_ "modernc.org/sqlite"
 )

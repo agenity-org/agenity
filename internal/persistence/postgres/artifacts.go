@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // ArtifactRepository implements persistence.ArtifactRepository against

@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/auth"
+	"github.com/agenity-org/agenity/internal/auth"
 )
 
 func TestV094Walk_RealServerMintsJWT(t *testing.T) {

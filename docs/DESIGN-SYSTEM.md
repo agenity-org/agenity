@@ -419,11 +419,11 @@ The TUI inherits the terminal's accessibility behaviour. Web/mobile clients must
 
 | Surface | Repo | Token file |
 |---|---|---|
-| TUI (Go) | github.com/chepherd/chepherd | internal/style/palette.go |
-| Web (TS) | github.com/chepherd/chepherd-rc-web | src/styles/tokens.css |
-| iOS (Swift) | github.com/chepherd/chepherd-rc-ios | Sources/Style/Tokens.swift |
-| Android (Kotlin) | github.com/chepherd/chepherd-rc-android | core/style/src/main/kotlin/Tokens.kt |
-| Landing page | github.com/chepherd/chepherd.github.io | index.html (CSS custom properties) |
+| TUI (Go) | github.com/agenity-org/agenity | internal/style/palette.go |
+| Web (TS) | github.com/agenity-org/agenity-rc-web | src/styles/tokens.css |
+| iOS (Swift) | github.com/agenity-org/agenity-rc-ios | Sources/Style/Tokens.swift |
+| Android (Kotlin) | github.com/agenity-org/agenity-rc-android | core/style/src/main/kotlin/Tokens.kt |
+| Landing page | github.com/agenity-org/agenity.github.io | index.html (CSS custom properties) |
 
 When this doc changes, every reference implementation gets a PR within 7 days. A drift detector in CI flags any client where the rendered output diverges from a reference screenshot.
 

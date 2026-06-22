@@ -36,6 +36,12 @@
     // compatibility, not the template default. Optional; defaults to
     // empty so callers that haven't been wired don't break.
     agentTypeOverrides = {},
+    // #237 — per-agent MODEL from the Agents step. For opencode/lean-coder the
+    // model carries a provider prefix (cerebras/…, groq/…, gemini/…). The
+    // account picker filters to THAT provider so the credential matches the
+    // already-chosen model instead of offering an unrelated free choice
+    // (operator-reported 2026-06-19).
+    agentModelOverrides = {},
     typeAccounts = $bindable({}),
     agentAccountOverrides = $bindable({}),
   } = $props();
@@ -88,6 +94,11 @@
     'groq-api':       ['opencode'],
     'cerebras-api':   ['opencode'],
     'copilot-oauth':  ['copilot'],
+    // copilot authenticates with a fine-grained GitHub PAT that has the
+    // 'Copilot Requests' Account permission (env GITHUB_TOKEN) — live-verified
+    // 2026-06-19. Without this row the working github-pat vault entry was
+    // "compatible with nothing" and never showed in copilot's dropdown.
+    'github-pat':     ['copilot'],
     'ollama':         ['aider', 'opencode'],
   };
 
@@ -121,6 +132,9 @@
     'copilot': {
       getFree: [{ label: 'Get it free →', url: 'https://github.com/settings/copilot' }],
       oauth: { cmd: 'gh auth login' },
+      // Primary path (live-verified 2026-06-19): a fine-grained GitHub PAT with
+      // the 'Copilot Requests' Account permission, injected as GITHUB_TOKEN.
+      keyAdd: { provider: 'github-pat', env_var: 'GITHUB_TOKEN', keyLabel: 'GitHub fine-grained PAT — needs the "Copilot Requests" Account permission', getKeyUrl: 'https://github.com/settings/personal-access-tokens' },
     },
     'opencode': {
       getFree: [
@@ -139,7 +153,6 @@
   let vaultEntries = $state([]);    // [{ id, label, provider, account_class, ... }]
   let loadingVault = $state(false);
   let showConnect = $state(false);  // inline Connect Claude flow
-  let advancedOpen = $state(false); // ▶ per-agent override panel
   let bootHydrated = $state(false); // guard against re-running auto-select
 
   // #741 — inline "+ Add key" state, keyed by agent type. Mirrors the
@@ -242,6 +255,32 @@
     });
   }
 
+  // Map a "provider/model" prefix (opencode/lean-coder models) to the vault
+  // provider id, so each agent's account picker can be narrowed to the model
+  // it was already assigned in the Agents step.
+  const MODEL_PREFIX_TO_PROVIDER = {
+    cerebras:  'cerebras-api',
+    groq:      'groq-api',
+    gemini:    'google-api',
+    google:    'google-api',
+    openai:    'openai-api',
+    anthropic: 'anthropic-api',
+  };
+  function providerForModel(model) {
+    if (!model || model.indexOf('/') < 0) return null;
+    return MODEL_PREFIX_TO_PROVIDER[model.slice(0, model.indexOf('/')).toLowerCase()] || null;
+  }
+
+  // entriesForAgent — account options for ONE agent. If its chosen model
+  // dictates a provider (e.g. opencode "cerebras/…"), show ONLY that provider's
+  // vault entries so the credential matches the model (operator-reported
+  // 2026-06-19). Otherwise fall back to the agent-type compatibility list.
+  function entriesForAgent(a) {
+    const prov = providerForModel(agentModelOverrides[a.label]);
+    if (prov) return vaultEntries.filter(v => v.provider === prov);
+    return entriesForType(effectiveTypeFor(a));
+  }
+
   // Auto-select the newest matching entry per agent-type once the
   // vault list arrives, IFF the operator hasn't already picked one
   // and there's exactly one obvious match. (UX nicety; operator can
@@ -261,6 +300,26 @@
       }
     }
     if (any) typeAccounts = { ...typeAccounts, ...updates };
+  });
+
+  // Model-driven per-agent auto-select: when an agent's chosen model dictates a
+  // provider (opencode/lean-coder cerebras|groq|gemini/…), pre-pick the matching
+  // vault entry FOR THAT AGENT so its account follows its model with no extra
+  // clicks. Re-maps if the operator changes the model in the Agents step.
+  // Converges (only writes when the current pick isn't valid for the provider).
+  $effect(() => {
+    if (vaultEntries.length === 0) return;
+    const updates = {};
+    let any = false;
+    for (const a of agents) {
+      const prov = providerForModel(agentModelOverrides[a.label]);
+      if (!prov) continue;
+      const m = vaultEntries.filter(v => v.provider === prov);
+      const cur = agentAccountOverrides[a.label];
+      const curValid = cur && m.some(v => v.id === cur);
+      if (m.length >= 1 && !curValid) { updates[a.label] = m[0].id; any = true; }
+    }
+    if (any) agentAccountOverrides = { ...agentAccountOverrides, ...updates };
   });
 
   function pickType(t, id) {
@@ -319,25 +378,28 @@
   {:else}
     <div class="rows">
       {#each teamTypes as t}
-        {@const matches = entriesForType(t)}
         {@const g = TYPE_GUIDANCE[t]}
         <div class="row">
           <div class="type">
             <span class="type-name">{t}</span>
             <span class="type-count">×{agentsOfType(t).length}</span>
           </div>
-          <select
-            class="picker"
-            value={typeAccounts[t] || ''}
-            onchange={(e) => pickType(t, e.currentTarget.value)}
-          >
-            <option value="">
-              {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
-            </option>
-            {#each matches as v}
-              <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
-            {/each}
-          </select>
+          {#if agentsOfType(t).length === 1}
+            <select
+              class="picker"
+              value={typeAccounts[t] || ''}
+              onchange={(e) => pickType(t, e.currentTarget.value)}
+            >
+              <option value="">
+                {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
+              </option>
+              {#each entriesForAgent(agentsOfType(t)[0]) as v}
+                <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
+              {/each}
+            </select>
+          {:else}
+            <span class="multi-hint">↓ pick an account per agent</span>
+          {/if}
           {#if t === 'claude-code'}
             {#if !showConnect}
               <button type="button" class="link" onclick={() => showConnect = true}>+ Connect Claude account</button>
@@ -356,6 +418,35 @@
             </div>
           {/if}
         </div>
+
+        {#if agentsOfType(t).length > 1}
+          <!-- duplicated type → one independent account picker PER agent
+               instance (operator-reported 2026-06-19: 2× opencode must be
+               able to use e.g. one Cerebras + one Groq). Each binds its own
+               agentAccountOverrides[label]; labels are unique (Stage3Skills). -->
+          <div class="per-agent">
+            {#each agentsOfType(t) as a}
+              <div class="pa-row">
+                <span class="pa-label">{a.label}</span>
+                <select
+                  class="picker"
+                  value={effectiveFor(a)}
+                  onchange={(e) => pickAgent(a.label, e.currentTarget.value)}
+                >
+                  <option value="">
+                    {isOauthHostMount(t) ? '— optional (host login) —' : `— pick ${classOf(t) || 'account'} —`}
+                  </option>
+                  {#each entriesForAgent(a) as v}
+                    <option value={v.id}>{v.label || v.id} {v.provider ? `(${v.provider})` : ''}</option>
+                  {/each}
+                </select>
+                {#if agentModelOverrides[a.label]}
+                  <span class="pa-model" title="model chosen in the Agents step">{agentModelOverrides[a.label]}</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         {#if g}
           <div class="guide-detail">
@@ -406,38 +497,10 @@
       />
     {/if}
 
-    {#if agents.length > 1}
-      <button type="button" class="adv-toggle" onclick={() => advancedOpen = !advancedOpen}>
-        {advancedOpen ? '▼' : '▶'} Advanced — per-agent override
-      </button>
-      {#if advancedOpen}
-        <div class="adv">
-          <p class="adv-help">
-            Override the type default for a single agent. Leave on
-            <em>(use default)</em> to inherit from the row above.
-          </p>
-          {#each agents as a}
-            {@const at = effectiveTypeFor(a)}
-            {@const cls = classOf(at)}
-            {@const matches = entriesForType(at)}
-            <div class="adv-row">
-              <span class="adv-label">{a.label}</span>
-              <span class="adv-type">{at}</span>
-              <select
-                class="picker"
-                value={agentAccountOverrides[a.label] || ''}
-                onchange={(e) => pickAgent(a.label, e.currentTarget.value)}
-              >
-                <option value="">— use default ({typeAccounts[at] || 'unset'}) —</option>
-                {#each matches as v}
-                  <option value={v.id}>{v.label || v.id}</option>
-                {/each}
-              </select>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    {/if}
+    <!-- Per-agent account selection is now INLINE above (one picker per agent
+         for any duplicated type). The old collapsed "Advanced — per-agent
+         override" panel was removed 2026-06-19 — it was the reason duplicates
+         appeared to share one selector. -->
 
     <div class="state" class:ok={allResolved} class:miss={!allResolved}>
       {#if allResolved}
@@ -475,28 +538,20 @@
   }
   .link:hover { color: var(--fg, #fff); }
 
-  .adv-toggle {
-    background: transparent; border: 0; color: var(--accent-2, #87ceeb);
-    cursor: pointer; font: inherit; font-size: 0.82rem;
-    padding: 0.35rem 0; margin: 0.55rem 0 0.4rem 0;
+  /* inline per-agent account pickers for duplicated types */
+  .multi-hint { color: var(--fg-muted, #888); font-size: 0.8rem; font-style: italic; }
+  .per-agent {
+    display: flex; flex-direction: column; gap: 0.35rem;
+    margin: 0.15rem 0 0.5rem 8.1rem;
+    border-left: 2px solid rgba(135, 206, 235, 0.25); padding-left: 0.7rem;
   }
-  .adv-toggle:hover { text-decoration: underline; }
-  .adv {
-    background: var(--bg, #0a0a0a); border: 1px solid var(--border, #2a2a2a);
-    border-radius: 5px; padding: 0.65rem 0.85rem; margin-bottom: 0.85rem;
+  .pa-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .pa-label {
+    min-width: 7rem; font-weight: 600; font-size: 0.84rem; color: var(--fg, #f5f5f5);
   }
-  .adv-help { color: var(--fg-muted, #888); font-size: 0.78rem; margin: 0 0 0.55rem 0; line-height: 1.5; }
-  .adv-help em { color: var(--fg-muted, #aaa); font-style: italic; }
-  .adv-row {
-    display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
-    padding: 0.25rem 0;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
-  }
-  .adv-row:last-child { border-bottom: 0; }
-  .adv-label { font-weight: 600; min-width: 6rem; font-size: 0.86rem; }
-  .adv-type {
-    font-size: 0.72rem; padding: 0.04rem 0.4rem; border-radius: 999px;
-    background: rgba(135, 206, 235, 0.14); color: #87ceeb;
+  .pa-model {
+    font-size: 0.7rem; color: var(--fg-muted, #888); font-family: ui-monospace, monospace;
+    background: rgba(135, 206, 235, 0.1); padding: 0.05rem 0.4rem; border-radius: 4px;
   }
 
   .state {

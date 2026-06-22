@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/chepherd/chepherd/internal/canon"
+	"github.com/agenity-org/agenity/internal/canon"
 )
 
 // canonRoot — GET / PUT on the singleton canon record.

@@ -31,22 +31,22 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/auth"
-	"github.com/chepherd/chepherd/internal/federation"
-	"github.com/chepherd/chepherd/internal/graphify"
-	"github.com/chepherd/chepherd/internal/keychain"
-	"github.com/chepherd/chepherd/internal/mcpserver"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
-	"github.com/chepherd/chepherd/internal/profile"
-	"github.com/chepherd/chepherd/internal/prompts"
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
-	"github.com/chepherd/chepherd/internal/runtime"
-	"github.com/chepherd/chepherd/internal/runtimehttp"
-	"github.com/chepherd/chepherd/internal/runtimetui"
-	"github.com/chepherd/chepherd/internal/scrummaster"
-	"github.com/chepherd/chepherd/internal/vault"
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/auth"
+	"github.com/agenity-org/agenity/internal/federation"
+	"github.com/agenity-org/agenity/internal/graphify"
+	"github.com/agenity-org/agenity/internal/keychain"
+	"github.com/agenity-org/agenity/internal/mcpserver"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/profile"
+	"github.com/agenity-org/agenity/internal/prompts"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtimehttp"
+	"github.com/agenity-org/agenity/internal/runtimetui"
+	"github.com/agenity-org/agenity/internal/scrummaster"
+	"github.com/agenity-org/agenity/internal/vault"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 )
 
 var (
@@ -350,6 +350,13 @@ func runRunCmd(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "shepherd Run: %v\n", err)
 		}
 	}()
+	// #744 — daemon is the SOLE refresher of every running claude-flavor
+	// agent's bind-mounted ~/.claude/.credentials.json. The container's clone
+	// has its refreshToken blanked at spawn (it must never self-refresh, or it
+	// would rotate the operator's own host token away); this loop keeps the
+	// accessToken fresh on the daemon's behalf. Bound to the process-lifetime
+	// context so ctrl-C / SIGTERM stops it cleanly.
+	go rt.StartClaudeCredRefresher(shepCtx)
 	fmt.Printf("✓ MCP server (HTTP/WS) listening on http://%s/mcp/ws\n", mcpListen)
 
 	// HTTP/WS server — for web (chepherd-rc-web), mobile (rc-ios/android),

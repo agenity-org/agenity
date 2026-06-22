@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func TestP1_682_EmbeddedProvider_RoutesToEmbeddedPath_NotNotRegistered(t *testing.T) {

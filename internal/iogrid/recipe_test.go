@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/auth"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/auth"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func newTestKey(t *testing.T) *ecdsa.PrivateKey {

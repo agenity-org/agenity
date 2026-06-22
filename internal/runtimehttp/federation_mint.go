@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chepherd/chepherd/internal/federation"
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/federation"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // crossOrgGrantAdapter bridges the runtimehttp.Server's

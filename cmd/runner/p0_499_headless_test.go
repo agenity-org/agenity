@@ -35,7 +35,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 // buildAgentStub compiles a tiny Go program into binPath that, when

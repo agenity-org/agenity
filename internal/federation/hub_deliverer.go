@@ -32,9 +32,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/persistence"
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/persistence"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 )
 
 // HubDeliverer routes outbound A2A over a hub-relayed WebRTC DataChannel

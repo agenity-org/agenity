@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence"
+	"github.com/agenity-org/agenity/internal/persistence"
 )
 
 // Canon is the singleton operator-canon record.

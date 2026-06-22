@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func TestLoadOrCreateES256_PersistsAcrossCalls(t *testing.T) {

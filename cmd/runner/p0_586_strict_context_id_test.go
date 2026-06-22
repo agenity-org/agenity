@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/persistence/sqlite"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/persistence/sqlite"
 )
 
 func newTestDeliverer(t *testing.T, sid string) *runnerDeliverer {

@@ -30,3 +30,7 @@ walk-evidence/
 
 # graphify local build output (#725)
 graphify-out/
+
+# Python bytecode from scripts/test_lean_coder.py
+__pycache__/
+*.pyc

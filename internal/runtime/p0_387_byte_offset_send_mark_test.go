@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/a2a"
+	"github.com/agenity-org/agenity/internal/a2a"
 )
 
 // realClaudeCodeBannerChunks emulates the actual byte sequence that

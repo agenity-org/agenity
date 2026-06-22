@@ -9,13 +9,16 @@
 package mcpserver
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newStreamableTestServer(t *testing.T) *httptest.Server {
@@ -126,6 +129,98 @@ func TestWaveM2_StreamableGET_OpensSSEStream(t *testing.T) {
 	n, _ := resp.Body.Read(buf)
 	if n == 0 || !strings.HasPrefix(string(buf[:n]), ":") {
 		t.Errorf("expected leading comment frame, got %q", buf[:n])
+	}
+}
+
+// TestStreamableGET_EmitsPeriodicKeepAlive is the regression test for
+// the #copilot SSE-death bug (2026-06-20): handleStreamableGET used to
+// open the SSE stream, write one comment frame, then block on
+// r.Context().Done() emitting ZERO further bytes. An idle SSE stream
+// with no data is reaped by the client transport's idle timeout — GitHub
+// Copilot CLI logged `SSE stream disconnected: TypeError: fetch failed`
+// on a ~11-min cadence + eventually exited. The fix emits a keep-alive
+// comment frame every sseKeepAlive() interval so the stream never goes
+// idle. This test injects a short interval + asserts MULTIPLE keep-alive
+// frames arrive after the opening frame — i.e. the server keeps the
+// stream warm rather than going silent.
+func TestStreamableGET_EmitsPeriodicKeepAlive(t *testing.T) {
+	t.Parallel()
+	srv := New(nil)
+	// Inject a fast keep-alive so the test doesn't wait 15s.
+	srv.keepAliveInterval = 20 * time.Millisecond
+	httpSrv := httptest.NewServer(srv.buildMux())
+	t.Cleanup(httpSrv.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, httpSrv.URL+"/mcp", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+
+	// Opening comment frame: ": chepherd streamable session <id>".
+	first, err := readSSEComment(t, reader, 2*time.Second)
+	if err != nil {
+		t.Fatalf("opening frame: %v", err)
+	}
+	if !strings.Contains(first, "chepherd streamable session") {
+		t.Errorf("opening frame = %q, want session comment", first)
+	}
+
+	// Now drain keep-alive frames. With a 20ms interval, several should
+	// arrive well within a couple seconds. Require at least 2 to prove
+	// the cadence is periodic, not a one-shot frame.
+	got := 0
+	for got < 2 {
+		line, err := readSSEComment(t, reader, 2*time.Second)
+		if err != nil {
+			t.Fatalf("keep-alive frame %d: %v", got+1, err)
+		}
+		if strings.Contains(line, "keepalive") {
+			got++
+		}
+	}
+	if got < 2 {
+		t.Errorf("got %d keep-alive frames, want >= 2", got)
+	}
+}
+
+// readSSEComment reads one non-empty SSE comment line (starts with ":")
+// from r, failing if nothing arrives within timeout. SSE frames are
+// blank-line-delimited; we skip the trailing blank lines and return the
+// comment content.
+func readSSEComment(t *testing.T, r *bufio.Reader, timeout time.Duration) (string, error) {
+	t.Helper()
+	type res struct {
+		line string
+		err  error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				ch <- res{"", err}
+				return
+			}
+			trimmed := strings.TrimRight(line, "\r\n")
+			if trimmed == "" {
+				continue // frame separator
+			}
+			ch <- res{trimmed, nil}
+			return
+		}
+	}()
+	select {
+	case <-time.After(timeout):
+		return "", context.DeadlineExceeded
+	case got := <-ch:
+		return got.line, got.err
 	}
 }
 

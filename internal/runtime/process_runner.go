@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/chepherd/chepherd/internal/ptyhost/session"
+	"github.com/agenity-org/agenity/internal/ptyhost/session"
 )
 
 // ProcessRunner implements Runner for rootless podman sibling

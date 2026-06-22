@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 func TestInfoToMap_PreservesPID(t *testing.T) {

@@ -24,7 +24,7 @@ import (
 	"net/http/httptest"
 	"time"
 
-	"github.com/chepherd/chepherd/internal/webrtcrtc"
+	"github.com/agenity-org/agenity/internal/webrtcrtc"
 )
 
 // mountF2DataChannel attaches the F2 transport to mux. handler is

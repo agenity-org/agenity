@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/chepherd/chepherd/internal/state"
+	"github.com/agenity-org/agenity/internal/state"
 )
 
 var (

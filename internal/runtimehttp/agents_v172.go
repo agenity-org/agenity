@@ -21,9 +21,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/chepherd/chepherd/internal/a2a"
-	"github.com/chepherd/chepherd/internal/agent"
-	"github.com/chepherd/chepherd/internal/runtime"
+	"github.com/agenity-org/agenity/internal/a2a"
+	"github.com/agenity-org/agenity/internal/agent"
+	"github.com/agenity-org/agenity/internal/runtime"
 )
 
 // agentsEntity handles the collection — list + create.
