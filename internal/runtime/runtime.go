@@ -1144,22 +1144,31 @@ func (r *Runtime) Spawn(spec SpawnSpec) (*SessionInfo, *session.Session, error) 
 	}
 	// Pass model_tier through to the CLI so the operator's pick in
 	// AgentSettings → Skills actually changes which model the agent runs on.
-	if spec.StatSheet.ModelTier != "" {
+	// #4010 — when no per-agent model was picked, fall back to the
+	// deployment-wide default in CHEPHERD_DEFAULT_MODEL. OpenOva's
+	// bp-chepherd chart sets this to `claude-opus-4-7` so the solo agent the
+	// User chats with runs on Opus 4.7 ("token already configured") without
+	// the User having to pick a model in the spawn wizard.
+	modelTier := spec.StatSheet.ModelTier
+	if modelTier == "" {
+		modelTier = strings.TrimSpace(os.Getenv("CHEPHERD_DEFAULT_MODEL"))
+	}
+	if modelTier != "" {
 		switch spec.AgentSlug {
 		case "claude-code":
-			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+			extraArgs = append(extraArgs, "--model", modelTier)
 		case "qwen-code":
-			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+			extraArgs = append(extraArgs, "--model", modelTier)
 		case "lean-coder":
 			// lean-coder reads --model and self-configures the provider from a
 			// "provider/model" prefix (cerebras/groq/gemini), so the wizard's
 			// model pick selects the free provider directly.
-			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+			extraArgs = append(extraArgs, "--model", modelTier)
 		case "tool-coder":
 			// tool-coder shares lean-coder's --model provider self-config
 			// (cerebras/groq/gemini), so the wizard's model pick selects the
 			// free provider the native tool loop runs on.
-			extraArgs = append(extraArgs, "--model", spec.StatSheet.ModelTier)
+			extraArgs = append(extraArgs, "--model", modelTier)
 		}
 	}
 
@@ -2720,6 +2729,16 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 			},
 		}
 	}
+	// #4010 — extra MCP servers merge. When CHEPHERD_EXTRA_MCP_JSON holds
+	// a JSON object of {"mcpServers":{...}} (or a bare {<name>:{...}} map),
+	// merge those server entries into every spawned agent's .mcp.json
+	// alongside the chepherd server. This is the seam OpenOva's bp-chepherd
+	// chart uses to inject the `openova` MCP server so the solo-agent can
+	// create Applications in the user's Org via the RBAC-scoped openova MCP
+	// (the bearer is injected per-server in the chart's stanza). chepherd
+	// never has to know about OpenOva specifics — it just merges what the
+	// deployment hands it.
+	mergeExtraMCPServers(cfg, os.Getenv("CHEPHERD_EXTRA_MCP_JSON"))
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, "", err
@@ -2761,6 +2780,50 @@ func (r *Runtime) writeMCPConfig(sessionName, cwd string) ([]string, string, err
 		"CHEPHERD_MCP_URL=" + mcpURL,
 		"CHEPHERD_MCP_CONFIG=" + cfgPath,
 	}, cfgPath, nil
+}
+
+// mergeExtraMCPServers merges additional MCP server stanzas (provided as a
+// JSON blob via CHEPHERD_EXTRA_MCP_JSON) into cfg["mcpServers"] (#4010).
+//
+// The blob may be either the canonical {"mcpServers":{<name>:{...}}} shape
+// or a bare {<name>:{...}} server map. Existing servers (e.g. "chepherd")
+// are never overwritten — extras are additive. A malformed blob is ignored
+// (logged to stderr) so a bad deployment value can never wedge agent spawn.
+func mergeExtraMCPServers(cfg map[string]any, blob string) {
+	blob = strings.TrimSpace(blob)
+	if blob == "" {
+		return
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(blob), &parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: CHEPHERD_EXTRA_MCP_JSON ignored (invalid JSON): %v\n", err)
+		return
+	}
+	// Accept both the wrapped {"mcpServers":{...}} and bare {<name>:{...}}.
+	extras := parsed
+	if wrapped, ok := parsed["mcpServers"].(map[string]any); ok {
+		extras = wrapped
+	}
+	servers, ok := cfg["mcpServers"].(map[string]any)
+	if !ok || servers == nil {
+		servers = map[string]any{}
+		cfg["mcpServers"] = servers
+	}
+	for name, entry := range extras {
+		// Skip the reserved wrapper key (a bare-shape blob that also
+		// happened to carry a non-object mcpServers value), never clobber
+		// a built-in server (chepherd), and only accept object stanzas.
+		if name == "mcpServers" {
+			continue
+		}
+		if _, exists := servers[name]; exists {
+			continue
+		}
+		if _, isObj := entry.(map[string]any); !isObj {
+			continue
+		}
+		servers[name] = entry
+	}
 }
 
 // chepherdMCPToken returns the bearer token the agent uses to authenticate
