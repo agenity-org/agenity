@@ -10,7 +10,7 @@
 
 image:
   # Operators with a private registry: override repository + pullPolicy.
-  repository: ghcr.io/chepherd/chepherd
+  repository: ghcr.io/agenity-org/agenity
   tag: ""            # default: appVersion from Chart.yaml
   pullPolicy: IfNotPresent
   pullSecrets: []    # imagePullSecrets list ([{name: my-secret}])
