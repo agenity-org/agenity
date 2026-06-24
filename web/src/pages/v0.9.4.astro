@@ -1,0 +1,73 @@
+---
+// v0.9.4 dashboard route — release v0.9.4 of chepherd.
+//
+// Closes #567 per the URL-versioning rule operator codified
+// 2026-05-28 (documented in v0.9.3.astro and re-affirmed in #297):
+// each release ships its own /vMAJOR.MINOR.PATCH/ route. The
+// v0.9.4 milestone closed earlier today (71 wave PRs) WITHOUT
+// shipping this route — #567 caught the gap.
+//
+// What's new vs /v0.9.3/ (high-level — see v0.9.4 milestone for
+// the full 71-PR + 38-issue scope):
+//
+//   - Runner-process-split EPIC #453 CLOSED: chepherd-runner is
+//     its own process, owns the PTY, hosts per-session A2A
+//     endpoints. chepherd-daemon retired its in-process A2A
+//     surface (#466 Wave R5 + 410-Gone deprecation chain).
+//   - mTLS daemon-to-daemon federation (#487 Wave T3 + #527 T3.1)
+//     with cross-pinned CAs.
+//   - Per-runner JWT validation against home daemon JWKS
+//     (#486 Wave T1).
+//   - Push notifications (#482 Wave A3): webhook delivery on
+//     Task state transitions, body-blind hub relay.
+//   - Headless mode + iogrid integration (#499-#503 Wave H):
+//     chepherd-runner --headless per-task ephemeral lifecycle +
+//     HTTP API + per-task credential injection + recipe-based
+//     execution + AUTH_REQUIRED chain.
+//   - chepherd.org hub binary (#491 Wave F1 + F5/F6/F7/F8 follow-ups):
+//     SDP signaling + TURN relay + reverse-proxy fallback +
+//     cross-org JWT federation.
+//   - WebRTC DataChannel transport (#492 Wave F2): 1.58× latency
+//     improvement over HTTP fallback.
+//   - Knock pattern (#472-#476 Wave K): runner writes
+//     [chepherd-knock taskID=<uuid> from=<name>] marker;
+//     receiver agent calls chepherd.get_task via MCP to fetch
+//     the A2A task envelope.
+//   - Audit aggregation (#489 Wave AU2 + #490 AU3):
+//     per-runner audit events persisted in daemon + dashboard
+//     /audit page with filtering and per-agent view.
+//
+// Mounts the same AuthGate shell as v0.9.3 (the v0.9 wizard +
+// dashboard component tree under web/src/components/v09/ is the
+// canonical UI; only the version badge in the header changes
+// per-release).
+//
+// Per the operator's URL-versioning rule, /v0.9.3/ should 301
+// redirect to /v0.9.4/ for one release window. That redirect
+// lives in middleware/server config — out of scope for this
+// route file.
+// #732 — WORKSPACES is now the default dashboard (operator-picked over calm:
+// named virtual-desktops, Ctrl+1..9 switching, composable resizable panes,
+// right-click agent/team → settings). Mounts the ws root (its own login gate
+// + fetch-auth wrapper), mirroring /ux-ws/. ws reuses calm's components
+// (CalmRail/CalmInspector/CalmPane/CalmLeaf), so calm/ stays in the tree;
+// /v0.9.3/ keeps the legacy v09 AuthGate tree.
+import Dashboardws from '../components/ws/Dashboardws.svelte';
+import '../styles/global.css';
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chepherd v0.9.4 — workspace</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; }
+    </style>
+  </head>
+  <body>
+    <Dashboardws client:load version="v0.9.4" />
+  </body>
+</html>
