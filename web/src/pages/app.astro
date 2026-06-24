@@ -1,7 +1,19 @@
 ---
-// Dashboard route — bypasses the marketing Layout so we get full viewport.
-// Header + footer get inlined into the Dashboard component header bar.
-import Dashboard from '../components/Dashboard.svelte';
+// /app dashboard route — the workspaces (v0.9.4) multi-pane dashboard.
+//
+// #732 made WORKSPACES the default dashboard (operator-picked over calm:
+// named virtual-desktops, Ctrl+1..9 switching, composable resizable panes,
+// right-click agent/team → settings). This route mounts the ws root
+// (its own login gate + fetch-auth wrapper), the same component the
+// /v0.9.4/ release route mounts.
+//
+// Promoted from /v0.9.4/ to /app/ so the canonical dashboard host
+// (agenity.<org>.<pool>/app/) serves the workspaces UI directly — the
+// prior /app/ wired the archaic single-column Dashboard.svelte, which is
+// now removed. ws reuses calm's components (CalmRail/CalmInspector/
+// CalmPane/CalmLeaf) and the v08/v09 settings + spawn-wizard tree, so those
+// trees stay in the repo.
+import Dashboardws from '../components/ws/Dashboardws.svelte';
 import '../styles/global.css';
 ---
 <!DOCTYPE html>
@@ -9,14 +21,14 @@ import '../styles/global.css';
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>chepherd — dashboard</title>
+    <title>chepherd — workspace</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
-      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #0a0a0a; }
-      body { font-family: ui-sans-serif, system-ui, sans-serif; color: #f5f5f5; }
+      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; }
     </style>
   </head>
   <body>
-    <Dashboard client:load />
+    <Dashboardws client:load version="v0.9.4" />
   </body>
 </html>
