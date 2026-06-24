@@ -1,0 +1,54 @@
+---
+// v0.9.3 dashboard route — release v0.9.3 of chepherd.
+//
+// What's new vs /v0.9.2/:
+//   - A2A v1.0 spec-compliant method names (#291 P0 / PR #293):
+//     message/send, tasks/get, tasks/pushNotificationConfig/set,
+//     agent/getAuthenticatedExtendedCard, ... (pre-#291 PascalCase
+//     names broke real-world interop with Google's A2A SDK).
+//   - Per-flavor auth env (#225 H1 / PR #289): qwen→DASHSCOPE,
+//     aider→ANTHROPIC|OPENAI, gemini-cli→GOOGLE wired through the
+//     vault provider.
+//   - PTY-driven CompletionDetector (#225 H2 / PR #290): A2A Task
+//     state transitions driven by exit code + idle-pulse, not by
+//     agent self-report.
+//   - Persistence.Artifact + ArtifactRepository (#225 H3 / PR #298):
+//     A2A v1.0 artifacts persisted in a normalized table with FK
+//     CASCADE on Task delete.
+//   - ES256 + JWKS publication (#225 B2 / PR #284 + #296 SQLite-busy
+//     fix / PR #299): A2A peers can verify chepherd's JWTs via
+//     /.well-known/jwks.json without out-of-band key sharing.
+//   - 4 spec-compliant TokenValidator implementations (#225 B3-B6 /
+//     PR #285): TrustList + mTLS + OAuth2 + apiKey.
+//   - Federation: hosted peer registry + cross-instance routing +
+//     multi-host walk DoD (#225 C1-C3 / PRs #280-#282).
+//   - SSE binding for SendStreamingMessage + ResubscribeTask (#225
+//     A2 / PR #283).
+//   - Scrum Master rename complete across operator-facing surfaces
+//     (#225 F2-F5 / PR #287 + #292 + #295 + #300).
+//
+// URL versioning rule (operator 2026-05-28): each release ships its
+// own /vMAJOR.MINOR.PATCH/ route. /v0.9.2/ gets a 301 redirect to
+// /v0.9.3/ for one release window per #297.
+//
+// This route mounts the existing Workspace shell with version="v0.9.3"
+// so the header brand badge displays the right release.
+import AuthGate from '../components/v09/AuthGate.svelte';
+import '../styles/global.css';
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chepherd v0.9.3 — workspace</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #0a0a0a; }
+      body { font-family: ui-sans-serif, system-ui, sans-serif; color: #f5f5f5; }
+    </style>
+  </head>
+  <body>
+    <AuthGate client:load version="v0.9.3" />
+  </body>
+</html>
