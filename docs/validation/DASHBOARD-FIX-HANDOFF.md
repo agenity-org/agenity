@@ -26,3 +26,15 @@ Sessions/Terminal/Details). Byte-identical to what `bp-agenity:0.9.7` ships.
 Only residual: re-verify against the **live** `agenity.demo.omani.homes/app/` once that
 demo env is back up — it is currently torn down / unreachable (separate cluster,
 no access from this host).
+
+---
+## Live-URL reachability — BLOCKED (infra, not config) — 2026-06-30T22:18:46Z
+`https://agenity.demo.omani.homes/app/` is unreachable, verified two independent ways:
+- `curl` → HTTP **000** (connection failed, ~4s)
+- Playwright browser navigation → **60s timeout** on `domcontentloaded` (browser uses a different resolver than the host — rules out local DNS as the cause)
+
+The demo env is torn down on cluster `212.72.24.33`, which is **not reachable from this host** (no kubeconfig for it; verified across every available context). A live-URL screenshot **cannot be produced** until that env is restored — this is an infra blocker, not a deployment-config question.
+
+**Equivalent proof already on record:** `app-new-dashboard-loggedin.png` — the byte-identical `/app` built from `5620ad6`, run under a real daemon + logged in (exactly what `bp-agenity:0.9.7` serves).
+
+**Next infra step** (demo-cluster owner): restore the demo env / (re)deploy `bp-agenity:0.9.7`, then re-verify `agenity.demo.omani.homes/app/` shows the workspaces dashboard.
